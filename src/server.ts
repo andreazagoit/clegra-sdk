@@ -706,7 +706,7 @@ export class McpWorkspacesServer {
       {
         title: "Resolve",
         description: "For hosts: fragment and record URIs resolved for the viewer.",
-        inputSchema: z.object({ uris: z.array(z.string()).max(50), want: z.enum(["reference", "fragment"]).optional() }),
+        inputSchema: z.object({ uris: z.array(z.string()).max(50), want: z.enum(["reference", "fragment", "snapshot"]).optional() }),
         annotations: { ...read },
         _meta: { ui: { visibility: ["app"] }, "openai/visibility": "private" },
       },
@@ -722,8 +722,9 @@ export class McpWorkspacesServer {
           const r = await this.#resolve({ type: parsed.type, params: parsed.params }, caller, ctx)
           if (r.state !== "ok") results.push({ uri, state: r.state })
           else {
-            const { fragment: _f, view: _v, ...rest } = r as typeof r & { view?: unknown }
-            results.push(args.want === "reference" ? { uri, state: "ok", title: "title" in rest ? rest.title : "", ...("subtitle" in rest ? { subtitle: rest.subtitle } : {}), ...("status" in rest ? { status: rest.status } : {}) } : { ...rest, uri })
+            const { fragment: _f, view, ...rest } = r as typeof r & { view?: { actions?: { tool: string }[] } }
+            const actions = view?.actions ? { actions: view.actions.map((a) => a.tool) } : "actions" in rest && Array.isArray(rest.actions) ? { actions: (rest.actions as { tool: string }[]).map((a) => a.tool) } : {}
+            results.push(args.want === "reference" ? { uri, state: "ok", title: "title" in rest ? rest.title : "", ...("subtitle" in rest ? { subtitle: rest.subtitle } : {}), ...("status" in rest ? { status: rest.status } : {}) } : { ...rest, ...actions, uri })
           }
         }
         return { content: text(`${results.length} resolved`), structuredContent: { results } }

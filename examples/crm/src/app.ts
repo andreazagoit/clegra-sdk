@@ -187,7 +187,7 @@ export const DealEntity = app.registerEntity("deal", {
   label: { en: "Deal", it: "Trattativa" },
   plural: { en: "Deals", it: "Trattative" },
   description: { en: "A sales opportunity with a company", it: "Un'opportunità di vendita con un'azienda" },
-  icon: "handshake",
+  icon: "briefcase",
   schema: dealSchema,
   permission: canViewDeals,
   get: (id, ctx) => dataOf(ctx).deals.get(id) ?? null,
@@ -320,7 +320,7 @@ export const closingSoon = app.registerFragment("closing_soon", {
 app.registerPage("deals", {
   kind: "list",
   title: { en: "Deals", it: "Trattative" },
-  icon: "handshake",
+  icon: "briefcase",
   entity: DealEntity,
   columns: ["name", "company", "stage", "value", "closeDate", "owner"],
 })
