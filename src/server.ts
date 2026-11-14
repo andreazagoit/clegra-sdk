@@ -1,10 +1,10 @@
 import { createServer as createHttpServer, type IncomingMessage } from "node:http"
 
-import { createMcpHandler, McpServer, type CallToolResult, type Icon, type ServerContext } from "@modelcontextprotocol/server"
+import { createMcpHandler, inputRequired, inputResponse, McpServer, type CallToolResult, type Icon, type ServerContext } from "@modelcontextprotocol/server"
 import { z } from "zod"
 
 import { AuthError, DevAuthority, isLoopback, TokenVerifier, type AuthOptions, type Caller, type Person } from "./auth"
-import { CARD_PATH, CARD_URI, EXTENSION_ID, SPEC_VERSION, type Card, type CardField } from "./card"
+import { manifestPath, manifestUri, SPEC_VERSION, type Manifest, type ManifestField } from "./manifest"
 import { labelMap, localize, type Label } from "./labels"
 import { fieldsOf, jsonSchemaOf, plainSchema, type FieldInfo } from "./meaning"
 import { MemoryStore, type IdempotencyStore } from "./store"
@@ -34,7 +34,8 @@ import { MCP_APP_MIME_TYPE, urlPageHtml, viewHtml } from "./view"
  * MCP WORKSPACES SERVER, v1 (docs/mcp-workspaces/spec.md): an MCP server
  * (official SDK, Streamable HTTP, stateless) whose declarations — entities,
  * actions, pages, fragments, agents, permissions, settings — become plain MCP
- * tools and MCP Apps views for any host, and a card for workspace hosts.
+ * tools and MCP Apps views for any host, and a manifest hosts read to mount
+ * the app natively. Internal: authors use defineApp (define.ts).
  *
  * Every request builds a fresh McpServer for its caller: the tools a caller
  * may not use are not listed, titles are in the caller's language, and every
@@ -57,26 +58,37 @@ export type ServerOptions = {
   websiteUrl?: string
   /** Where write results are kept for idempotency (default: in memory). */
   store?: IdempotencyStore
+  /** Escape hatch: the raw McpServer of each request, to add hand-written tools, resources or views. */
+  mcp?: (server: McpServer, caller: Caller | null) => void
+}
+
+/** The one `_meta` key of the host protocol (spec §5): `{ call, confirmation, settings }` on requests, `{ notifications, untrusted }` on results. */
+export const META_KEY = "mcpw"
+type HostMeta = { call?: unknown; confirmation?: unknown; settings?: unknown }
+const hostMeta = (meta: Record<string, unknown> | undefined): HostMeta => {
+  const m = meta?.[META_KEY]
+  return m && typeof m === "object" && !Array.isArray(m) ? (m as HostMeta) : {}
 }
 
 export type ErrorCode = "unauthorized" | "permission_denied" | "not_found" | "invalid_input" | "confirmation_required" | "conflict" | "internal"
 
 /** A failure a handler may throw on purpose: it reaches the caller as `{ error: { code, message } }`. */
-export class WorkspaceError extends Error {
+export class AppError extends Error {
   constructor(
     readonly code: ErrorCode,
     message: string,
     readonly details?: Record<string, unknown>,
   ) {
     super(message)
-    this.name = "WorkspaceError"
+    this.name = "AppError"
   }
 }
 
-type EntityRecord = { name: string; config: EntityConfig<z.ZodObject>; fields: FieldInfo[]; handle: EntityHandle }
-type ActionRecord = { name: string; tool: string; entity?: EntityRecord; config: ActionConfig<z.ZodObject, EntityHandle | undefined>; input: z.ZodObject; handler: ActionHandler<z.ZodObject, EntityHandle | undefined>; write: boolean; confirm: "always" | "optional" | "never" }
-type PageRecord = { name: string; config: PageConfig; derived?: boolean }
-type FragmentRecord = { type: string; config: FragmentConfig<z.ZodObject, Template> }
+type ToolName = { name: string; plain: boolean }
+type EntityRecord = { name: string; config: EntityConfig<z.ZodObject>; fields: FieldInfo[]; handle: EntityHandle; tools: { list: ToolName; get: ToolName } }
+type ActionRecord = { name: string; tool: string; entity?: EntityRecord; config: ActionConfig<z.ZodObject, EntityHandle | undefined>; input: z.ZodObject; handler: ActionHandler<z.ZodObject, EntityHandle | undefined>; write: boolean; confirm: "always" | "optional" | "never"; plain: boolean }
+type PageRecord = { name: string; config: PageConfig; derived?: boolean; tool: ToolName }
+type FragmentRecord = { type: string; config: FragmentConfig<z.ZodObject, Template>; tool: ToolName }
 
 const NAME = /^[a-z][a-z0-9-]{1,39}$/
 const IDENT = /^[a-z][a-z0-9_]{0,39}$/
@@ -99,11 +111,17 @@ function sortedJson(value: unknown): string {
 
 const text = (t: string): CallToolResult["content"] => [{ type: "text", text: t }]
 
+/** Whether the client of this request can answer an elicitation (MCP 2026-07-28: capabilities ride every request). */
+function elicits(ctx: ServerContext): boolean {
+  const caps = (ctx.mcpReq.envelope as Record<string, unknown> | undefined)?.["io.modelcontextprotocol/clientCapabilities"] as { elicitation?: unknown } | undefined
+  return Boolean(caps?.elicitation)
+}
+
 function failure(code: ErrorCode, message: string, details?: Record<string, unknown>): CallToolResult {
   return { isError: true, content: text(message), structuredContent: { error: { code, message, ...details } } }
 }
 
-export class McpWorkspacesServer {
+export class AppServer {
   readonly name: string
   readonly options: ServerOptions
   readonly locale: string
@@ -118,9 +136,9 @@ export class McpWorkspacesServer {
   readonly #permissions = new Map<string, PermissionConfig>()
   readonly #settings = new Map<string, SettingConfig>()
   readonly #devResources = new Set<string>()
-  #card: Card | null = null
+  #manifest: Manifest | null = null
   #devReady: Promise<void> | null = null
-  readonly #handler = createMcpHandler((ctx) => this.createMcpServer((ctx.authInfo?.extra as { caller?: Caller } | undefined)?.caller ?? null), {
+  readonly #handler = createMcpHandler((ctx) => this.createMcpServer((ctx.authInfo?.extra as { caller?: Caller } | undefined)?.caller ?? null, ctx.era), {
     legacy: "stateless",
     onerror: (e) => console.error("[mcpw]", e.message),
   })
@@ -144,7 +162,16 @@ export class McpWorkspacesServer {
   }
 
   #changed() {
-    this.#card = null
+    this.#manifest = null
+  }
+
+  readonly #toolNames = new Set<string>()
+  #claimTools(...names: string[]) {
+    for (const n of names) {
+      if (!/^[a-zA-Z0-9_.-]{1,64}$/.test(n)) throw new Error(`tool name "${n}": letters, digits, _ . -; at most 64`)
+      if (this.#toolNames.has(n) || RESERVED_TOOLS.has(n)) throw new Error(`tool name "${n}" is taken or reserved`)
+      this.#toolNames.add(n)
+    }
   }
 
   /** An entity (spec §4): a Zod object with `.meta()` meaning, and its reads. */
@@ -154,7 +181,10 @@ export class McpWorkspacesServer {
     const fields = fieldsOf(name, config.schema)
     for (const f of fields) if ((f.filter || f.sort) && RESERVED_PARAMS.has(f.name) && f.name !== "id") throw new Error(`entity "${name}": field "${f.name}" can't be a filter or sort (reserved parameter name)`)
     const handle: EntityHandle<S> = { kind: "entity", name, schema: config.schema, fields, uri: (id) => this.uri(name, id) }
-    this.#entities.set(name, { name, config: config as unknown as EntityConfig<z.ZodObject>, fields, handle: handle as unknown as EntityHandle })
+    const plain = config.expose?.plain !== false
+    const tools = { list: { name: config.expose?.list ?? `${name}_list`, plain }, get: { name: config.expose?.get ?? `${name}_get`, plain } }
+    this.#claimTools(tools.list.name, tools.get.name)
+    this.#entities.set(name, { name, config: config as unknown as EntityConfig<z.ZodObject>, fields, handle: handle as unknown as EntityHandle, tools })
     this.#changed()
     return handle
   }
@@ -164,13 +194,16 @@ export class McpWorkspacesServer {
     if (!IDENT.test(name)) throw new Error(`action "${name}": lowercase letters, digits and _`)
     const entity = config.entity ? this.#entities.get(config.entity.name) : undefined
     if (config.entity && !entity) throw new Error(`action "${name}": entity "${config.entity.name}" is not registered here`)
-    const tool = entity ? `${entity.name}_${name}` : name
-    if (this.#actions.has(tool) || RESERVED_TOOLS.has(tool) || /^(open|show)_/.test(tool) || /_(get|list)$/.test(tool)) throw new Error(`action "${name}": its tool name "${tool}" is taken or reserved`)
+    const tool = config.expose?.tool ?? (entity ? `${entity.name}_${name}` : name)
+    if (this.#actions.has(tool)) throw new Error(`action "${name}": its tool name "${tool}" is taken`)
+    this.#claimTools(tool)
     const input = (config.input ?? z.object({})) as z.ZodObject
     if (entity && "id" in input.shape) throw new Error(`action "${name}": "id" is the record's id, given by the SDK; don't declare it in input`)
     const write = config.readOnly !== true
     const confirm = write ? (config.confirm ?? "always") : "never"
-    this.#actions.set(tool, { name, tool, ...(entity ? { entity } : {}), config: config as never, input, handler: handler as never, write, confirm })
+    // Writes reach plain MCP clients only when the developer opts in (spec §6).
+    const plain = config.expose?.plain ?? !write
+    this.#actions.set(tool, { name, tool, ...(entity ? { entity } : {}), config: config as never, input, handler: handler as never, write, confirm, plain })
     this.#changed()
     return { kind: "action", name, tool }
   }
@@ -186,7 +219,9 @@ export class McpWorkspacesServer {
       if (config.params && !config.query) throw new Error(`page "${name}": with params, give query(params) too`)
     }
     if (config.kind === "custom" && "url" in config && !/^https:\/\//.test(config.url) && !/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?\//.test(config.url)) throw new Error(`page "${name}": url must be https`)
-    this.#pages.set(name, { name, config: config as unknown as PageConfig })
+    const tool = config.kind === "record" ? this.#entities.get(config.entity.name)!.tools.get : { name: config.expose?.tool ?? `open_${name}`, plain: config.expose?.plain !== false }
+    if (config.kind !== "record") this.#claimTools(tool.name)
+    this.#pages.set(name, { name, config: config as unknown as PageConfig, tool })
     this.#changed()
     return { kind: "page", name }
   }
@@ -196,7 +231,9 @@ export class McpWorkspacesServer {
     if (!IDENT.test(type)) throw new Error(`fragment "${type}": lowercase letters, digits and _`)
     this.#taken(type)
     if (!config.template && !config.view) throw new Error(`fragment "${type}": give a template or a view`)
-    this.#fragments.set(type, { type, config: config as never })
+    const tool = { name: config.expose?.tool ?? `show_${type}`, plain: config.expose?.plain !== false }
+    this.#claimTools(tool.name)
+    this.#fragments.set(type, { type, config: config as never, tool })
     this.#changed()
     return { kind: "fragment", type }
   }
@@ -267,14 +304,15 @@ export class McpWorkspacesServer {
 
   #context(caller: Caller, meta: Record<string, unknown> | undefined, notes: Notification[]): Context {
     const locale = caller.locale ?? this.locale
-    const sent = (meta?.["mcpw/settings"] ?? {}) as Record<string, unknown>
+    const host = hostMeta(meta)
+    const sent = (host.settings && typeof host.settings === "object" ? host.settings : {}) as Record<string, unknown>
     const settings: Record<string, unknown> = {}
     for (const [id, s] of this.#settings) {
       const v = sent[id]
       const ok = s.type === "number" ? typeof v === "number" : s.type === "boolean" ? typeof v === "boolean" : typeof v === "string"
       settings[id] = ok ? v : s.default
     }
-    const call = typeof meta?.["mcpw/call"] === "string" ? (meta["mcpw/call"] as string) : null
+    const call = typeof host.call === "string" ? host.call : null
     return {
       app: this.name,
       installation: caller.installation,
@@ -306,7 +344,7 @@ export class McpWorkspacesServer {
   #mayUse(action: ActionRecord, caller: Caller): boolean {
     if (action.config.permission && !caller.permissions.has(action.config.permission)) return false
     if (action.entity && !this.#canSee(action.entity, caller)) return false
-    if (caller.host === "plain" && action.config.plainHosts === false) return false
+    if (caller.host === "plain" && !action.plain) return false
     return true
   }
 
@@ -365,10 +403,10 @@ export class McpWorkspacesServer {
     for (const f of visible) if (f.filter && args[f.name] !== undefined) filters[f.name] = args[f.name] as Filter
     for (const k of Object.keys(filters)) {
       const f = visible.find((x) => x.name === k)
-      if (!f || !f.filter) throw new WorkspaceError("invalid_input", `"${k}" can't be filtered on`)
+      if (!f || !f.filter) throw new AppError("invalid_input", `"${k}" can't be filtered on`)
     }
     const sortField = typeof args.sort === "string" ? args.sort : base?.sort?.field
-    if (sortField !== undefined && !visible.some((f) => f.name === sortField && f.sort)) throw new WorkspaceError("invalid_input", `"${sortField}" can't be sorted by`)
+    if (sortField !== undefined && !visible.some((f) => f.name === sortField && f.sort)) throw new AppError("invalid_input", `"${sortField}" can't be sorted by`)
     const limit = typeof args.limit === "number" ? Math.max(1, Math.min(100, Math.floor(args.limit))) : 25
     const textQuery = typeof args.query === "string" && args.query.trim() ? args.query.trim() : base?.text
     return {
@@ -471,7 +509,8 @@ export class McpWorkspacesServer {
   // ------------------------------------------------------------ calls
 
   /** Runs one action call: permission, input, record, idempotency, confirmation, handler (spec §5, §10, §11). */
-  async #runAction(a: ActionRecord, caller: Caller, args: Record<string, unknown>, meta: Record<string, unknown> | undefined): Promise<CallToolResult> {
+  async #runAction(a: ActionRecord, caller: Caller, args: Record<string, unknown>, mctx: ServerContext | null): Promise<CallToolResult> {
+    const meta = (mctx?.mcpReq._meta ?? undefined) as Record<string, unknown> | undefined
     const notes: Notification[] = []
     const ctx = this.#context(caller, meta, notes)
     if (!this.#mayUse(a, caller)) return failure("permission_denied", `You may not use ${this.#t(caller, a.config.title)}.`)
@@ -493,7 +532,7 @@ export class McpWorkspacesServer {
       if (stored) return stored.args === hash ? (stored.result as CallToolResult) : failure("conflict", "This call id was already used with other arguments.")
     }
     if (a.write && a.confirm === "always" && caller.host === "workspace") {
-      const proof = meta?.["mcpw/confirmation"]
+      const proof = hostMeta(meta).confirmation
       const why = typeof proof === "string" ? await this.#verifier.checkConfirmation(proof, { issuer: caller.issuer, subject: caller.subject, tool: a.tool, args: callArgs, call: ctx.call }) : "no proof"
       if (why) {
         const card = a.entity && record ? this.#recordCard(a.entity, this.#strip(a.entity, record, caller), caller) : null
@@ -502,11 +541,20 @@ export class McpWorkspacesServer {
         })
       }
     }
+    // A plain client that can elicit (MCP 2026-07-28 input requests) is asked to confirm an `always` write; others rely on the tool's destructiveHint.
+    if (a.write && a.confirm === "always" && caller.host === "plain" && mctx && elicits(mctx)) {
+      const answer = inputResponse(mctx.mcpReq.inputResponses, "confirm")
+      if (answer.kind !== "elicit") {
+        const lines = Object.entries(callArgs).map(([k, v]) => `${k}: ${typeof v === "string" ? v : JSON.stringify(v)}`).join("; ")
+        return inputRequired({ inputRequests: { confirm: inputRequired.elicit({ message: `${this.#t(caller, a.config.title)}${lines ? ` (${lines})` : ""}?`, requestedSchema: z.object({ confirm: z.boolean() }) }) } }) as unknown as CallToolResult
+      }
+      if (answer.action !== "accept" || answer.content?.confirm !== true) return failure("confirmation_required", "Not confirmed.")
+    }
     let out: ActionResult | void
     try {
       out = await a.handler(parsed.data as never, ctx, record as never)
     } catch (error) {
-      if (error instanceof WorkspaceError) return failure(error.code, error.message, error.details)
+      if (error instanceof AppError) return failure(error.code, error.message, error.details)
       console.error(`[mcpw] ${a.tool}`, error)
       return failure("internal", "The action failed.")
     }
@@ -515,7 +563,7 @@ export class McpWorkspacesServer {
     const result: CallToolResult = {
       content: text(message),
       structuredContent: { ok: true, message, ...(recordUri ? { record: recordUri } : {}), ...(out?.data ? { data: out.data } : {}) },
-      ...(notes.length ? { _meta: { "mcpw/notifications": notes.map((n) => ({ ...n, title: ctx.t(n.title), ...(n.body ? { body: ctx.t(n.body) } : {}), to: n.to ?? (caller.person ? [caller.person.id] : []) })) } } : {}),
+      ...(notes.length ? { _meta: { [META_KEY]: { notifications: notes.map((n) => ({ ...n, title: ctx.t(n.title), ...(n.body ? { body: ctx.t(n.body) } : {}), to: n.to ?? (caller.person ? [caller.person.id] : []) })) } } } : {}),
     }
     if (key) await this.#store.set(key, { args: hash, result }, 24 * 3600_000)
     return result
@@ -531,6 +579,10 @@ export class McpWorkspacesServer {
     return `ui://${this.name}/pages/${page}`
   }
 
+  #entityViewUri(entity: string): string {
+    return `ui://${this.name}/entities/${entity}`
+  }
+
   #fragmentViewUri(type: string): string {
     return `ui://${this.name}/fragments/${type}`
   }
@@ -541,7 +593,7 @@ export class McpWorkspacesServer {
 
   #allPages(): PageRecord[] {
     const pages = [...this.#pages.values()]
-    for (const e of this.#entities.values()) if (!this.#pages.has(e.name)) pages.push({ name: e.name, config: { kind: "record", entity: e.handle } as PageConfig, derived: true })
+    for (const e of this.#entities.values()) if (!this.#pages.has(e.name)) pages.push({ name: e.name, config: { kind: "record", entity: e.handle } as PageConfig, derived: true, tool: e.tools.get })
     return pages
   }
 
@@ -556,20 +608,19 @@ export class McpWorkspacesServer {
     return z.object({})
   }
 
-  /** A fresh McpServer for one request, for this caller (null: card and views only). */
-  createMcpServer(caller: Caller | null): McpServer {
+  /** A fresh McpServer for one request, for this caller (null: manifest and views only). */
+  createMcpServer(caller: Caller | null, era: "legacy" | "modern" = "legacy"): McpServer {
+    void era
     const o = this.options
-    const locale = caller?.locale ?? this.locale
-    const t = (l: Label | undefined) => localize(l, locale, this.locale)
+    // Tool names, titles and descriptions are in the app's own locale: stable for every caller (spec §6). Data labels follow the caller.
+    const t = (l: Label | undefined) => localize(l, this.locale, this.locale)
     const s = new McpServer(
       { name: o.name, version: o.version, title: t(o.title), ...(o.description ? { description: t(o.description) } : {}), ...(o.icons ? { icons: o.icons } : {}), ...(o.websiteUrl ? { websiteUrl: o.websiteUrl } : {}) },
       { ...(o.instructions ? { instructions: o.instructions } : {}) },
     )
-    s.server.registerCapabilities({ extensions: { [EXTENSION_ID]: { version: SPEC_VERSION, card: CARD_URI(this.name), cardPath: CARD_PATH } } } as never)
-
-    // Resources: the card, the SDK's view, page and fragment views.
-    s.registerResource("workspace-card", CARD_URI(this.name), { mimeType: "application/json", description: "MCP Workspaces card" }, async () => ({
-      contents: [{ uri: CARD_URI(this.name), mimeType: "application/json", text: JSON.stringify(this.card()) }],
+    // Resources: the manifest, the SDK's view, page, entity and fragment views.
+    s.registerResource("manifest", manifestUri(this.name), { mimeType: "application/json", description: "The app's manifest (what hosts read to mount the app)" }, async () => ({
+      contents: [{ uri: manifestUri(this.name), mimeType: "application/json", text: JSON.stringify(this.manifest()) }],
     }))
     const view = (uri: string, title: string, html: () => string | Promise<string>, src?: ViewSource | { url: string }) => {
       const csp = src && "url" in src ? { frameDomains: [new URL(src.url).origin] } : src && "csp" in src && src.csp ? src.csp : {}
@@ -579,19 +630,25 @@ export class McpWorkspacesServer {
     view(this.#viewUri(), `${t(o.title)} view`, () => viewHtml(t(o.title)))
     for (const p of this.#allPages()) {
       const c = p.config
-      if (c.kind === "dashboard") view(this.#pageViewUri(p.name), t(c.title), () => viewHtml(t(c.title), { tool: `open_${p.name}` }))
+      if (c.kind !== "custom" && c.view) view(this.#pageViewUri(p.name), t(c.title ?? p.name), () => (typeof c.view!.html === "function" ? c.view!.html() : c.view!.html), c.view)
+      else if (c.kind === "dashboard") view(this.#pageViewUri(p.name), t(c.title), () => viewHtml(t(c.title), { tool: p.tool.name }))
       if (c.kind === "custom" && "url" in c) view(this.#pageViewUri(p.name), t(c.title), () => urlPageHtml(t(c.title), c.url), { url: c.url })
       if (c.kind === "custom" && "view" in c) view(this.#pageViewUri(p.name), t(c.title), () => (typeof c.view.html === "function" ? c.view.html() : c.view.html), c.view)
     }
+    for (const e of this.#entities.values()) if (e.config.view) view(this.#entityViewUri(e.name), t(e.config.label), () => (typeof e.config.view!.html === "function" ? e.config.view!.html() : e.config.view!.html), e.config.view)
     for (const f of this.#fragments.values()) if (f.config.view) view(this.#fragmentViewUri(f.type), t(f.config.title), () => (typeof f.config.view!.html === "function" ? f.config.view!.html() : f.config.view!.html), f.config.view)
 
-    if (!caller) return s
+    if (!caller) {
+      this.options.mcp?.(s, null)
+      return s
+    }
+    const plainCaller = caller.host === "plain"
     const reg = s.registerTool.bind(s) as unknown as (name: string, config: Record<string, unknown>, cb: (args: Record<string, unknown>, ctx: ServerContext) => Promise<CallToolResult>) => void
     const guard = (name: string, fn: (args: Record<string, unknown>, ctx: ServerContext) => Promise<CallToolResult>) => async (args: Record<string, unknown>, ctx: ServerContext) => {
       try {
         return await fn(args ?? {}, ctx)
       } catch (error) {
-        if (error instanceof WorkspaceError) return failure(error.code, error.message, error.details)
+        if (error instanceof AppError) return failure(error.code, error.message, error.details)
         console.error(`[mcpw] ${name}`, error)
         return failure("internal", "The call failed.")
       }
@@ -601,12 +658,12 @@ export class McpWorkspacesServer {
 
     // Entities: list and get.
     for (const e of this.#entities.values()) {
-      if (!this.#canSee(e, caller)) continue
+      if (!this.#canSee(e, caller) || (plainCaller && !e.tools.list.plain)) continue
       const label = t(e.config.label)
       const plural = t(e.config.plural ?? e.config.label)
       const columns = () => this.#visibleFields(e, caller).filter((f) => f.name !== "id" && (f.role || f.filter)).slice(0, 6).map((f) => this.#column(f, caller))
       reg(
-        `${e.name}_list`,
+        e.tools.list.name,
         {
           title: plural,
           description: `${t(e.config.description) || plural}. Lists ${plural.toLowerCase()} with filters, sort and paging (pass \`cursor\` from the previous result's \`next\`).`,
@@ -614,28 +671,28 @@ export class McpWorkspacesServer {
           annotations: { title: plural, ...read },
           _meta: this.#ui(this.#viewUri()),
         },
-        guard(`${e.name}_list`, async (args, mctx) => {
+        guard(e.tools.list.name, async (args, mctx) => {
           const ctx = ctxOf(mctx)
           const out = await this.#list(e, caller, ctx, this.#queryOf(e, caller, args))
           const uris = out.rows.map((r) => this.uri(e.name, String(r.id)))
           const marked = this.#untrusted(e, out.rows, "/rows")
           return {
             content: text(JSON.stringify({ rows: marked.text.map((r, i) => ({ uri: uris[i], ...r })), ...(out.next ? { next: out.next } : {}), ...(out.total !== undefined ? { total: out.total } : {}) })),
-            structuredContent: { entity: e.name, ...out, uris, refs: await this.#refs(e, out.rows, caller, ctx), view: { kind: "list", title: plural, columns: columns(), tool: `${e.name}_list`, args, getTool: `${e.name}_get` } },
-            ...(marked.pointers.length ? { _meta: { "mcpw/untrusted": marked.pointers } } : {}),
+            structuredContent: { entity: e.name, ...out, uris, refs: await this.#refs(e, out.rows, caller, ctx), view: { kind: "list", title: plural, columns: columns(), tool: e.tools.list.name, args, getTool: e.tools.get.name } },
+            ...(marked.pointers.length ? { _meta: { [META_KEY]: { untrusted: marked.pointers } } } : {}),
           }
         }),
       )
       reg(
-        `${e.name}_get`,
+        e.tools.get.name,
         {
           title: label,
           description: `One ${label.toLowerCase()} by id, with the actions available on it.`,
           inputSchema: z.object({ id: z.string().describe(`The ${label.toLowerCase()}'s id`) }),
           annotations: { title: label, ...read },
-          _meta: this.#ui(this.#viewUri()),
+          _meta: this.#ui(e.config.view ? this.#entityViewUri(e.name) : this.#viewUri()),
         },
-        guard(`${e.name}_get`, async (args, mctx) => {
+        guard(e.tools.get.name, async (args, mctx) => {
           const ctx = ctxOf(mctx)
           const row = await e.config.get(String(args.id), ctx)
           if (!row) return failure("not_found", `${label} ${String(args.id)} doesn't exist.`)
@@ -645,14 +702,14 @@ export class McpWorkspacesServer {
           return {
             content: text(JSON.stringify({ uri, ...marked.text[0] })),
             structuredContent: { entity: e.name, uri, record, refs: await this.#refs(e, [record], caller, ctx), view: { kind: "record", title: label, fields: this.#visibleFields(e, caller).map((f) => this.#column(f, caller)), actions: this.#recordActions(e, caller) } },
-            ...(marked.pointers.length ? { _meta: { "mcpw/untrusted": marked.pointers.map((p) => p.replace("/record/0", "/record")) } } : {}),
+            ...(marked.pointers.length ? { _meta: { [META_KEY]: { untrusted: marked.pointers.map((p) => p.replace("/record/0", "/record")) } } } : {}),
           }
         }),
       )
     }
 
     // search and fetch (ChatGPT's conventions), over searchable entities.
-    const searchable = [...this.#entities.values()].filter((e) => e.fields.some((f) => f.search) && this.#canSee(e, caller))
+    const searchable = [...this.#entities.values()].filter((e) => e.fields.some((f) => f.search) && this.#canSee(e, caller) && (!plainCaller || e.tools.list.plain))
     if (searchable.length) {
       reg(
         "search",
@@ -743,24 +800,23 @@ export class McpWorkspacesServer {
           description: `${t(a.config.description) || title}${a.write ? (a.confirm === "always" ? " (a change; the person confirms it first)" : " (a change)") : ""}.`,
           inputSchema: input,
           annotations: { title, readOnlyHint: !a.write, destructiveHint: a.write && a.confirm === "always", idempotentHint: !a.write, openWorldHint: false },
-          _meta: { [EXTENSION_ID]: { action: a.name, confirm: a.confirm } },
         },
-        guard(a.tool, (args, mctx) => this.#runAction(a, caller, args, mctx.mcpReq._meta as Record<string, unknown> | undefined)),
+        guard(a.tool, (args, mctx) => this.#runAction(a, caller, args, mctx)),
       )
     }
 
     // Pages: open_<page> (record pages are <entity>_get).
     for (const p of this.#allPages()) {
       const c = p.config
-      if (c.kind === "record") continue
+      if (c.kind === "record" || (plainCaller && !p.tool.plain)) continue
       if (c.permission && !caller.permissions.has(c.permission)) continue
       if (c.kind === "list" && !this.#canSee(this.#entities.get(c.entity.name)!, caller)) continue
       const title = t(c.title)
       const params = this.#pageParams(p, caller)
       const shape = c.kind === "list" ? { ...params.shape, cursor: z.string().optional(), limit: z.number().int().min(1).max(100).optional() } : params.shape
-      const resource = c.kind === "list" ? this.#viewUri() : this.#pageViewUri(p.name)
+      const resource = c.kind === "list" && !c.view ? this.#viewUri() : this.#pageViewUri(p.name)
       reg(
-        `open_${p.name}`,
+        p.tool.name,
         {
           title,
           description: `Opens the page «${title}»${t(c.description) ? `: ${t(c.description)}` : ""}. Its parameters set the state it opens in.`,
@@ -768,7 +824,7 @@ export class McpWorkspacesServer {
           annotations: { title, ...read },
           _meta: this.#ui(resource),
         },
-        guard(`open_${p.name}`, async (args, mctx) => {
+        guard(p.tool.name, async (args, mctx) => {
           const ctx = ctxOf(mctx)
           const { cursor, limit, ...rest } = args
           const parsed = params.safeParse(rest)
@@ -783,7 +839,7 @@ export class McpWorkspacesServer {
             const marked = this.#untrusted(e, out.rows, "/rows")
             return {
               content: text(JSON.stringify({ page: p.name, rows: marked.text, ...(out.next ? { next: out.next } : {}) })),
-              structuredContent: { page: p.name, entity: e.name, params: pageParams, ...out, uris: out.rows.map((r) => this.uri(e.name, String(r.id))), refs: await this.#refs(e, out.rows, caller, ctx), view: { kind: "list", title, columns, tool: `open_${p.name}`, args: pageParams, getTool: `${e.name}_get` } },
+              structuredContent: { page: p.name, entity: e.name, params: pageParams, ...out, uris: out.rows.map((r) => this.uri(e.name, String(r.id))), refs: await this.#refs(e, out.rows, caller, ctx), view: { kind: "list", title, columns, tool: p.tool.name, args: pageParams, getTool: e.tools.get.name } },
             }
           }
           if (c.kind === "dashboard") {
@@ -802,10 +858,10 @@ export class McpWorkspacesServer {
 
     // Custom fragment types: show_<type>.
     for (const f of this.#fragments.values()) {
-      if (f.config.permission && !caller.permissions.has(f.config.permission)) continue
+      if ((f.config.permission && !caller.permissions.has(f.config.permission)) || (plainCaller && !f.tool.plain)) continue
       const title = t(f.config.title)
       reg(
-        `show_${f.type}`,
+        f.tool.name,
         {
           title,
           description: `${t(f.config.description)} Shows it as a live fragment; don't repeat its data in full.`,
@@ -813,21 +869,22 @@ export class McpWorkspacesServer {
           annotations: { title, ...read },
           _meta: this.#ui(f.config.view ? this.#fragmentViewUri(f.type) : this.#viewUri()),
         },
-        guard(`show_${f.type}`, async (args, mctx) => {
+        guard(f.tool.name, async (args, mctx) => {
           const r = await this.#resolve({ type: f.type, params: args }, caller, ctxOf(mctx))
           if (r.state !== "ok") return failure(r.state === "no-access" ? "permission_denied" : "not_found", r.state === "no-access" ? "No access." : "Not available.")
           return { content: text(JSON.stringify({ uri: r.uri, data: r.data })), structuredContent: { ...r, view: { kind: "fragment", title } } }
         }),
       )
     }
+    this.options.mcp?.(s, caller)
     return s
   }
 
-  // ------------------------------------------------------------ the card
+  // ------------------------------------------------------------ the manifest
 
-  /** The workspace card (spec §12), built from the registrations. Throws on references that don't hold. */
-  card(): Card {
-    if (this.#card) return this.#card
+  /** The manifest (spec §2), built from the definition: pure JSON. Throws on references that don't hold. */
+  manifest(): Manifest {
+    if (this.#manifest) return this.#manifest
     const L = (l: Label | undefined) => labelMap(l, this.locale)
     const perm = (p: string | undefined, where: string) => {
       if (p && !this.#permissions.has(p)) throw new Error(`${where}: permission "${p}" is not registered`)
@@ -838,7 +895,7 @@ export class McpWorkspacesServer {
         if (f.ref && !this.#entities.has(f.ref)) throw new Error(`entity "${e.name}", field "${f.name}": ref "${f.ref}" is not an entity`)
         perm(f.permission, `entity "${e.name}", field "${f.name}"`)
       }
-      const fields: CardField[] = e.fields.map((f) => ({
+      const fields: ManifestField[] = e.fields.map((f) => ({
         name: f.name,
         type: f.type,
         required: f.required,
@@ -864,13 +921,13 @@ export class McpWorkspacesServer {
         ...perm(e.config.permission, `entity "${e.name}"`),
         schema: plainSchema(jsonSchemaOf(e.config.schema)) as Record<string, unknown>,
         fields,
-        tools: { get: `${e.name}_get`, list: `${e.name}_list` },
+        tools: { list: e.tools.list, get: e.tools.get },
         searchable: e.fields.some((f) => f.search),
       }
     })
     const actions = [...this.#actions.values()].map((a) => ({
       name: a.name,
-      tool: a.tool,
+      tool: { name: a.tool, plain: a.plain },
       ...(a.entity ? { entity: a.entity.name } : {}),
       title: L(a.config.title)!,
       ...(a.config.description ? { description: L(a.config.description) } : {}),
@@ -879,9 +936,8 @@ export class McpWorkspacesServer {
       readOnly: !a.write,
       confirm: a.confirm,
       ...perm(a.config.permission, `action "${a.name}"`),
-      ...(a.config.plainHosts === false ? { plainHosts: false as const } : {}),
     }))
-    const everyone: Caller = { installation: "card", person: null, permissions: new Set(this.#permissions.keys()), host: "workspace", issuer: "", subject: "" }
+    const everyone: Caller = { installation: "manifest", person: null, permissions: new Set(this.#permissions.keys()), host: "workspace", issuer: "", subject: "" }
     const pages = this.#allPages().map((p) => {
       const c = p.config
       const base = {
@@ -892,16 +948,17 @@ export class McpWorkspacesServer {
         ...perm(c.permission, `page "${p.name}"`),
         params: plainSchema(jsonSchemaOf(this.#pageParams(p, everyone), "input")) as Record<string, unknown>,
       }
-      if (c.kind === "list") return { ...base, entity: c.entity.name, columns: c.columns, tool: `open_${p.name}` }
+      const override = c.kind !== "custom" && c.view ? { view: this.#pageViewUri(p.name) } : {}
+      if (c.kind === "list") return { ...base, entity: c.entity.name, columns: c.columns, tool: p.tool, ...override }
       if (c.kind === "record") {
         for (const s of c.sections ?? []) for (const f of s.fields) if (!c.entity.fields.some((x) => x.name === f)) throw new Error(`page "${p.name}": field "${f}" is not a field of ${c.entity.name}`)
-        return { ...base, entity: c.entity.name, tool: `${c.entity.name}_get`, ...(c.sections ? { sections: c.sections.map((s) => ({ title: L(s.title)!, fields: s.fields })) } : {}), ...(p.derived ? { derived: true } : {}) }
+        return { ...base, entity: c.entity.name, tool: p.tool, ...override, ...(c.sections ? { sections: c.sections.map((s) => ({ title: L(s.title)!, fields: s.fields })) } : {}), ...(p.derived ? { derived: true } : {}) }
       }
-      if (c.kind === "dashboard") return { ...base, tool: `open_${p.name}`, view: this.#pageViewUri(p.name) }
-      return { ...base, tool: `open_${p.name}`, view: this.#pageViewUri(p.name), ...("url" in c ? { url: c.url } : {}) }
+      if (c.kind === "dashboard") return { ...base, tool: p.tool, view: this.#pageViewUri(p.name) }
+      return { ...base, tool: p.tool, view: this.#pageViewUri(p.name), ...("url" in c ? { url: c.url } : {}) }
     })
     const fragments = [
-      ...[...this.#entities.values()].map((e) => ({ type: e.name, title: L(e.config.label)!, entity: e.name, template: "record" as const, params: { type: "object", properties: { id: { type: "string" } }, required: ["id"] }, tool: `${e.name}_get`, ...perm(e.config.permission, `entity "${e.name}"`) })),
+      ...[...this.#entities.values()].map((e) => ({ type: e.name, title: L(e.config.label)!, entity: e.name, template: "record" as const, params: { type: "object", properties: { id: { type: "string" } }, required: ["id"] }, tool: e.tools.get, ...(e.config.view ? { view: this.#entityViewUri(e.name) } : {}), ...perm(e.config.permission, `entity "${e.name}"`) })),
       ...[...this.#fragments.values()].map((f) => {
         for (const h of f.config.actions ?? []) if (!this.#actions.has(h.tool)) throw new Error(`fragment "${f.type}": action ${h.tool} is not registered`)
         return {
@@ -911,41 +968,37 @@ export class McpWorkspacesServer {
           ...(f.config.icon ? { icon: f.config.icon } : {}),
           params: plainSchema(jsonSchemaOf(f.config.params, "input")) as Record<string, unknown>,
           ...(f.config.template ? { template: f.config.template } : { view: this.#fragmentViewUri(f.type) }),
-          tool: `show_${f.type}`,
+          tool: f.tool,
           ...perm(f.config.permission, `fragment "${f.type}"`),
-          ...(f.config.actions?.length ? { actions: f.config.actions.map((h) => h.tool) } : {}),
+          ...(f.config.actions?.length ? { actions: f.config.actions.map((h) => h.name) } : {}),
           ...(f.config.size ? { size: f.config.size } : {}),
         }
       }),
     ]
     const agents = [...this.#agents.entries()].map(([name, a]) => {
+      // An agent's tools: entities (their reads) and actions, by name; or tool names as they are.
       const tools = a.tools.flatMap((x) => {
-        if (typeof x === "string") return [x]
-        if (x.kind === "entity") return [`${x.name}_list`, `${x.name}_get`]
-        return [x.tool]
+        const n = typeof x === "string" ? x : x.kind === "entity" ? x.name : x.name
+        const entity = this.#entities.get(n)
+        if (entity) return [entity.tools.list.name, entity.tools.get.name]
+        const action = [...this.#actions.values()].find((y) => y.name === n || y.tool === n)
+        if (action) return [action.tool]
+        if (this.#toolNames.has(n) || n === "search" || n === "fetch") return [n]
+        throw new Error(`agent "${name}": "${n}" is not an entity, action or tool of this app`)
       })
-      for (const tool of tools) {
-        const known = this.#actions.has(tool) || /_(list|get)$/.test(tool) || tool === "search" || tool === "fetch" || tool.startsWith("open_") || tool.startsWith("show_")
-        if (!known) throw new Error(`agent "${name}": tool "${tool}" is not one of this app's`)
-      }
       return { name, title: L(a.title)!, description: L(a.description)!, instructions: a.instructions, tools, tier: a.tier ?? "standard", ...(a.starters?.length ? { starters: a.starters.map((s) => L(s)!) } : {}) }
     })
     const auth = this.options.auth ?? {}
-    this.#card = {
-      mcpWorkspaces: SPEC_VERSION,
+    this.#manifest = {
+      specVersion: SPEC_VERSION,
       name: this.name,
       title: L(this.options.title)!,
       version: this.options.version,
       ...(this.options.description ? { description: L(this.options.description) } : {}),
       ...(this.options.icons ? { icons: this.options.icons } : {}),
       locale: this.locale,
-      mcp: { url: "/mcp", transport: "streamable-http" },
-      auth: {
-        audience: auth.resource ?? this.name,
-        ...(auth.resource ? { resource: auth.resource } : {}),
-        authorizationServers: auth.authorizationServers ?? (auth.issuers ?? []).map((i) => i.issuer),
-        ...(auth.dev ? { dev: true } : {}),
-      },
+      mcp: { url: "/mcp" },
+      auth: { audience: auth.resource ?? this.name, authorizationServers: auth.authorizationServers ?? (auth.issuers ?? []).map((i) => i.issuer) },
       view: this.#viewUri(),
       resolveTool: "mcpw_resolve",
       ...([...this.#entities.values()].some((e) => e.fields.some((f) => f.search)) ? { searchTool: "search" } : {}),
@@ -965,7 +1018,7 @@ export class McpWorkspacesServer {
         ...(s.options ? { options: s.options.map((o) => ({ value: o.value, label: L(o.label)! })) } : {}),
       })),
     }
-    return this.#card!
+    return this.#manifest!
   }
 
   // ------------------------------------------------------------ dev helpers
@@ -1034,14 +1087,15 @@ export class McpWorkspacesServer {
     }
   }
 
-  /** One HTTP request (Fetch API): MCP at `/mcp`, the card, OAuth metadata, the dev authority, `/health`. */
+  /** One HTTP request (Fetch API): MCP at `/mcp`, the manifest, OAuth metadata, the dev authority, `/health`. */
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url)
     const origin = this.#origin(request)
     const resource = this.options.auth?.resource ?? `${origin}/mcp`
     const json = (body: unknown, status = 200, headers: Record<string, string> = {}) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", ...CORS, ...headers } })
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS })
-    if (url.pathname === CARD_PATH) return json(this.card(), 200, { "cache-control": "public, max-age=30" })
+    if (url.pathname === manifestPath(this.name)) return json(this.manifest(), 200, { "cache-control": "public, max-age=30" })
+    if (url.pathname === "/" && request.method === "GET" && (request.headers.get("accept") ?? "").includes("application/json")) return json({ name: this.name, manifest: manifestPath(this.name), mcp: "/mcp" })
     if (url.pathname === "/health") return json({ ok: true, name: this.name, version: this.options.version })
     if (url.pathname === "/.well-known/oauth-protected-resource" || url.pathname === "/.well-known/oauth-protected-resource/mcp") {
       const auth = this.options.auth ?? {}
@@ -1054,7 +1108,7 @@ export class McpWorkspacesServer {
       const answered = await dev.handle(request, origin, resource)
       if (answered) return answered
     }
-    if (url.pathname !== "/mcp") return new Response(`${localize(this.options.title, this.locale, this.locale)}: MCP at /mcp, card at ${CARD_PATH}`, { status: 404, headers: { "content-type": "text/plain; charset=utf-8" } })
+    if (url.pathname !== "/mcp") return new Response(`${localize(this.options.title, this.locale, this.locale)}: MCP at /mcp, manifest at ${manifestPath(this.name)}`, { status: 404, headers: { "content-type": "text/plain; charset=utf-8" } })
     const caller = await this.#caller(request, resource)
     if (caller instanceof Response) return caller
     const response = await this.#handler.fetch(request, { authInfo: { token: "verified", clientId: caller.issuer, scopes: [], extra: { caller } } })
@@ -1068,7 +1122,7 @@ export class McpWorkspacesServer {
     const port = options.port ?? 3000
     const host = options.host ?? "127.0.0.1"
     if (this.#dev && !isLoopback(host)) throw new Error(`auth.dev works only on a loopback address, not ${host}`)
-    this.card()
+    this.manifest()
     if (this.#dev) await this.#devStarted()
     const http = createHttpServer(async (req, res) => {
       const started = Date.now()
@@ -1092,7 +1146,7 @@ export class McpWorkspacesServer {
     })
     await new Promise<void>((resolve) => http.listen(port, host, resolve))
     const url = `http://${host}:${port}`
-    console.log(`${localize(this.options.title, this.locale, this.locale)} — MCP ${url}/mcp · card ${url}${CARD_PATH}`)
+    console.log(`${localize(this.options.title, this.locale, this.locale)} — MCP ${url}/mcp · manifest ${url}${manifestPath(this.name)}`)
     if (this.#dev) console.log(`DEV AUTH ON (never in production) — sign-in code: ${this.#dev.code}`)
     return { url, close: () => new Promise((resolve) => http.close(() => resolve())) }
   }

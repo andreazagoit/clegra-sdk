@@ -53,6 +53,10 @@ export type EntityConfig<S extends z.ZodObject> = {
   permission?: string
   get: (id: string, ctx: Context) => Promise<z.infer<S> | null> | z.infer<S> | null
   list: (query: Query, ctx: Context) => Promise<ListResult<z.infer<S>>> | ListResult<z.infer<S>>
+  /** Plain MCP clients: listed (default true) and the tool names (default `<entity>_list`, `<entity>_get`). */
+  expose?: { plain?: boolean; list?: string; get?: string }
+  /** Your own ui:// view for a record, instead of the generated one. */
+  view?: ViewSource
 }
 
 /** What `registerEntity` returns: pass it where an entity is wanted. */
@@ -79,8 +83,8 @@ export type ActionConfig<I extends z.ZodObject, E extends EntityHandle | undefin
   /** Default `always` for writes. */
   confirm?: Confirm
   permission?: string
-  /** Offered to plain MCP hosts (default true). */
-  plainHosts?: boolean
+  /** Plain MCP clients: reads are listed by default, writes only with `plain: true`; `tool` renames the tool. */
+  expose?: { plain?: boolean; tool?: string }
 }
 
 export type ActionHandler<I extends z.ZodObject, E extends EntityHandle | undefined> = (
@@ -91,9 +95,11 @@ export type ActionHandler<I extends z.ZodObject, E extends EntityHandle | undefi
 
 export type ActionHandle = { readonly kind: "action"; readonly name: string; readonly tool: string }
 
+export type Exposure = { plain?: boolean; tool?: string }
+
 export type FragmentInstance = { type: string; params: Record<string, unknown>; size?: "small" | "medium" | "large" }
 
-type PageBase<P extends z.ZodObject> = { title: Label; icon?: string; permission?: string; description?: Label; params?: P }
+type PageBase<P extends z.ZodObject> = { title: Label; icon?: string; permission?: string; description?: Label; params?: P; expose?: Exposure }
 
 export type PageConfig<P extends z.ZodObject = z.ZodObject> =
   | (PageBase<P> & {
@@ -102,9 +108,11 @@ export type PageConfig<P extends z.ZodObject = z.ZodObject> =
       columns: string[]
       /** From the page's params to the list query (default: params are the filter fields and `text`). */
       query?: (params: z.infer<P>) => Partial<Pick<Query, "filters" | "text" | "sort">>
+      /** Your own ui:// view instead of the generated one (hosts may still draw the list natively). */
+      view?: ViewSource
     })
-  | (Omit<PageBase<P>, "params" | "title"> & { kind: "record"; entity: EntityHandle; title?: Label; sections?: { title: Label; fields: string[] }[] })
-  | (PageBase<P> & { kind: "dashboard"; fragments: FragmentInstance[] | ((params: z.infer<P>, ctx: Context) => FragmentInstance[] | Promise<FragmentInstance[]>) })
+  | (Omit<PageBase<P>, "params" | "title"> & { kind: "record"; entity: EntityHandle; title?: Label; sections?: { title: Label; fields: string[] }[]; view?: ViewSource })
+  | (PageBase<P> & { kind: "dashboard"; fragments: FragmentInstance[] | ((params: z.infer<P>, ctx: Context) => FragmentInstance[] | Promise<FragmentInstance[]>); view?: ViewSource })
   | (PageBase<P> & { kind: "custom"; view: ViewSource })
   | (PageBase<P> & { kind: "custom"; url: string })
 
@@ -129,6 +137,7 @@ export type FragmentConfig<P extends z.ZodObject, T extends Template> = {
   /** Actions shown inside (global actions). */
   actions?: ActionHandle[]
   size?: "small" | "medium" | "large"
+  expose?: Exposure
 } & (
   | { template: T; data: (params: z.infer<P>, ctx: Context) => Promise<TemplateData[T] | null> | TemplateData[T] | null; view?: never }
   | { view: ViewSource; data: (params: z.infer<P>, ctx: Context) => Promise<Record<string, unknown> | null> | Record<string, unknown> | null; template?: never }
