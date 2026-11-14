@@ -18,7 +18,8 @@ export const MCP_APP_MIME_TYPE = "text/html;profile=mcp-app"
 export const manifestSchema = JSON.parse(readFileSync(new URL("../schema/modelapp.schema.json", import.meta.url), "utf8")) as Record<string, unknown>
 
 export type Check = { id: string; title: string; ok: boolean; detail?: string; skipped?: boolean }
-export type Report = { ok: boolean; checks: Check[] }
+/** `ok`: no check failed. `complete`: every check ran (false when the MCP checks were skipped for lack of a token). Conformant = both. */
+export type Report = { ok: boolean; complete: boolean; checks: Check[] }
 
 export type Options = {
   /** The app's origin, e.g. `https://crm.example.com`. */
@@ -35,6 +36,7 @@ type Manifest = {
   specVersion: string
   name: string
   mcp: { url: string }
+  auth: { resource?: string; authorizationServers: string[] }
   resolveTool: string
   searchTool?: string
   entities: { name: string; permission?: string; fields: { name: string; ref?: string; permission?: string; role?: string }[]; tools: { list: ToolRef; get: ToolRef } }[]
@@ -56,8 +58,13 @@ export async function checkApp(options: Options): Promise<Report> {
     checks.push({ id, title, ok: list.length === 0, ...(list.length ? { detail: list.slice(0, 8).join("; ") } : {}) })
     return list.length === 0
   }
-  const skip = (id: string, title: string, why: string) => void checks.push({ id, title, ok: true, skipped: true, detail: why })
-  const done = () => ({ ok: checks.every((c) => c.ok), checks })
+  let complete = true
+  /** `partial`: the check was not run, so the report is not a conformance result. */
+  const skip = (id: string, title: string, why: string, partial = false) => {
+    checks.push({ id, title, ok: true, skipped: true, detail: why })
+    if (partial) complete = false
+  }
+  const done = () => ({ ok: checks.every((c) => c.ok), complete, checks })
 
   // 1. The manifest: one fetch, pure JSON, valid against the schema.
   let manifest: Manifest
@@ -155,6 +162,8 @@ export async function checkApp(options: Options): Promise<Report> {
       if (!body) authProblems.push(`${metadataUrl} answers ${meta.status}`)
       else {
         if (!body.resource) authProblems.push("protected-resource metadata has no resource")
+        // RFC 9728 §3.3: the metadata's resource is the address the client used; the manifest's, when it says one, is that same address (the token audience).
+        else if (manifest.auth.resource ? manifest.auth.resource !== mcpUrl && body.resource !== mcpUrl : body.resource !== mcpUrl) authProblems.push(`the app says its address is ${manifest.auth.resource ?? body.resource}, but it was reached at ${mcpUrl}`)
         if (!Array.isArray(body.authorization_servers) || !body.authorization_servers.length) authProblems.push("protected-resource metadata names no authorization server")
       }
     }
@@ -164,7 +173,7 @@ export async function checkApp(options: Options): Promise<Report> {
 
   const token = options.token ?? (anonymous.status === 200 ? undefined : null)
   if (token === null) {
-    skip("mcp", "the MCP endpoint (tools, annotations, views)", "no token given")
+    skip("mcp", "the MCP endpoint (tools, annotations, views)", "no token given", true)
     return done()
   }
 
@@ -224,5 +233,6 @@ export async function checkApp(options: Options): Promise<Report> {
 }
 
 export function formatReport(report: Report): string {
-  return [...report.checks.map((c) => `${c.skipped ? "SKIP" : c.ok ? "PASS" : "FAIL"}  ${c.id} — ${c.title}${c.detail ? `\n      ${c.detail}` : ""}`), report.ok ? "Conformant." : "NOT conformant."].join("\n")
+  const verdict = !report.ok ? "NOT conformant." : report.complete ? "Conformant." : "Incomplete: the public checks pass, the MCP checks did not run. Not a conformance result: give a plain caller's token (--token)."
+  return [...report.checks.map((c) => `${c.skipped ? "SKIP" : c.ok ? "PASS" : "FAIL"}  ${c.id} — ${c.title}${c.detail ? `\n      ${c.detail}` : ""}`), verdict].join("\n")
 }

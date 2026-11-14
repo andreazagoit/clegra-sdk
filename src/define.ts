@@ -28,6 +28,7 @@ export type EntityDef<S extends z.ZodObject, P extends string = string> = {
   /** Who may see records of this entity at all. */
   permission?: P
   get: (id: string, ctx: Context) => Awaitable<z.infer<S> | null>
+  /** `query.text` is searched only in `query.textFields` (the search fields the caller may see). */
   list: (query: Query, ctx: Context) => Awaitable<ListResult<z.infer<S>>>
   /** Plain MCP clients: `plain: false` hides the entity's tools; `list` / `get` rename them (default `<entity>_list`, `<entity>_get`). */
   expose?: { plain?: boolean; list?: string; get?: string }
@@ -66,6 +67,8 @@ type FragmentBase<Pm extends z.ZodObject, P extends string, A extends string> = 
   size?: "small" | "medium" | "large"
   /** Plain MCP clients: `plain: false` hides its tool; `tool` renames it (default `show_<fragment>`). */
   expose?: Exposure
+  /** Its texts are written by outsiders (records' names, notes): marked as data for models. */
+  untrusted?: boolean
 }
 
 export type FragmentDef<Pm extends z.ZodObject, P extends string = string, A extends string = string> =
@@ -126,7 +129,7 @@ export type AppDefinition<E extends Schemas, A extends Schemas, F extends Schema
   /** MCP `instructions` for models. */
   instructions?: string
   websiteUrl?: string
-  /** MCP authorization: trusted token issuers, or `dev: true` locally. */
+  /** MCP authorization: trusted token issuers with this server's public MCP address (`resource`), or `dev` locally. */
   auth?: AuthOptions
   permissions?: Record<P, PermissionConfig>
   settings?: Record<string, SettingConfig>

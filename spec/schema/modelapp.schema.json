@@ -78,7 +78,8 @@
     "auth": {
       "type": "object",
       "properties": {
-        "audience": {
+        "resource": {
+          "description": "The app's public MCP address: the only token audience it accepts. A host installs the app from this address or not at all",
           "type": "string"
         },
         "authorizationServers": {
@@ -89,11 +90,10 @@
         }
       },
       "required": [
-        "audience",
         "authorizationServers"
       ],
       "additionalProperties": false,
-      "description": "MCP authorization: the token audience and who issues tokens"
+      "description": "MCP authorization: the server's own address (the token audience) and who issues tokens"
     },
     "view": {
       "type": "string",
@@ -637,6 +637,10 @@
               "medium",
               "large"
             ]
+          },
+          "untrusted": {
+            "description": "Its texts are written by outsiders: data, never instructions",
+            "type": "boolean"
           }
         },
         "required": [
@@ -791,10 +795,8 @@
             "type": "string",
             "enum": [
               "text",
-              "secret",
               "number",
-              "boolean",
-              "choice"
+              "boolean"
             ]
           },
           "required": {
@@ -806,32 +808,6 @@
               "number",
               "boolean"
             ]
-          },
-          "options": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "value": {
-                  "type": "string"
-                },
-                "label": {
-                  "type": "object",
-                  "propertyNames": {
-                    "type": "string"
-                  },
-                  "additionalProperties": {
-                    "type": "string"
-                  },
-                  "description": "A label per locale (BCP 47 → text)"
-                }
-              },
-              "required": [
-                "value",
-                "label"
-              ],
-              "additionalProperties": false
-            }
           }
         },
         "required": [

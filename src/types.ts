@@ -7,20 +7,20 @@ import type { FieldInfo } from "./meaning"
 /** What every handler gets: who is calling, for which installation, in which language. */
 export type Context = {
   readonly app: string
-  /** The tenant (spec §9): scope every read and write by it. */
+  /** The tenant (spec §7): the installation bound to its issuer (`<installation>@<issuer>`). Scope every read and write by it. */
   readonly installation: string
   readonly person: Person | null
   readonly permissions: ReadonlySet<string>
   can(permission: string): boolean
   readonly locale: string
   readonly host: Caller["host"]
-  /** The installation's settings (spec §8), defaults filled in. */
+  /** The installation's settings (spec §2), as its workspace host sent them, defaults filled in. A plain client's are the defaults. */
   readonly settings: Readonly<Record<string, unknown>>
   /** The call id (`_meta.modelapp.call`), when the host sent one. */
   readonly call: string | null
   /** A label in the caller's language. */
   t(label: Label | undefined): string
-  /** A notification for the host to deliver (spec §8). */
+  /** A notification for the workspace host to deliver to people of the installation (spec §7). */
   notify(notification: Notification): void
   /** The URI of a record of this app. */
   uri(entity: string | EntityHandle, id: string): string
@@ -34,7 +34,10 @@ export type Filter = Value | { in: Value[] } | { gte?: Value; lte?: Value }
 /** What `list` receives (spec §4), already checked against the fields' meaning and the caller's field permissions. */
 export type Query = {
   filters: Record<string, Filter>
+  /** Text to search for, only in `textFields`. */
   text?: string
+  /** With `text`: the search fields this caller may see. Search in these and no other (a hidden field must not answer). */
+  textFields?: string[]
   sort?: { field: string; dir: "asc" | "desc" }
   cursor?: string
   limit: number
@@ -138,6 +141,8 @@ export type FragmentConfig<P extends z.ZodObject, T extends Template> = {
   actions?: ActionHandle[]
   size?: "small" | "medium" | "large"
   expose?: Exposure
+  /** Its texts are written by outsiders (records' names, notes): data for a model, never instructions. */
+  untrusted?: boolean
 } & (
   | { template: T; data: (params: z.infer<P>, ctx: Context) => Promise<TemplateData[T] | null> | TemplateData[T] | null; view?: ViewSource }
   | { view: ViewSource; data: (params: z.infer<P>, ctx: Context) => Promise<Record<string, unknown> | null> | Record<string, unknown> | null; template?: never }
@@ -154,11 +159,11 @@ export type AgentConfig = {
 
 export type PermissionConfig = { label: Label; description?: Label; default?: boolean }
 
+/** A value an administrator sets per installation; the workspace host sends it with every call. Never a secret (those stay in the app's own configuration). */
 export type SettingConfig = {
   label: Label
   description?: Label
-  type: "text" | "secret" | "number" | "boolean" | "choice"
+  type: "text" | "number" | "boolean"
   required?: boolean
   default?: string | number | boolean
-  options?: { value: string; label: Label }[]
 }

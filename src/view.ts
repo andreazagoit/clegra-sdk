@@ -1,5 +1,5 @@
 /**
- * THE SDK'S MCP APPS VIEW (spec §12): one HTML document that draws every
+ * THE SDK'S MCP APPS VIEW (spec §5): one HTML document that draws every
  * derived result (a list, a record, a fragment, a dashboard) for hosts that
  * show MCP Apps views: ChatGPT, Claude, and a workspace host's frames.
  *
@@ -36,7 +36,7 @@ html[data-theme=light] .t-success{background:#d9f5df;color:#11622a}html[data-the
 dl{display:grid;grid-template-columns:minmax(90px,max-content) 1fr;gap:6px 14px;margin:8px 0}dt{color:var(--fg2)}dd{margin:0}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px}
 .stat{font-size:26px;font-weight:600;font-variant-numeric:tabular-nums}
-button{font:inherit;border:1px solid var(--line);background:var(--bg2);color:var(--fg);border-radius:8px;padding:5px 12px;cursor:pointer}button.primary{background:var(--fg);color:var(--bg);border-color:var(--fg)}
+button{font:inherit;border:1px solid var(--line);background:var(--bg2);color:var(--fg);border-radius:8px;padding:5px 12px;cursor:pointer}button.back{margin:0 0 8px;background:transparent;border-color:transparent;color:var(--fg2);padding:2px 4px}button.primary{background:var(--fg);color:var(--bg);border-color:var(--fg)}
 .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.actions{margin-top:10px}
 form.act{margin-top:8px;display:grid;gap:6px}input,select,textarea{font:inherit;padding:6px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg)}
 .bar{display:grid;grid-template-columns:minmax(70px,max-content) 1fr max-content;gap:6px 10px;align-items:center}.bar i{display:block;height:10px;background:var(--accent);border-radius:4px}
@@ -97,8 +97,18 @@ const SCRIPT = `
     for (const a of actions) { const b = document.createElement("button"); b.textContent = a.title; b.onclick = () => actionForm(el, a, record); bar.appendChild(b); }
     el.appendChild(bar);
   }
-  let lastCall = null;
+  let lastCall = null; let last = null;
+  // Where «back» returns: the lists and searches a record was opened from, each with the call that draws it again.
+  const trail = [];
   const reload = async () => { if (!lastCall) return; const r = await callTool(lastCall.name, lastCall.args); render(resultOf(r)); };
+  const open = async (name, args) => { if (last) trail.push({ s: last, call: lastCall }); lastCall = { name, args }; const r = await callTool(name, args); const e = errorOf(r); if (e) { trail.pop(); const box = root.querySelector(".box"); if (box) say(box, e, true); return; } render(resultOf(r)); };
+  const backBar = () => {
+    if (!trail.length) return;
+    const prev = trail[trail.length - 1];
+    const b = document.createElement("button"); b.className = "back"; b.textContent = "‹ " + ((prev.s.view && prev.s.view.title) || "");
+    b.onclick = async () => { trail.pop(); lastCall = prev.call; if (prev.call) { try { await reload(); return; } catch {} } render(prev.s); };
+    root.appendChild(b);
+  };
 
   function recordBox(view, record) {
     const el = document.createElement("div"); el.className = "box";
@@ -123,7 +133,7 @@ const SCRIPT = `
     return el;
   }
   function render(s) {
-    gotResult = true;
+    gotResult = true; last = s;
     refs = (s && s.refs) || {};
     const v = s && s.view;
     root.innerHTML = "";
@@ -136,11 +146,13 @@ const SCRIPT = `
         "<table><thead><tr>" + cols.map((c) => "<th>" + esc(c.label) + "</th>").join("") + "</tr></thead><tbody>" +
         (s.rows || []).map((r, i) => '<tr class="link" data-i="' + i + '">' + cols.map((c) => "<td" + (c.role === "amount" || c.type === "number" ? ' class="num"' : "") + ">" + fmt(r[c.name], c) + "</td>").join("") + "</tr>").join("") +
         "</tbody></table>" + ((s.rows || []).length ? "" : '<p class="muted">—</p>');
-      box.querySelectorAll("tr.link").forEach((tr) => tr.onclick = async () => { const row = s.rows[Number(tr.dataset.i)]; lastCall = { name: v.getTool, args: { id: row.id } }; const r = await callTool(v.getTool, { id: row.id }); render(resultOf(r)); });
+      if (v.tool && !lastCall) lastCall = { name: v.tool, args: v.args || {} };
+      box.querySelectorAll("tr.link").forEach((tr) => tr.onclick = () => open(v.getTool, { id: s.rows[Number(tr.dataset.i)].id }));
       if (s.next && v.tool) { const more = document.createElement("button"); more.textContent = "…"; more.style.marginTop = "8px"; more.onclick = async () => { const r = await callTool(v.tool, Object.assign({}, v.args || {}, { cursor: s.next })); render(resultOf(r)); }; box.appendChild(more); }
       root.appendChild(box);
     } else if (v.kind === "record") {
       if (v.tool && s.record && s.record.id !== undefined) lastCall = { name: v.tool, args: { id: s.record.id } };
+      backBar();
       root.appendChild(recordBox(v, s.record));
     } else if (v.kind === "fragment") {
       root.appendChild(fragmentBox(Object.assign({ title: v.title }, s)));
@@ -149,7 +161,8 @@ const SCRIPT = `
       const g = document.createElement("div"); g.className = "grid"; for (const fr of s.fragments || []) g.appendChild(fragmentBox(fr)); root.appendChild(g);
     } else if (v.kind === "search") {
       const box = document.createElement("div"); box.className = "box";
-      box.innerHTML = (s.results || []).map((r) => "<div style='padding:6px 0;border-bottom:1px solid var(--line)'><b>" + esc(r.title) + "</b> <span class='muted'>" + esc(r.entityLabel || "") + "</span>" + (r.subtitle ? "<div class='muted'>" + esc(r.subtitle) + "</div>" : "") + "</div>").join("") || '<span class="muted">—</span>';
+      box.innerHTML = (s.results || []).map((r, i) => "<div class='hit' data-i='" + i + "' style='padding:6px 0;border-bottom:1px solid var(--line);cursor:pointer'><b>" + esc(r.title) + "</b> <span class='muted'>" + esc(r.entityLabel || "") + "</span>" + (r.status ? ' <span class="badge">' + esc(r.status) + "</span>" : "") + (r.subtitle ? "<div class='muted'>" + esc(r.subtitle) + "</div>" : "") + "</div>").join("") || '<span class="muted">—</span>';
+      box.querySelectorAll(".hit").forEach((el) => el.onclick = () => open("fetch", { id: s.results[Number(el.dataset.i)].id }));
       root.appendChild(box);
     }
     resize();
@@ -159,9 +172,10 @@ const SCRIPT = `
     if (e.source !== window.parent) return;
     const m = e.data; if (!m || m.jsonrpc !== "2.0") return;
     if (m.id !== undefined && pending.has(m.id) && !m.method) { const p = pending.get(m.id); pending.delete(m.id); return m.error ? p.reject(new Error(m.error.message || "error")) : p.resolve(m.result); }
-    if (m.method === "ui/notifications/tool-result") { const s = resultOf(m.params); if (s && s.view) render(s); else if (!BOOT) render(s); return; }
+    if (m.method === "ui/notifications/tool-result") { const s = resultOf(m.params); if ((s && s.view) || !BOOT) { trail.length = 0; lastCall = null; render(s); } return; }
     if (m.method === "ui/notifications/tool-input") { if (m.params && m.params.arguments && lastCall === null && BOOT === null) lastCall = null; return; }
-    if (m.method === "ui/notifications/host-context-changed") { applyContext(m.params); return; }
+    // A new language: numbers and dates are drawn again; labels come from the app, so the data are asked again when the view knows how.
+    if (m.method === "ui/notifications/host-context-changed") { const before = locale; applyContext(m.params); if (locale !== before && last) { if (lastCall) reload().catch(() => render(last)); else render(last); } return; }
     if (m.method === "ui/resource-teardown" && m.id !== undefined) post({ jsonrpc: "2.0", id: m.id, result: {} });
   });
   const boot = async () => {

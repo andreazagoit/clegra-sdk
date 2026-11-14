@@ -21,7 +21,7 @@ export default defineApp({
   name: "notes",
   title: { en: "Notes", it: "Note" },
   version: "1.0.0",
-  auth: { dev: true },                                // local sign-in page; never in production
+  auth: { dev: true },                                // local sign-in page: loopback callers only, refused in production
 
   permissions: { "notes.edit": { label: "Edit notes", default: true } },
 
@@ -38,7 +38,8 @@ export default defineApp({
       list: (q, ctx) => {
         let rows = [...notesOf(ctx.installation).values()]
         if (typeof q.filters.status === "string") rows = rows.filter((n) => n.status === q.filters.status)
-        if (q.text) rows = rows.filter((n) => n.title.toLowerCase().includes(q.text!.toLowerCase()))
+        // q.textFields: the search fields this caller may see; search in those only
+        if (q.text) rows = rows.filter((n) => (q.textFields ?? []).some((f) => String(n[f as "title"] ?? "").toLowerCase().includes(q.text!.toLowerCase())))
         return { rows, total: rows.length }
       },
     },

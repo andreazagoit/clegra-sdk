@@ -4,7 +4,7 @@ import { createMcpHandler, inputRequired, inputResponse, McpServer, type CallToo
 import { META_KEY, OAUTH_SCOPE, PROTOCOL_ID, RESOLVE_TOOL, URI_SCHEME, uriPrefix } from "@modelapp/spec/protocol"
 import { z } from "zod"
 
-import { AuthError, DevAuthority, isLoopback, TokenVerifier, type AuthOptions, type Caller, type Person } from "./auth"
+import { AuthError, canonicalJson, DEV_ISSUER, DevAuthority, isLoopback, signConfirmation, tenantOf, TokenVerifier, type AuthOptions, type Caller, type Person, type RequestTrust } from "./auth"
 import { MANIFEST_PATH, manifestUri, SPEC_VERSION, type Manifest, type ManifestField } from "./manifest"
 import { isLabel, labelMap, localize, type Label } from "./labels"
 import { fieldsOf, jsonSchemaOf, plainSchema, type FieldInfo } from "./meaning"
@@ -32,7 +32,7 @@ import type {
 import { MCP_APP_MIME_TYPE, urlPageHtml, viewHtml } from "./view"
 
 /**
- * MCP WORKSPACES SERVER, v1 (docs/map/spec.md): an MCP server
+ * THE MAP SERVER, v1 (docs/map/spec.md): an MCP server
  * (official SDK, Streamable HTTP, stateless) whose declarations — entities,
  * actions, pages, fragments, agents, permissions, settings — become plain MCP
  * tools and MCP Apps views for any host, and a manifest hosts read to mount
@@ -41,8 +41,13 @@ import { MCP_APP_MIME_TYPE, urlPageHtml, viewHtml } from "./view"
  * Every request builds a fresh McpServer for its caller: the tools a caller
  * may not use are not listed, titles are in the caller's language, and every
  * handler closes over the verified caller. Permissions, field permissions,
- * confirmations and idempotency are enforced here, before any handler.
+ * exposure to plain clients, confirmations and idempotency are enforced
+ * here, on every surface (tools, search, fetch, the resolver, dashboards),
+ * before any handler.
  */
+
+/** What a request brings beside its caller: whether dev tokens count (a loopback caller), and each call's arguments as received. */
+export type RequestInfo = { trust: RequestTrust; received: ReadonlyMap<string | number, unknown> }
 
 export type ServerOptions = {
   /** The app id: lowercase letters, digits, `-`; 2–40 characters. */
@@ -57,13 +62,13 @@ export type ServerOptions = {
   /** MCP `instructions` for models. */
   instructions?: string
   websiteUrl?: string
-  /** Where write results are kept for idempotency (default: in memory). */
+  /** Where write results and used token ids are kept (default: in memory; several instances share one). */
   store?: IdempotencyStore
   /** Escape hatch: the raw McpServer of each request, to add hand-written tools, resources or views. */
   mcp?: (server: McpServer, caller: Caller | null) => void
 }
 
-/** The one `_meta` key of the host protocol (spec §5): `{ call, confirmation, settings }` on requests, `{ notifications, untrusted }` on results. */
+/** The one `_meta` key of the host protocol (spec §7): `{ call, confirmation, settings }` on requests, `{ notifications, untrusted }` on results. */
 export { META_KEY }
 type HostMeta = { call?: unknown; confirmation?: unknown; settings?: unknown }
 const hostMeta = (meta: Record<string, unknown> | undefined): HostMeta => {
@@ -100,15 +105,31 @@ const RESERVED_TOOLS = new Set(["search", "fetch", RESOLVE_TOOL])
 const b64url = (s: string) => Buffer.from(s, "utf8").toString("base64url")
 const unb64url = (s: string) => Buffer.from(s, "base64url").toString("utf8")
 
-function sortedJson(value: unknown): string {
-  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null"
-  if (Array.isArray(value)) return `[${value.map(sortedJson).join(",")}]`
-  return `{${Object.entries(value as Record<string, unknown>)
-    .filter(([, v]) => v !== undefined)
-    .sort(([a], [b]) => (a < b ? -1 : 1))
-    .map(([k, v]) => `${JSON.stringify(k)}:${sortedJson(v)}`)
-    .join(",")}}`
+const sortedJson = canonicalJson
+
+// ------------------------------------------------------------ untrusted text
+
+const XML: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", "\uFF1C": "&lt;", "\uFF1E": "&gt;", "\uFE64": "&lt;", "\uFE65": "&gt;" }
+/**
+ * Text written by outsiders, as a model reads it (spec §7): inside
+ * `<untrusted>`, with `&`, `<` and `>` (and their full-width and small
+ * forms) escaped as XML text, so nothing in it is a tag: it can't close or
+ * open the wrapper, plainly, nested or already encoded.
+ */
+export const untrustedText = (value: string) => `<untrusted>${value.replace(/[&<>\uFF1C\uFF1E\uFE64\uFE65]/g, (c) => XML[c]!)}</untrusted>`
+const pointerKey = (k: string) => k.replace(/~/g, "~0").replace(/\//g, "~1")
+/** Every string inside `value` (at any depth) wrapped as untrusted, its JSON pointer noted. `skip`: keys left as they are. */
+function markAll(value: unknown, pointer: string, pointers: string[], skip?: ReadonlySet<string>): unknown {
+  if (typeof value === "string") {
+    pointers.push(pointer)
+    return untrustedText(value)
+  }
+  if (Array.isArray(value)) return value.map((v, i) => markAll(v, `${pointer}/${i}`, pointers, skip))
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, skip?.has(k) ? v : markAll(v, `${pointer}/${pointerKey(k)}`, pointers, skip)]))
+  return value
 }
+/** A template's keys that are never free text. */
+const TEMPLATE_KEYS = new Set(["uri", "kind", "format", "currency"])
 
 const text = (t: string): CallToolResult["content"] => [{ type: "text", text: t }]
 
@@ -136,13 +157,18 @@ export class AppServer {
   readonly #agents = new Map<string, AgentConfig>()
   readonly #permissions = new Map<string, PermissionConfig>()
   readonly #settings = new Map<string, SettingConfig>()
-  readonly #devResources = new Set<string>()
   #manifest: Manifest | null = null
   #devReady: Promise<void> | null = null
-  readonly #handler = createMcpHandler((ctx) => this.createMcpServer((ctx.authInfo?.extra as { caller?: Caller } | undefined)?.caller ?? null, ctx.era), {
-    legacy: "stateless",
-    onerror: (e) => console.error(`[${PROTOCOL_ID}]`, e.message),
-  })
+  readonly #handler = createMcpHandler(
+    (ctx) => {
+      const extra = ctx.authInfo?.extra as { caller?: Caller; request?: RequestInfo } | undefined
+      return this.createMcpServer(extra?.caller ?? null, ctx.era, extra?.request)
+    },
+    {
+      legacy: "stateless",
+      onerror: (e) => console.error(`[${PROTOCOL_ID}]`, e.message),
+    },
+  )
 
   constructor(options: ServerOptions) {
     if (!NAME.test(options.name)) throw new Error(`name "${options.name}": lowercase letters, digits and -, 2 to 40 characters (it is the app id)`)
@@ -150,10 +176,11 @@ export class AppServer {
     this.options = options
     this.locale = options.locale ?? "en"
     const auth = options.auth ?? {}
-    this.#verifier = new TokenVerifier(auth, () => this.#audiences())
+    if (auth.dev && process.env.NODE_ENV === "production") throw new Error("auth.dev is for development: it is refused when NODE_ENV is production")
+    this.#store = options.store ?? new MemoryStore()
+    this.#verifier = new TokenVerifier(auth, (key, ttlMs) => this.#store.once(key, ttlMs))
     this.#dev = auth.dev ? new DevAuthority(auth.dev === true ? {} : auth.dev, { name: this.name, title: localize(options.title, this.locale, this.locale), allPermissions: () => [...this.#permissions.keys()] }) : null
     if (this.#dev) this.#verifier.useDev(this.#dev)
-    this.#store = options.store ?? new MemoryStore()
   }
 
   // ------------------------------------------------------------ registration
@@ -255,10 +282,11 @@ export class AppServer {
     return id
   }
 
-  /** A setting an administrator fills per installation (spec §8). */
+  /** A setting an administrator fills per installation (spec §2): text, number or boolean, never a secret. */
   registerSetting(id: string, config: SettingConfig): void {
     if (!/^[a-z][a-zA-Z0-9_]{0,39}$/.test(id)) throw new Error(`setting "${id}": a short identifier`)
-    if (config.type === "choice" && !config.options?.length) throw new Error(`setting "${id}": a choice needs options`)
+    if (!["text", "number", "boolean"].includes(config.type)) throw new Error(`setting "${id}": type is text, number or boolean`)
+    if (config.default !== undefined && typeof config.default !== (config.type === "text" ? "string" : config.type)) throw new Error(`setting "${id}": the default must be a ${config.type}`)
     this.#settings.set(id, config)
     this.#changed()
   }
@@ -306,7 +334,8 @@ export class AppServer {
   #context(caller: Caller, meta: Record<string, unknown> | undefined, notes: Notification[]): Context {
     const locale = caller.locale ?? this.locale
     const host = hostMeta(meta)
-    const sent = (host.settings && typeof host.settings === "object" ? host.settings : {}) as Record<string, unknown>
+    // Settings are the installation's, set by its administrator: only its workspace host says them. A plain client gets the defaults.
+    const sent = (caller.host === "workspace" && host.settings && typeof host.settings === "object" && !Array.isArray(host.settings) ? host.settings : {}) as Record<string, unknown>
     const settings: Record<string, unknown> = {}
     for (const [id, s] of this.#settings) {
       const v = sent[id]
@@ -338,8 +367,24 @@ export class AppServer {
     return entity.fields.filter((f) => !f.permission || caller.permissions.has(f.permission))
   }
 
+  /** Whether this caller reaches the entity at all, on any surface: its permission, and for a plain client its exposure. */
   #canSee(entity: EntityRecord, caller: Caller): boolean {
-    return !entity.config.permission || caller.permissions.has(entity.config.permission)
+    if (entity.config.permission && !caller.permissions.has(entity.config.permission)) return false
+    return caller.host !== "plain" || entity.tools.get.plain
+  }
+
+  /** The same for a fragment type. */
+  #canShow(f: FragmentRecord, caller: Caller): boolean {
+    if (f.config.permission && !caller.permissions.has(f.config.permission)) return false
+    return caller.host !== "plain" || f.tool.plain
+  }
+
+  /** Whether a URI inside a fragment's data points to something this caller reaches (a URI of another app is not ours to judge). */
+  #uriVisible(uri: unknown, caller: Caller): boolean {
+    if (typeof uri !== "string") return true
+    const parsed = this.parseUri(uri)
+    const entity = parsed ? this.#entities.get(parsed.type) : undefined
+    return !entity || this.#canSee(entity, caller)
   }
 
   #mayUse(action: ActionRecord, caller: Caller): boolean {
@@ -383,22 +428,32 @@ export class AppServer {
     return [...this.#actions.values()].filter((a) => a.entity === entity && this.#mayUse(a, caller)).map((a) => this.#actionInfo(a, caller))
   }
 
-  /** Untrusted values wrapped for the text a model reads; their JSON pointers for `_meta`. */
-  #untrusted(entity: EntityRecord, rows: Record<string, unknown>[], base: string): { text: Record<string, unknown>[]; pointers: string[] } {
-    const marked = entity.fields.filter((f) => f.untrusted).map((f) => f.name)
-    const pointers: string[] = []
-    const out = rows.map((row, i) => {
-      if (!marked.length) return row
-      const copy = { ...row }
-      for (const k of marked)
-        if (typeof copy[k] === "string") {
-          // The value can't close (or open) the wrapper itself.
-          copy[k] = `<untrusted>${(copy[k] as string).replace(/<(\/?)\s*untrusted\s*>/gi, "&lt;$1untrusted&gt;")}</untrusted>`
-          pointers.push(`${base}/${i}/${k}`)
-        }
-      return copy
-    })
-    return { text: out, pointers }
+  /** A row as a model reads it: its untrusted fields (strings at any depth) wrapped, their JSON pointers under `base` noted for `_meta`. */
+  #markRow(entity: EntityRecord, row: Record<string, unknown>, base: string, pointers: string[]): Record<string, unknown> {
+    const copy = { ...row }
+    for (const f of entity.fields) if (f.untrusted && copy[f.name] !== undefined) copy[f.name] = markAll(copy[f.name], `${base}/${pointerKey(f.name)}`, pointers)
+    return copy
+  }
+
+  /** A record card's title and subtitle the same way. */
+  #markCard<C extends { title: string; subtitle?: string }>(entity: EntityRecord, card: C, base: string, pointers: string[]): C {
+    const untrusted = (role: string) => entity.fields.some((f) => f.role === role && f.untrusted)
+    const out = { ...card }
+    if (untrusted("title")) out.title = markAll(card.title, `${base}/title`, pointers) as string
+    if (card.subtitle !== undefined && untrusted("subtitle")) out.subtitle = markAll(card.subtitle, `${base}/subtitle`, pointers) as string
+    return out
+  }
+
+  /** A resolved fragment's data as a model reads it (a record's untrusted fields; every text of a fragment declared `untrusted`). */
+  #markResolved(r: { fragment: { type: string }; state: string; data?: unknown }, base: string, pointers: string[]): unknown {
+    if (r.state !== "ok" || !r.data || typeof r.data !== "object") return r.data
+    const entity = this.#entities.get(r.fragment.type)
+    if (entity) return this.#markRow(entity, r.data as Record<string, unknown>, `${base}/data`, pointers)
+    return this.#fragments.get(r.fragment.type)?.config.untrusted ? markAll(r.data, `${base}/data`, pointers, TEMPLATE_KEYS) : r.data
+  }
+
+  #marks(pointers: string[]) {
+    return pointers.length ? { _meta: { [META_KEY]: { untrusted: pointers } } } : {}
   }
 
   // ------------------------------------------------------------ reads
@@ -415,9 +470,12 @@ export class AppServer {
     if (sortField !== undefined && !visible.some((f) => f.name === sortField && f.sort)) throw new AppError("invalid_input", `"${sortField}" can't be sorted by`)
     const limit = typeof args.limit === "number" ? Math.max(1, Math.min(100, Math.floor(args.limit))) : 25
     const textQuery = typeof args.query === "string" && args.query.trim() ? args.query.trim() : base?.text
+    // Text is searched only in the search fields the caller may see: a hidden field must not answer by matching.
+    const textFields = visible.filter((f) => f.search).map((f) => f.name)
+    if (textQuery && !textFields.length) throw new AppError("invalid_input", `${entity.name} can't be searched by text`)
     return {
       filters,
-      ...(textQuery && entity.fields.some((f) => f.search) ? { text: textQuery } : {}),
+      ...(textQuery ? { text: textQuery, textFields } : {}),
       ...(sortField ? { sort: { field: sortField, dir: args.dir === "desc" || (args.dir === undefined && base?.sort?.dir === "desc") ? "desc" : "asc" } } : {}),
       ...(typeof args.cursor === "string" ? { cursor: args.cursor } : {}),
       limit,
@@ -459,7 +517,7 @@ export class AppServer {
         .optional()
         .describe(`${this.#t(caller, f.label ?? f.name)}: a value, { in: [...] }, or a range { gte, lte }`)
     }
-    if (entity.fields.some((f) => f.search)) shape.query = z.string().max(200).optional().describe("Text to search for")
+    if (this.#visibleFields(entity, caller).some((f) => f.search)) shape.query = z.string().max(200).optional().describe("Text to search for")
     const sortable = this.#visibleFields(entity, caller).filter((f) => f.sort).map((f) => f.name)
     if (sortable.length) {
       shape.sort = z.enum(sortable as [string, ...string[]]).optional().describe("Field to sort by")
@@ -503,19 +561,25 @@ export class AppServer {
     }
     const f = this.#fragments.get(instance.type)
     if (!f) return { fragment, uri, state: "gone" as const }
-    if (f.config.permission && !caller.permissions.has(f.config.permission)) return { fragment, uri, state: "no-access" as const }
+    if (!this.#canShow(f, caller)) return { fragment, uri, state: "no-access" as const }
     const parsed = f.config.params.safeParse(instance.params)
     if (!parsed.success) return { fragment, uri, state: "gone" as const }
-    const data = await f.config.data(parsed.data as never, ctx)
+    let data = (await f.config.data(parsed.data as never, ctx)) as Record<string, unknown> | null
     if (!data) return { fragment, uri, state: "gone" as const }
+    // What a template links to is shown only to who reaches it: a card of a record out of reach is no access, such items leave a list.
+    if (f.config.template === "card" && !this.#uriVisible(data.uri, caller)) return { fragment, uri, state: "no-access" as const }
+    if (f.config.template === "list" && Array.isArray(data.items)) data = { ...data, items: (data.items as { uri?: unknown }[]).filter((i) => this.#uriVisible(i?.uri, caller)) }
     const actions = (f.config.actions ?? []).map((h) => this.#actions.get(h.tool)).filter((a): a is ActionRecord => Boolean(a && this.#mayUse(a, caller))).map((a) => this.#actionInfo(a, caller))
-    return { fragment, uri, state: "ok" as const, template: f.config.template ?? "view", title: this.#t(caller, f.config.title), data: data as Record<string, unknown>, ...(actions.length ? { actions } : {}) }
+    return { fragment, uri, state: "ok" as const, template: f.config.template ?? "view", title: this.#t(caller, f.config.title), data, ...(actions.length ? { actions } : {}) }
   }
 
   // ------------------------------------------------------------ calls
 
-  /** Runs one action call: permission, input, record, idempotency, confirmation, handler (spec §5, §10, §11). */
-  async #runAction(a: ActionRecord, caller: Caller, args: Record<string, unknown>, mctx: ServerContext | null): Promise<CallToolResult> {
+  /**
+   * Runs one action call: permission, input, record, idempotency, confirmation, handler (spec §7).
+   * `raw`: the call's arguments as they were received; the proof and the idempotency check cover those, never the parsed or defaulted input.
+   */
+  async #runAction(a: ActionRecord, caller: Caller, args: Record<string, unknown>, mctx: ServerContext | null, request: RequestInfo, raw?: unknown): Promise<CallToolResult> {
     const meta = (mctx?.mcpReq._meta ?? undefined) as Record<string, unknown> | undefined
     const notes: Notification[] = []
     const ctx = this.#context(caller, meta, notes)
@@ -530,50 +594,64 @@ export class AppServer {
       if (!row) return failure("not_found", `${this.#t(caller, a.entity.config.label)} ${id} doesn't exist.`)
       record = row as Record<string, unknown>
     }
-    const callArgs = a.entity ? { id, ...(parsed.data as object) } : (parsed.data as Record<string, unknown>)
+    const received = (raw && typeof raw === "object" && !Array.isArray(raw) ? raw : args) as Record<string, unknown>
     // Per caller: a stored answer is only ever given back to who made the call.
     const key = a.write && ctx.call ? `${caller.installation}:${caller.issuer}:${caller.subject}:${a.tool}:${ctx.call}` : null
-    const hash = sortedJson(callArgs)
+    const hash = canonicalJson(received)
     if (key) {
-      const stored = await this.#store.get(key)
-      if (stored) return stored.args === hash ? (stored.result as CallToolResult) : failure("conflict", "This call id was already used with other arguments.")
-    }
-    if (a.write && a.confirm === "always" && caller.host === "workspace") {
-      const proof = hostMeta(meta).confirmation
-      const why = typeof proof === "string" ? await this.#verifier.checkConfirmation(proof, { issuer: caller.issuer, subject: caller.subject, tool: a.tool, args: callArgs, call: ctx.call }) : "no proof"
-      if (why) {
-        const card = a.entity && record ? this.#recordCard(a.entity, this.#strip(a.entity, record, caller), caller) : null
-        return failure("confirmation_required", `${this.#t(caller, a.config.title)} needs the person's confirmation (${why}).`, {
-          confirm: { tool: a.tool, title: this.#t(caller, a.config.title), ...(a.entity && record ? { record: { uri: this.uri(a.entity.name, String(record.id)), ...card } } : {}), input: callArgs },
-        })
+      // One atomic step: two requests with the same call id can't both run.
+      const existing = await this.#store.begin(key, hash, 120_000)
+      if (existing) {
+        if (existing.args !== hash) return failure("conflict", "This call id was already used with other arguments.")
+        if (existing.result === undefined) return failure("conflict", "This call is still running: ask again for its result.", { pending: true })
+        return existing.result as CallToolResult
       }
     }
-    // A plain client that can elicit (MCP 2026-07-28 input requests) is asked to confirm an `always` write; others rely on the tool's destructiveHint.
-    if (a.write && a.confirm === "always" && caller.host === "plain" && mctx && elicits(mctx)) {
-      const answer = inputResponse(mctx.mcpReq.inputResponses, "confirm")
-      if (answer.kind !== "elicit") {
-        const lines = Object.entries(callArgs).map(([k, v]) => `${k}: ${typeof v === "string" ? v : JSON.stringify(v)}`).join("; ")
-        return inputRequired({ inputRequests: { confirm: inputRequired.elicit({ message: `${this.#t(caller, a.config.title)}${lines ? ` (${lines})` : ""}?`, requestedSchema: z.object({ confirm: z.boolean() }) }) } }) as unknown as CallToolResult
-      }
-      if (answer.action !== "accept" || answer.content?.confirm !== true) return failure("confirmation_required", "Not confirmed.")
-    }
-    let out: ActionResult | void
+    let kept = false
     try {
-      out = await a.handler(parsed.data as never, ctx, record as never)
-    } catch (error) {
-      if (error instanceof AppError) return failure(error.code, error.message, error.details)
-      console.error(`[${PROTOCOL_ID}] ${a.tool}`, error)
-      return failure("internal", "The action failed.")
+      if (a.write && a.confirm === "always" && caller.host === "workspace") {
+        const proof = hostMeta(meta).confirmation
+        const why = typeof proof === "string" ? await this.#verifier.checkConfirmation(proof, { issuer: caller.issuer, subject: caller.subject, installation: caller.installationId, tool: a.tool, args: received, call: ctx.call }, request.trust) : "no proof"
+        if (why) {
+          const card = a.entity && record ? this.#recordCard(a.entity, this.#strip(a.entity, record, caller), caller) : null
+          return failure("confirmation_required", `${this.#t(caller, a.config.title)} needs the person's confirmation (${why}).`, {
+            confirm: { tool: a.tool, title: this.#t(caller, a.config.title), ...(a.entity && record ? { record: { uri: this.uri(a.entity.name, String(record.id)), ...card } } : {}), input: received },
+          })
+        }
+      }
+      // A plain client that can elicit (MCP 2026-07-28 input requests) is asked to confirm an `always` write; others rely on the tool's destructiveHint.
+      if (a.write && a.confirm === "always" && caller.host === "plain" && mctx && elicits(mctx)) {
+        const answer = inputResponse(mctx.mcpReq.inputResponses, "confirm")
+        if (answer.kind !== "elicit") {
+          const lines = Object.entries(received).map(([k, v]) => `${k}: ${typeof v === "string" ? v : JSON.stringify(v)}`).join("; ")
+          return inputRequired({ inputRequests: { confirm: inputRequired.elicit({ message: `${this.#t(caller, a.config.title)}${lines ? ` (${lines})` : ""}?`, requestedSchema: z.object({ confirm: z.boolean() }) }) } }) as unknown as CallToolResult
+        }
+        if (answer.action !== "accept" || answer.content?.confirm !== true) return failure("confirmation_required", "Not confirmed.")
+      }
+      let out: ActionResult | void
+      try {
+        out = await a.handler(parsed.data as never, ctx, record as never)
+      } catch (error) {
+        if (error instanceof AppError) return failure(error.code, error.message, error.details)
+        console.error(`[${PROTOCOL_ID}] ${a.tool}`, error)
+        return failure("internal", "The action failed.")
+      }
+      const recordUri = out?.record ? (out.record.startsWith(`${URI_SCHEME}://`) ? out.record : a.entity ? this.uri(a.entity.name, out.record) : out.record) : undefined
+      const message = out?.message ?? "Done."
+      const result: CallToolResult = {
+        content: text(message),
+        structuredContent: { ok: true, message, ...(recordUri ? { record: recordUri } : {}), ...(out?.data ? { data: out.data } : {}) },
+        ...(notes.length ? { _meta: { [META_KEY]: { notifications: notes.map((n) => ({ ...n, title: ctx.t(n.title), ...(n.body ? { body: ctx.t(n.body) } : {}), to: n.to ?? (caller.person ? [caller.person.id] : []) })) } } } : {}),
+      }
+      if (key) {
+        await this.#store.finish(key, { args: hash, result }, 24 * 3600_000)
+        kept = true
+      }
+      return result
+    } finally {
+      // Refused or failed: nothing is kept, the same call id can be tried again.
+      if (key && !kept) await this.#store.abandon(key)
     }
-    const recordUri = out?.record ? (out.record.startsWith(`${URI_SCHEME}://`) ? out.record : a.entity ? this.uri(a.entity.name, out.record) : out.record) : undefined
-    const message = out?.message ?? "Done."
-    const result: CallToolResult = {
-      content: text(message),
-      structuredContent: { ok: true, message, ...(recordUri ? { record: recordUri } : {}), ...(out?.data ? { data: out.data } : {}) },
-      ...(notes.length ? { _meta: { [META_KEY]: { notifications: notes.map((n) => ({ ...n, title: ctx.t(n.title), ...(n.body ? { body: ctx.t(n.body) } : {}), to: n.to ?? (caller.person ? [caller.person.id] : []) })) } } } : {}),
-    }
-    if (key) await this.#store.set(key, { args: hash, result }, 24 * 3600_000)
-    return result
   }
 
   // ------------------------------------------------------------ the MCP server
@@ -615,8 +693,8 @@ export class AppServer {
     return z.object({})
   }
 
-  /** A fresh McpServer for one request, for this caller (null: manifest and views only). */
-  createMcpServer(caller: Caller | null, era: "legacy" | "modern" = "legacy"): McpServer {
+  /** A fresh McpServer for one request, for this caller (null: manifest and views only). `request`: what `fetch` knows of the HTTP request. */
+  createMcpServer(caller: Caller | null, era: "legacy" | "modern" = "legacy", request: RequestInfo = { trust: { dev: Boolean(this.#dev), requestResource: null }, received: new Map() }): McpServer {
     void era
     const o = this.options
     // Tool names, titles and descriptions are in the app's own locale: stable for every caller (spec §6). Data labels follow the caller.
@@ -682,11 +760,12 @@ export class AppServer {
           const ctx = ctxOf(mctx)
           const out = await this.#list(e, caller, ctx, this.#queryOf(e, caller, args))
           const uris = out.rows.map((r) => this.uri(e.name, String(r.id)))
-          const marked = this.#untrusted(e, out.rows, "/rows")
+          const pointers: string[] = []
+          const marked = out.rows.map((r, i) => this.#markRow(e, r, `/rows/${i}`, pointers))
           return {
-            content: text(JSON.stringify({ rows: marked.text.map((r, i) => ({ uri: uris[i], ...r })), ...(out.next ? { next: out.next } : {}), ...(out.total !== undefined ? { total: out.total } : {}) })),
+            content: text(JSON.stringify({ rows: marked.map((r, i) => ({ uri: uris[i], ...r })), ...(out.next ? { next: out.next } : {}), ...(out.total !== undefined ? { total: out.total } : {}) })),
             structuredContent: { entity: e.name, ...out, uris, refs: await this.#refs(e, out.rows, caller, ctx), view: { kind: "list", title: plural, columns: columns(), tool: e.tools.list.name, args, getTool: e.tools.get.name } },
-            ...(marked.pointers.length ? { _meta: { [META_KEY]: { untrusted: marked.pointers } } } : {}),
+            ...this.#marks(pointers),
           }
         }),
       )
@@ -704,19 +783,20 @@ export class AppServer {
           const row = await e.config.get(String(args.id), ctx)
           if (!row) return failure("not_found", `${label} ${String(args.id)} doesn't exist.`)
           const record = this.#strip(e, row as Record<string, unknown>, caller)
-          const marked = this.#untrusted(e, [record], "/record")
+          const pointers: string[] = []
+          const marked = this.#markRow(e, record, "/record", pointers)
           const uri = this.uri(e.name, String(record.id))
           return {
-            content: text(JSON.stringify({ uri, ...marked.text[0] })),
+            content: text(JSON.stringify({ uri, ...marked })),
             structuredContent: { entity: e.name, uri, record, refs: await this.#refs(e, [record], caller, ctx), view: { kind: "record", title: label, tool: e.tools.get.name, fields: this.#visibleFields(e, caller).map((f) => this.#column(f, caller)), actions: this.#recordActions(e, caller) } },
-            ...(marked.pointers.length ? { _meta: { [META_KEY]: { untrusted: marked.pointers.map((p) => p.replace("/record/0", "/record")) } } } : {}),
+            ...this.#marks(pointers),
           }
         }),
       )
     }
 
     // search and fetch (ChatGPT's conventions), over searchable entities.
-    const searchable = [...this.#entities.values()].filter((e) => e.fields.some((f) => f.search) && this.#canSee(e, caller) && (!plainCaller || e.tools.list.plain))
+    const searchable = [...this.#entities.values()].filter((e) => this.#canSee(e, caller) && this.#visibleFields(e, caller).some((f) => f.search))
     if (searchable.length) {
       reg(
         "search",
@@ -731,11 +811,19 @@ export class AppServer {
           const ctx = ctxOf(mctx)
           const limit = typeof args.limit === "number" ? args.limit : 10
           const results: Record<string, unknown>[] = []
+          const forModel: Record<string, unknown>[] = []
+          const pointers: string[] = []
           for (const e of searchable) {
-            const out = await this.#list(e, caller, ctx, { filters: {}, text: String(args.query), limit })
-            for (const row of out.rows) results.push({ id: this.uri(e.name, String(row.id)), entity: e.name, entityLabel: t(e.config.label), ...this.#recordCard(e, row, caller), url: this.uri(e.name, String(row.id)) })
+            const out = await this.#list(e, caller, ctx, this.#queryOf(e, caller, { query: String(args.query), limit }))
+            for (const row of out.rows) {
+              const uri = this.uri(e.name, String(row.id))
+              const card = this.#recordCard(e, row, caller)
+              const marked = this.#markCard(e, card, `/results/${results.length}`, pointers)
+              results.push({ id: uri, entity: e.name, entityLabel: t(e.config.label), ...card, url: uri })
+              forModel.push({ id: uri, title: marked.title, url: uri })
+            }
           }
-          return { content: text(JSON.stringify({ results: results.map((r) => ({ id: r.id, title: r.title, url: r.url })) })), structuredContent: { results, view: { kind: "search" } } }
+          return { content: text(JSON.stringify({ results: forModel })), structuredContent: { results, view: { kind: "search" } }, ...this.#marks(pointers) }
         }),
       )
       reg(
@@ -755,10 +843,13 @@ export class AppServer {
           if (r.state !== "ok") return failure(r.state === "no-access" ? "permission_denied" : "not_found", r.state === "no-access" ? "No access." : "Not found.")
           const entity = this.#entities.get(parsed.type)
           const record = r.data as Record<string, unknown>
-          const marked = entity ? this.#untrusted(entity, [record], "/record").text[0] : record
+          const pointers: string[] = []
+          const marked = entity ? this.#markRow(entity, record, "/record", pointers) : this.#markResolved(r, "", pointers)
+          const title = "title" in r ? r.title : ""
           return {
-            content: text(JSON.stringify({ id: r.uri, title: "title" in r ? r.title : "", text: JSON.stringify(marked), url: r.uri, metadata: { type: parsed.type } })),
-            structuredContent: entity ? { entity: entity.name, uri: r.uri, record, refs: await this.#refs(entity, [record], caller, ctx), view: r.template === "record" ? { ...("view" in r ? r.view : {}), title: t(entity.config.label) } : undefined } : { ...r, view: { kind: "fragment", title: "title" in r ? r.title : "" } },
+            content: text(JSON.stringify({ id: r.uri, title: entity ? this.#markCard(entity, { title }, "", []).title : title, text: JSON.stringify(marked), url: r.uri, metadata: { type: parsed.type } })),
+            structuredContent: entity ? { entity: entity.name, uri: r.uri, record, refs: await this.#refs(entity, [record], caller, ctx), view: r.template === "record" ? { ...("view" in r ? r.view : {}), title: t(entity.config.label) } : undefined } : { ...r, view: { kind: "fragment", title } },
+            ...this.#marks(pointers),
           }
         }),
       )
@@ -777,6 +868,7 @@ export class AppServer {
       guard(RESOLVE_TOOL, async (args, mctx) => {
         const ctx = ctxOf(mctx)
         const results = []
+        const pointers: string[] = []
         for (const uri of args.uris as string[]) {
           const parsed = this.parseUri(uri)
           if (!parsed) {
@@ -786,12 +878,17 @@ export class AppServer {
           const r = await this.#resolve({ type: parsed.type, params: parsed.params }, caller, ctx)
           if (r.state !== "ok") results.push({ uri, state: r.state })
           else {
+            // For the host: which values are outsiders' text (it wraps them before a model reads them).
+            const at = `/results/${results.length}`
+            const entity = this.#entities.get(parsed.type)
+            if (entity && "title" in r) this.#markCard(entity, { title: String(r.title), ...("subtitle" in r && typeof r.subtitle === "string" ? { subtitle: r.subtitle } : {}) }, at, pointers)
+            if (args.want !== "reference") this.#markResolved(r, at, pointers)
             const { fragment: _f, view, ...rest } = r as typeof r & { view?: { actions?: { tool: string }[] } }
             const actions = view?.actions ? { actions: view.actions.map((a) => a.tool) } : "actions" in rest && Array.isArray(rest.actions) ? { actions: (rest.actions as { tool: string }[]).map((a) => a.tool) } : {}
             results.push(args.want === "reference" ? { uri, state: "ok", title: "title" in rest ? rest.title : "", ...("subtitle" in rest ? { subtitle: rest.subtitle } : {}), ...("status" in rest ? { status: rest.status } : {}) } : { ...rest, ...actions, uri })
           }
         }
-        return { content: text(`${results.length} resolved`), structuredContent: { results } }
+        return { content: text(`${results.length} resolved`), structuredContent: { results }, ...this.#marks(pointers) }
       }),
     )
 
@@ -808,7 +905,7 @@ export class AppServer {
           inputSchema: input,
           annotations: { title, readOnlyHint: !a.write, destructiveHint: a.write && a.confirm === "always", idempotentHint: !a.write, openWorldHint: false },
         },
-        guard(a.tool, (args, mctx) => this.#runAction(a, caller, args, mctx)),
+        guard(a.tool, (args, mctx) => this.#runAction(a, caller, args, mctx, request, request.received.get(mctx.mcpReq.id as string | number))),
       )
     }
 
@@ -843,19 +940,23 @@ export class AppServer {
             const out = await this.#list(e, caller, ctx, query)
             const visible = new Set(this.#visibleFields(e, caller).map((f) => f.name))
             const columns = c.columns.filter((n) => visible.has(n)).map((n) => this.#column(e.fields.find((f) => f.name === n)!, caller))
-            const marked = this.#untrusted(e, out.rows, "/rows")
+            const pointers: string[] = []
+            const marked = out.rows.map((r, i) => this.#markRow(e, r, `/rows/${i}`, pointers))
             return {
-              content: text(JSON.stringify({ page: p.name, rows: marked.text, ...(out.next ? { next: out.next } : {}) })),
+              content: text(JSON.stringify({ page: p.name, rows: marked, ...(out.next ? { next: out.next } : {}) })),
               structuredContent: { page: p.name, entity: e.name, params: pageParams, ...out, uris: out.rows.map((r) => this.uri(e.name, String(r.id))), refs: await this.#refs(e, out.rows, caller, ctx), view: { kind: "list", title, columns, tool: p.tool.name, args: pageParams, getTool: e.tools.get.name } },
+              ...this.#marks(pointers),
             }
           }
           if (c.kind === "dashboard") {
             const instances = typeof c.fragments === "function" ? await c.fragments(pageParams as never, ctx) : c.fragments
             const fragments = []
             for (const i of instances) fragments.push({ ...(await this.#resolve(i, caller, ctx)), ...(i.size ? { size: i.size } : {}) })
+            const pointers: string[] = []
             return {
-              content: text(JSON.stringify({ page: p.name, fragments: fragments.map((f) => ({ uri: f.uri, state: f.state, ...("data" in f ? { data: f.data } : {}) })) })),
+              content: text(JSON.stringify({ page: p.name, fragments: fragments.map((f, i) => ({ uri: f.uri, state: f.state, ...("data" in f ? { data: this.#markResolved(f, `/fragments/${i}`, pointers) } : {}) })) })),
               structuredContent: { page: p.name, params: pageParams, fragments, view: { kind: "dashboard", title } },
+              ...this.#marks(pointers),
             }
           }
           return { content: text(`Opened ${title}.`), structuredContent: { page: p.name, params: pageParams, view: { kind: "custom", title } } }
@@ -865,7 +966,7 @@ export class AppServer {
 
     // Custom fragment types: show_<type>.
     for (const f of this.#fragments.values()) {
-      if ((f.config.permission && !caller.permissions.has(f.config.permission)) || (plainCaller && !f.tool.plain)) continue
+      if (!this.#canShow(f, caller)) continue
       const title = t(f.config.title)
       reg(
         f.tool.name,
@@ -879,7 +980,8 @@ export class AppServer {
         guard(f.tool.name, async (args, mctx) => {
           const r = await this.#resolve({ type: f.type, params: args }, caller, ctxOf(mctx))
           if (r.state !== "ok") return failure(r.state === "no-access" ? "permission_denied" : "not_found", r.state === "no-access" ? "No access." : "Not available.")
-          return { content: text(JSON.stringify({ uri: r.uri, data: r.data })), structuredContent: { ...r, view: { kind: "fragment", title } } }
+          const pointers: string[] = []
+          return { content: text(JSON.stringify({ uri: r.uri, data: this.#markResolved(r, "", pointers) })), structuredContent: { ...r, view: { kind: "fragment", title } }, ...this.#marks(pointers) }
         }),
       )
     }
@@ -951,7 +1053,7 @@ export class AppServer {
       confirm: a.confirm,
       ...perm(a.config.permission, `action "${a.name}"`),
     }))
-    const everyone: Caller = { installation: "manifest", person: null, permissions: new Set(this.#permissions.keys()), host: "workspace", issuer: "", subject: "" }
+    const everyone: Caller = { installation: "manifest", installationId: "manifest", person: null, permissions: new Set(this.#permissions.keys()), host: "workspace", issuer: "", subject: "" }
     const pages = this.#allPages().map((p) => {
       const c = p.config
       const base = {
@@ -987,6 +1089,7 @@ export class AppServer {
           ...perm(f.config.permission, `fragment "${f.type}"`),
           ...(f.config.actions?.length ? { actions: f.config.actions.map((h) => h.name) } : {}),
           ...(f.config.size ? { size: f.config.size } : {}),
+          ...(f.config.untrusted ? { untrusted: true } : {}),
         }
       }),
     ]
@@ -1013,7 +1116,8 @@ export class AppServer {
       ...(this.options.icons ? { icons: this.options.icons } : {}),
       locale: this.locale,
       mcp: { url: "/mcp" },
-      auth: { audience: auth.resource ?? this.name, authorizationServers: auth.authorizationServers ?? (auth.issuers ?? []).map((i) => i.issuer) },
+      // The server's own address is what its tokens are for (never a name an app could claim): a host installs the app from it or not at all.
+      auth: { ...(auth.resource ? { resource: auth.resource } : {}), authorizationServers: auth.authorizationServers ?? (auth.issuers ?? []).map((i) => i.issuer) },
       view: this.#viewUri(),
       resolveTool: RESOLVE_TOOL,
       ...([...this.#entities.values()].some((e) => e.fields.some((f) => f.search)) ? { searchTool: "search" } : {}),
@@ -1030,20 +1134,12 @@ export class AppServer {
         type: s.type,
         required: s.required === true,
         ...(s.default !== undefined ? { default: s.default } : {}),
-        ...(s.options ? { options: s.options.map((o) => ({ value: o.value, label: L(o.label)! })) } : {}),
       })),
     }
     return this.#manifest!
   }
 
   // ------------------------------------------------------------ dev helpers
-
-  #audiences(): string[] {
-    const a = [this.name]
-    if (this.options.auth?.resource) a.push(this.options.auth.resource)
-    for (const r of this.#devResources) a.push(r)
-    return a
-  }
 
   async #devStarted(): Promise<DevAuthority> {
     if (!this.#dev) throw new Error("auth.dev is off")
@@ -1055,15 +1151,14 @@ export class AppServer {
   /** A dev access token (tests, local hosts). `host: "workspace"` makes the SDK ask for confirmation proofs. */
   async devToken(input: { person?: string | Person; permissions?: string[] | "all"; host?: "workspace" | "plain"; installation?: string; locale?: string } = {}): Promise<string> {
     const dev = await this.#devStarted()
-    return dev.token({ ...input, audience: this.name })
+    return dev.token({ ...input, audience: DEV_ISSUER })
   }
 
   /** A dev confirmation proof for one call (what a workspace host signs after «Confirm»). */
-  async devConfirmation(input: { tool: string; args: Record<string, unknown>; call: string; person?: string }): Promise<string> {
+  async devConfirmation(input: { tool: string; args: Record<string, unknown>; call: string; person?: string; installation?: string }): Promise<string> {
     const dev = await this.#devStarted()
-    const { signConfirmation, DEV_ISSUER } = await import("./auth")
     const sub = input.person ?? dev.people[0]!.id
-    return signConfirmation(dev.key, { iss: DEV_ISSUER, aud: this.name, sub, tool: input.tool, args: input.args, call: input.call })
+    return signConfirmation(dev.key, { iss: DEV_ISSUER, aud: DEV_ISSUER, sub, installation: input.installation ?? dev.installation, tool: input.tool, args: input.args, call: input.call })
   }
 
   // ------------------------------------------------------------ HTTP
@@ -1075,7 +1170,7 @@ export class AppServer {
     return `${proto}://${host}`
   }
 
-  async #caller(request: Request, resource: string): Promise<Caller | Response> {
+  async #caller(request: Request, resource: string, trust: RequestTrust): Promise<Caller | Response> {
     const auth = this.options.auth ?? {}
     const bearer = /^Bearer\s+(.+)$/i.exec(request.headers.get("authorization") ?? "")?.[1]?.trim()
     const metadata = `${new URL(resource).origin}/.well-known/oauth-protected-resource${new URL(resource).pathname}`
@@ -1087,26 +1182,32 @@ export class AppServer {
     if (!bearer) {
       if (auth.anonymous) {
         const a = auth.anonymous
-        return { installation: a.installation, person: a.person ?? null, permissions: new Set(a.permissions === "all" ? this.#allPermissions() : a.permissions), ...(a.locale ? { locale: a.locale } : {}), host: "plain", issuer: "anonymous", subject: a.person?.id ?? "anonymous" }
+        return { installation: tenantOf(a.installation, "anonymous"), installationId: a.installation, person: a.person ?? null, permissions: new Set(a.permissions === "all" ? this.#allPermissions() : a.permissions), ...(a.locale ? { locale: a.locale } : {}), host: "plain", issuer: "anonymous", subject: a.person?.id ?? "anonymous" }
       }
       return challenge("sign in first")
     }
-    if (this.#dev) {
-      await this.#devStarted()
-      this.#devResources.add(resource)
-    }
+    if (trust.dev) await this.#devStarted()
     try {
-      return await this.#verifier.verify(bearer)
+      return await this.#verifier.verify(bearer, trust)
     } catch (error) {
       return challenge(error instanceof AuthError ? error.message : "invalid token")
     }
   }
 
-  /** One HTTP request (Fetch API): MCP at `/mcp`, the manifest, OAuth metadata, the dev authority, `/health`. */
-  async fetch(request: Request): Promise<Response> {
+  /**
+   * One HTTP request (Fetch API): MCP at `/mcp`, the manifest, OAuth metadata, the dev authority, `/health`.
+   * `info.remoteAddress`: the address the request came from. Dev sign-in and dev tokens count only when it is
+   * a loopback address, checked on every request (`listen` passes the socket's; without it dev mode stays shut).
+   */
+  async fetch(request: Request, info: { remoteAddress?: string | null } = {}): Promise<Response> {
     const url = new URL(request.url)
     const origin = this.#origin(request)
-    const resource = this.options.auth?.resource ?? `${origin}/mcp`
+    const auth = this.options.auth ?? {}
+    const devHere = Boolean(this.#dev) && isLoopback(info.remoteAddress)
+    // In dev the server is whatever address the caller reached it by (a tunnel); otherwise only its configured one.
+    const requestResource = `${origin}/mcp`
+    const resource = devHere ? requestResource : (auth.resource ?? requestResource)
+    const trust: RequestTrust = { dev: devHere, requestResource: devHere ? requestResource : null }
     const json = (body: unknown, status = 200, headers: Record<string, string> = {}) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", ...CORS, ...headers } })
     // Preflight: the headers the browser asks for are allowed as asked (MCP 2026-07-28 clients send mcp-method, mcp-name, Mcp-Param-*; no cookies are ever used).
     if (request.method === "OPTIONS") {
@@ -1117,21 +1218,30 @@ export class AppServer {
     if (url.pathname === "/" && request.method === "GET" && (request.headers.get("accept") ?? "").includes("application/json")) return json({ name: this.name, manifest: MANIFEST_PATH, mcp: "/mcp" })
     if (url.pathname === "/health") return json({ ok: true, name: this.name, version: this.options.version })
     if (url.pathname === "/.well-known/oauth-protected-resource" || url.pathname === "/.well-known/oauth-protected-resource/mcp") {
-      const auth = this.options.auth ?? {}
       // Where a client signs a person in. With dev sign-in on it is this server alone: trusted issuers that are hosts sign their own tokens, a client has nothing to ask them.
-      const servers = auth.authorizationServers ?? (auth.dev ? [origin] : (auth.issuers ?? []).map((i) => i.issuer))
+      const servers = auth.authorizationServers ?? (devHere ? [origin] : (auth.issuers ?? []).map((i) => i.issuer))
       return json({ resource, authorization_servers: servers, bearer_methods_supported: ["header"], scopes_supported: [OAUTH_SCOPE], resource_name: localize(this.options.title, this.locale, this.locale) })
     }
-    if (this.#dev) {
+    if (devHere) {
       const dev = await this.#devStarted()
-      this.#devResources.add(resource)
       const answered = await dev.handle(request, origin, resource)
       if (answered) return answered
     }
     if (url.pathname !== "/mcp") return new Response(`${localize(this.options.title, this.locale, this.locale)}: MCP at /mcp, manifest at ${MANIFEST_PATH}`, { status: 404, headers: { "content-type": "text/plain; charset=utf-8" } })
-    const caller = await this.#caller(request, resource)
+    const caller = await this.#caller(request, resource, trust)
     if (caller instanceof Response) return caller
-    const response = await this.#handler.fetch(request, { authInfo: { token: "verified", clientId: caller.issuer, scopes: [], extra: { caller } } })
+    // Each call's arguments as received (the MCP SDK hands tools the parsed ones): what a confirmation proof and the idempotency check cover.
+    const received = new Map<string | number, unknown>()
+    if (request.method === "POST") {
+      try {
+        const body = JSON.parse(await request.clone().text()) as unknown
+        for (const m of Array.isArray(body) ? body : [body]) {
+          const message = m as { id?: unknown; method?: unknown; params?: { arguments?: unknown } } | null
+          if (message && message.method === "tools/call" && (typeof message.id === "string" || typeof message.id === "number")) received.set(message.id, message.params?.arguments ?? {})
+        }
+      } catch {}
+    }
+    const response = await this.#handler.fetch(request, { authInfo: { token: "verified", clientId: caller.issuer, scopes: [], extra: { caller, request: { trust, received } satisfies RequestInfo } } })
     const headers = new Headers(response.headers)
     for (const [k, v] of Object.entries(CORS)) headers.set(k, v)
     return new Response(response.body, { status: response.status, headers })
@@ -1144,10 +1254,12 @@ export class AppServer {
     if (this.#dev && !isLoopback(host)) throw new Error(`auth.dev works only on a loopback address, not ${host}`)
     this.manifest()
     if (this.#dev) await this.#devStarted()
+    const auth = this.options.auth ?? {}
+    if (!this.#dev && !auth.issuers?.length && !auth.anonymous) console.warn(`[${PROTOCOL_ID}] nobody can sign in: give auth.issuers (with auth.resource), or turn on auth.dev while developing`)
     const http = createHttpServer(async (req, res) => {
       const started = Date.now()
       try {
-        const response = await this.fetch(await toRequest(req))
+        const response = await this.fetch(await toRequest(req), { remoteAddress: req.socket.remoteAddress ?? null })
         const headers: Record<string, string> = {}
         response.headers.forEach((v, k) => (headers[k] = v))
         res.writeHead(response.status, headers)

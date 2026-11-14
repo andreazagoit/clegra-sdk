@@ -27,7 +27,7 @@ export default defineApp({
   locale: "en",                      // language of bare strings and of tool names/descriptions (default "en")
   instructions: "…",                 // optional: MCP instructions for models
   websiteUrl: "https://…",           // optional
-  auth: { issuers: [{ issuer: "https://host.example.com" }] },   // or { dev: true } locally
+  auth: { resource: "https://crm.example.com/mcp", issuers: [{ issuer: "https://host.example.com" }] },   // resource: this server's public MCP address (required with issuers); or { dev: true } locally
 
   permissions: {                     // ids are "group.verb"
     "deals.view": { label: "See deals", default: true },
@@ -35,8 +35,8 @@ export default defineApp({
     "deals.values": { label: "See values", description: "…" },    // default false
   },
 
-  settings: {                        // filled per installation; read as ctx.settings.<id>
-    followUpDays: { label: "Follow-up (days)", type: "number", default: 7 },   // text | secret | number | boolean | choice (+ options)
+  settings: {                        // set per installation by an administrator, sent by the workspace host with every call; read as ctx.settings.<id>
+    followUpDays: { label: "Follow-up (days)", type: "number", default: 7 },   // text | number | boolean. Never secrets: keep those in your server's own configuration
   },
 
   entities: {
@@ -55,7 +55,7 @@ export default defineApp({
       }),
       permission: "deals.view",                                // optional: who sees the entity at all
       get: (id, ctx) => db.deal(ctx.installation, id),         // the row or null
-      list: (query, ctx) => db.deals(ctx.installation, query), // { rows, next?, total? }
+      list: (query, ctx) => db.deals(ctx.installation, query), // { rows, next?, total? }; search query.text only in query.textFields
       expose: { plain: true, list: "deal_list", get: "deal_get" },   // optional
       view: { html: "<!doctype html>…" },                      // optional: your own record view
     },
@@ -113,7 +113,7 @@ export default defineApp({
   },
 
   mcp: (server, caller) => {},       // optional: the raw McpServer (official SDK) of each request; caller is null before sign-in
-  store: myStore,                    // optional: shared idempotency store ({ get, set }) for multi-instance servers
+  store: myStore,                    // optional: a shared store ({ begin, finish, abandon, once }, each atomic) for multi-instance servers
 })
 ```
 
@@ -148,11 +148,13 @@ record pages), `show_<fragment>`, `modelapp_resolve` (for hosts). Reads have
 3. Every entity schema has a string `id` and exactly one `role: "title"`; at most one field per role.
 4. `input` and `params` are always present (`z.object({})`); omitting one breaks type inference for all entries.
 5. Writes confirm by default. Don't set `confirm: false` on anything a person would want to see first.
-6. Mark text that comes from outside (emails, customer notes) `untrusted: true`.
+6. Mark text that comes from outside (names typed into a form, emails, customer notes) `untrusted: true`, on the field; on a fragment whose data carry such text, `untrusted: true` on the fragment.
 7. Return short `message`s in the caller's language: `ctx.t({ en: "…", it: "…" })`.
 8. Names (`entities`, `actions`, `fragments`, `pages`, `agents` keys) are `[a-z][a-z0-9_]*`. Entities and fragments share one namespace. Don't name a filter/sort field `query`, `sort`, `dir`, `cursor` or `limit`.
 9. A list page with `params` also needs `query: (params) => ({ filters, text, sort })`.
-10. Dev auth (`auth: { dev: true }`) works only on a loopback address. In production trust issuers.
+10. Dev auth (`auth: { dev: true }`) is off unless you set it, refused when `NODE_ENV=production`, and answers only callers on a loopback address. In production trust issuers and give `auth.resource`: your server's public MCP address, the only audience tokens are accepted for.
+11. `ctx.installation` is the tenant: the host's installation bound to that host (`<installation>@<issuer>`). Use it as an opaque key.
+12. In `list`, search `query.text` only in `query.textFields`; in a fragment's `data`, leave out values the caller may not see (`ctx.can`): template data are yours, the SDK only drops items whose `uri` is out of the caller's reach.
 
 ## Common mistakes
 

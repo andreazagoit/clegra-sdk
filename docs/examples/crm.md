@@ -60,7 +60,18 @@ confirms; the host sends the proof. In ChatGPT the tool carries
 `ctx.installation`. On a database the same rule is a column:
 
 ```sql
-CREATE TABLE deals (installation_id text NOT NULL, id text NOT NULL, …, PRIMARY KEY (installation_id, id));
+CREATE TABLE deals (installation text NOT NULL, id text NOT NULL, …, PRIMARY KEY (installation, id));
+```
+
+`ctx.installation` is the host's installation bound to that host
+(`<installation>@<issuer>`): two hosts never share a row.
+
+**Text from outside.** Company, contact and deal names, cities, emails and
+call notes are `untrusted: true`, and so is the «Closing soon» fragment that
+lists deal names: a model reads them inside `<untrusted>`, as data.
+
+```ts
+name: z.string().meta({ role: "title", label: { en: "Deal", it: "Trattativa" }, search: true, untrusted: true }),
 ```
 
 **A dashboard and a custom page.**
@@ -86,15 +97,19 @@ reads deals through the host with `tools/call` and has no network access.
 ## Run and check it
 
 ```sh
-npm run modelapp:crm                      # http://127.0.0.1:3920 — MCP at /mcp, manifest at /.well-known/modelapp.json
-MODELAPP_DEV_CODE=CRM2026 npm run modelapp:crm   # a fixed dev sign-in code instead of a random one
+MODELAPP_DEV=1 npm run modelapp:crm       # http://127.0.0.1:3920 — MCP at /mcp, manifest at /.well-known/modelapp.json; dev sign-in on
+MODELAPP_DEV=1 MODELAPP_DEV_CODE=CRM2026 npm run modelapp:crm   # a fixed dev sign-in code instead of a random one
 npm run modelapp:test                     # SDK tests + the CRM's tests
 npm run modelapp:check -- http://127.0.0.1:3920 --token <bearer>
 ```
 
-Dev sign-in offers two invented people: Ada (manager, every permission) and
-Bruno (sales rep, no `deals.values`). `MODELAPP_ISSUERS="<issuer>|<jwks url>"`
-adds a trusted workspace host; `MODELAPP_DEV=0` turns the dev sign-in off.
+The dev sign-in is off unless `MODELAPP_DEV=1` (loopback callers only; five
+wrong codes close it until a restart). It offers two invented people: Ada
+(manager, every permission) and Bruno (sales rep, no `deals.values`).
+`MODELAPP_ISSUERS="<issuer>|<jwks url>"` adds a trusted workspace host, and
+then `MODELAPP_RESOURCE="https://<this server>/mcp"` is required: the
+server's public MCP address, the only audience that host's tokens are
+accepted for, and the address the host must install the app from.
 
 `src/mcp.snapshot.json` is what MCP clients see (tools, annotations, views,
 manifest). A change to it is a change for every client, so it is reviewed as

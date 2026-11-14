@@ -7,7 +7,13 @@ import { z } from "zod"
 
 // ------------------------------------------------------------------ who may call
 
-/** How the server accepts callers: dev sign-in locally, plus the issuers given by the environment (a Clegra node). */
+/**
+ * How the server accepts callers, from the environment:
+ * - MODELAPP_ISSUERS: the hosts whose tokens it trusts (`issuer|jwksUri`, comma-separated), e.g. a Clegra node;
+ * - MODELAPP_RESOURCE: this server's public MCP address (`https://…/mcp`), required with issuers: the only
+ *   audience their tokens are accepted for, and the address a host must install the app from;
+ * - MODELAPP_DEV=1: the dev sign-in (test people, a code on the console). Off unless asked, loopback callers only.
+ */
 export function authFromEnv(env: NodeJS.ProcessEnv = process.env): AuthOptions {
   const issuers = (env.MODELAPP_ISSUERS ?? "")
     .split(",")
@@ -20,7 +26,7 @@ export function authFromEnv(env: NodeJS.ProcessEnv = process.env): AuthOptions {
   return {
     issuers,
     ...(env.MODELAPP_RESOURCE ? { resource: env.MODELAPP_RESOURCE } : {}),
-    ...(env.MODELAPP_DEV !== "0"
+    ...(env.MODELAPP_DEV === "1"
       ? {
           dev: {
             people: [
@@ -48,8 +54,9 @@ const stageLabels = {
 
 const companySchema = z.object({
   id: z.string(),
-  name: z.string().meta({ role: "title", label: { en: "Name", it: "Nome" }, search: true, sort: true }),
-  city: z.string().meta({ role: "subtitle", label: { en: "City", it: "Città" }, filter: true }),
+  // Free text, typed in from outside (a web form, an import): marked `untrusted`, so a model reads it as data.
+  name: z.string().meta({ role: "title", label: { en: "Name", it: "Nome" }, search: true, sort: true, untrusted: true }),
+  city: z.string().meta({ role: "subtitle", label: { en: "City", it: "Città" }, filter: true, untrusted: true }),
   industry: z.enum(["manufacturing", "retail", "services", "software"]).meta({
     label: { en: "Industry", it: "Settore" },
     filter: true,
@@ -59,8 +66,8 @@ const companySchema = z.object({
 
 const contactSchema = z.object({
   id: z.string(),
-  name: z.string().meta({ role: "title", label: { en: "Name", it: "Nome" }, search: true, sort: true }),
-  email: z.string().meta({ role: "subtitle", label: "Email", search: true }),
+  name: z.string().meta({ role: "title", label: { en: "Name", it: "Nome" }, search: true, sort: true, untrusted: true }),
+  email: z.string().meta({ role: "subtitle", label: "Email", search: true, untrusted: true }),
   company: ref("company").meta({ label: { en: "Company", it: "Azienda" }, filter: true }),
   lastCall: z.string().optional().meta({ role: "date", label: { en: "Last call", it: "Ultima chiamata" }, sort: true }),
   lastNote: z.string().optional().meta({ label: { en: "Last note", it: "Ultima nota" }, untrusted: true }),
@@ -68,7 +75,7 @@ const contactSchema = z.object({
 
 const dealSchema = z.object({
   id: z.string(),
-  name: z.string().meta({ role: "title", label: { en: "Deal", it: "Trattativa" }, search: true }),
+  name: z.string().meta({ role: "title", label: { en: "Deal", it: "Trattativa" }, search: true, untrusted: true }),
   company: ref("company").meta({ label: { en: "Company", it: "Azienda" }, filter: true }),
   stage: z.enum(STAGES).meta({ role: "status", label: { en: "Stage", it: "Fase" }, filter: true, labels: stageLabels, tones: { lead: "neutral", qualified: "info", proposal: "warning", won: "success", lost: "danger" } }),
   value: z.number().meta({ role: "amount", currency: "EUR", label: { en: "Value", it: "Valore" }, sort: true, permission: "deals.values" }),
@@ -109,7 +116,8 @@ const byInstallation = new Map<string, Data>()
 
 /**
  * This installation's data. A real app reads its own database here, always
- * with `WHERE installation_id = ctx.installation` (spec §9).
+ * with `WHERE installation = ctx.installation` (spec §7: the installation
+ * bound to the host that issued the token).
  */
 export function dataOf(ctx: Pick<Context, "installation">): Data {
   let d = byInstallation.get(ctx.installation)
@@ -125,8 +133,9 @@ export function resetData() {
   byInstallation.clear()
 }
 
-/** A generic in-memory list: filters (value, in, range), text, sort, cursor. */
-function listOf<T extends Record<string, unknown>>(rows: T[], q: Query, textFields: (keyof T)[]) {
+/** A generic in-memory list: filters (value, in, range), text (only in `q.textFields`: the search fields the caller may see), sort, cursor. */
+function listOf<T extends Record<string, unknown>>(rows: T[], q: Query) {
+  const textFields = q.textFields ?? []
   const match = (row: T) =>
     Object.entries(q.filters).every(([field, f]) => {
       const v = row[field] as string | number | undefined
@@ -177,7 +186,7 @@ export const app = defineApp({
       icon: "building-2",
       schema: companySchema,
       get: (id, ctx) => dataOf(ctx).companies.get(id) ?? null,
-      list: (q, ctx) => listOf([...dataOf(ctx).companies.values()], q, ["name"]),
+      list: (q, ctx) => listOf([...dataOf(ctx).companies.values()], q),
     },
     contact: {
       label: { en: "Contact", it: "Contatto" },
@@ -186,7 +195,7 @@ export const app = defineApp({
       icon: "user",
       schema: contactSchema,
       get: (id, ctx) => dataOf(ctx).contacts.get(id) ?? null,
-      list: (q, ctx) => listOf([...dataOf(ctx).contacts.values()], q, ["name", "email"]),
+      list: (q, ctx) => listOf([...dataOf(ctx).contacts.values()], q),
     },
     deal: {
       label: { en: "Deal", it: "Trattativa" },
@@ -196,7 +205,7 @@ export const app = defineApp({
       schema: dealSchema,
       permission: "deals.view",
       get: (id, ctx) => dataOf(ctx).deals.get(id) ?? null,
-      list: (q, ctx) => listOf([...dataOf(ctx).deals.values()], q, ["name"]),
+      list: (q, ctx) => listOf([...dataOf(ctx).deals.values()], q),
     },
   },
 
@@ -293,6 +302,8 @@ export const app = defineApp({
       params: z.object({ days: z.number().int().min(1).max(365).default(60) }),
       permission: "deals.view",
       template: "list",
+      // Deal names are outsiders' text.
+      untrusted: true,
       actions: ["create_deal"],
       data: (p, ctx) => {
         const until = new Date(Date.now() + p.days * 86_400_000).toISOString().slice(0, 10)

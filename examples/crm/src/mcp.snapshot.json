@@ -1264,7 +1264,6 @@
       "url": "/mcp"
     },
     "auth": {
-      "audience": "crm",
       "authorizationServers": []
     },
     "view": "ui://crm/view",
@@ -1335,7 +1334,8 @@
               "it": "Nome"
             },
             "sort": true,
-            "search": true
+            "search": true,
+            "untrusted": true
           },
           {
             "name": "city",
@@ -1346,7 +1346,8 @@
               "en": "City",
               "it": "Città"
             },
-            "filter": true
+            "filter": true,
+            "untrusted": true
           },
           {
             "name": "industry",
@@ -1459,7 +1460,8 @@
               "it": "Nome"
             },
             "sort": true,
-            "search": true
+            "search": true,
+            "untrusted": true
           },
           {
             "name": "email",
@@ -1469,7 +1471,8 @@
             "label": {
               "en": "Email"
             },
-            "search": true
+            "search": true,
+            "untrusted": true
           },
           {
             "name": "company",
@@ -1593,7 +1596,8 @@
               "en": "Deal",
               "it": "Trattativa"
             },
-            "search": true
+            "search": true,
+            "untrusted": true
           },
           {
             "name": "company",
@@ -2557,7 +2561,8 @@
         "permission": "deals.view",
         "actions": [
           "create_deal"
-        ]
+        ],
+        "untrusted": true
       }
     ],
     "agents": [

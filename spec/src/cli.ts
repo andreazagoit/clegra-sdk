@@ -12,4 +12,5 @@ if (command !== "check" || !url) {
 }
 const report = await checkApp({ url, ...(token ? { token } : {}) })
 console.log(formatReport(report))
-process.exit(report.ok ? 0 : 1)
+// 0: conformant; 1: a check failed; 3: nothing failed but the MCP checks did not run (no token).
+process.exit(!report.ok ? 1 : report.complete ? 0 : 3)

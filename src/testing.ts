@@ -4,7 +4,8 @@ import type { App } from "./define"
 
 /**
  * A test client (spec-level, over the real HTTP path): JSON-RPC to
- * `app.fetch` with a dev token, as a plain host or a workspace host. Needs
+ * `app.fetch` with a dev token, as a plain host or a workspace host (whose
+ * tokens are for one request: a new one is signed for each). Needs
  * `auth: { dev: true }` on the app (or `token`).
  */
 export type ToolCallResult = { isError?: boolean; content?: { type: string; text?: string }[]; structuredContent?: Record<string, unknown>; _meta?: Record<string, unknown> }
@@ -15,20 +16,26 @@ export type TestClientOptions = {
   host?: "workspace" | "plain"
   installation?: string
   locale?: string
-  /** Use this bearer instead of a dev token (null: no Authorization header). */
-  token?: string | null
+  /** Use this bearer instead of a dev token (null: no Authorization header; a function: a new one per request). */
+  token?: string | null | (() => string | Promise<string>)
+  /** The address the requests come from (default loopback: dev tokens count only there). */
+  remoteAddress?: string
 }
 
 export async function testClient(app: App, options: TestClientOptions = {}) {
-  const token = options.token === undefined ? await app.devToken(options) : options.token
+  const { token: given, remoteAddress = "127.0.0.1", ...who } = options
+  const plain = given === undefined && who.host !== "workspace" ? await app.devToken(who) : null
+  const bearer = async () => (typeof given === "function" ? given() : given !== undefined ? given : (plain ?? app.devToken(who)))
   let id = 0
   const rpc = async (method: string, params: Record<string, unknown>): Promise<{ status: number; result?: unknown; error?: { code: number; message: string } }> => {
+    const token = await bearer()
     const response = await app.fetch(
       new Request("http://127.0.0.1/mcp", {
         method: "POST",
         headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "mcp-protocol-version": "2025-06-18", ...(token ? { authorization: `Bearer ${token}` } : {}) },
         body: JSON.stringify({ jsonrpc: "2.0", id: ++id, method, params }),
       }),
+      { remoteAddress },
     )
     const raw = await response.text()
     if (response.status !== 200) return { status: response.status }
@@ -53,7 +60,7 @@ export async function testClient(app: App, options: TestClientOptions = {}) {
     },
     /** A write as a workspace host does it after the person's «Confirm»: a call id and a proof. */
     async confirmed(name: string, args: Record<string, unknown>, call: string = randomUUID()): Promise<ToolCallResult> {
-      const proof = await app.devConfirmation({ tool: name, args, call, ...(options.person ? { person: options.person } : {}) })
+      const proof = await app.devConfirmation({ tool: name, args, call, ...(options.person ? { person: options.person } : {}), ...(options.installation ? { installation: options.installation } : {}) })
       return this.call(name, args, { modelapp: { call, confirmation: proof } })
     },
     async readResource(uri: string): Promise<{ uri: string; mimeType?: string; text?: string; _meta?: Record<string, unknown> }[]> {

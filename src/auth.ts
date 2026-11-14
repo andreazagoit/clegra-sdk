@@ -18,24 +18,41 @@ import {
 import { CONFIRMATION_TYPE, OAUTH_SCOPE, PROTOCOL_ID, TOKEN_CLAIM } from "@modelapp/spec/protocol"
 
 /**
- * AUTH (spec §9, §10): access tokens are JWTs from a trusted issuer (the
- * workspace host, or the app's own authorization server), verified with the
- * issuer's JWKS; the `modelapp` claim says who is calling for which
- * installation. A workspace host proves a person's confirmation with a
- * second JWT (`modelapp-confirm+jwt`) bound to the call and its exact arguments.
+ * AUTH (spec §7): access tokens are JWTs (`typ: at+jwt`) from a trusted
+ * issuer (the workspace host, or the app's own authorization server),
+ * verified with the issuer's JWKS. Their audience is this server's own
+ * public MCP address (`auth.resource`, RFC 8707): a token signed for another
+ * app is refused whatever that app calls itself. The `modelapp` claim says
+ * who is calling for which installation; the tenant handlers see is the
+ * installation of that issuer (`<installation>@<issuer>`), so one issuer
+ * can never name another's. A workspace host's token is for one request
+ * (60 seconds, used once). A workspace host proves a person's confirmation
+ * with a second JWT (`modelapp-confirm+jwt`) bound to the installation, the
+ * call and the arguments as sent.
  *
  * Dev mode: the SDK is its own authorization server with a local key
- * (DevAuthority below), on a loopback address only.
+ * (DevAuthority below), for callers on a loopback address only.
  */
 
 export { CONFIRMATION_TYPE }
 export const DEV_ISSUER = `${PROTOCOL_ID}-dev`
+/** The `typ` of an access token (RFC 9068). */
+export const ACCESS_TOKEN_TYPE = "at+jwt"
+/** How long a workspace host's access token may live: it is for one request. */
+export const HOST_TOKEN_SECONDS = 60
+const INSTALLATION = /^[A-Za-z0-9._:-]{1,128}$/
+
+/** The tenant of a caller: the installation as its issuer names it, bound to that issuer. */
+export const tenantOf = (installation: string, issuer: string) => `${installation}@${issuer}`
 
 export type Person = { id: string; name: string }
 
 /** Who is calling, as every handler sees it (`ctx`). */
 export type Caller = {
+  /** The tenant: the installation bound to its issuer (`<installation>@<issuer>`). Unique across issuers. */
   installation: string
+  /** The installation as the issuer names it (the token's claim; what a confirmation proof repeats). */
+  installationId: string
   person: Person | null
   permissions: ReadonlySet<string>
   locale?: string
@@ -64,15 +81,20 @@ export type Issuer = {
 }
 
 export type AuthOptions = {
-  /** The issuers whose tokens are accepted. */
+  /** The issuers whose tokens are accepted. With issuers, `resource` is required. */
   issuers?: Issuer[]
-  /** The MCP resource URL this server is known by (also accepted as `aud`). */
+  /**
+   * This server's public MCP address, exactly as hosts and clients reach it
+   * (`https://crm.example.com/mcp`): the only audience (`aud`) accepted from
+   * the issuers, and what a host must have installed the app from.
+   */
   resource?: string
   /** The authorization servers named in the protected-resource metadata (default: the issuers'). */
   authorizationServers?: string[]
   /**
-   * Dev mode (spec §9): a local signing key, a minimal authorization server
-   * for test people, `app.devToken()`. Only while listening on loopback.
+   * Dev mode: a local signing key, a minimal authorization server for test
+   * people, `app.devToken()`. Off unless set here; refused when NODE_ENV is
+   * `production`; answers callers on a loopback address only.
    */
   dev?: boolean | DevOptions
   /** Serve calls without a token as this caller (local demos only). Off by default. */
@@ -116,17 +138,32 @@ export function argsHash(args: unknown): string {
 
 type KeySet = ReturnType<typeof createRemoteJWKSet> | ReturnType<typeof createLocalJWKSet>
 
+/** What one request allows: whether dev tokens are accepted (a loopback caller) and the address it came to. */
+export type RequestTrust = { dev: boolean; requestResource: string | null }
+
 export class TokenVerifier {
   readonly #issuers = new Map<string, KeySet>()
-  readonly #audiences: () => string[]
+  readonly #resource: string | null
+  readonly #once: (key: string, ttlMs: number) => Promise<boolean>
   #dev: DevAuthority | null = null
 
-  constructor(options: AuthOptions, audiences: () => string[]) {
-    this.#audiences = audiences
+  constructor(options: AuthOptions, once: (key: string, ttlMs: number) => Promise<boolean>) {
+    this.#once = once
+    this.#resource = options.resource ?? null
     for (const i of options.issuers ?? []) {
       if (!i.issuer) throw new Error("auth.issuers: every issuer needs its `issuer`")
       const keys = i.jwks ? createLocalJWKSet(i.jwks) : createRemoteJWKSet(new URL(i.jwksUri ?? `${i.issuer.replace(/\/+$/, "")}/.well-known/jwks.json`), { cooldownDuration: 30_000, cacheMaxAge: 10 * 60_000 })
       this.#issuers.set(i.issuer, keys)
+    }
+    if (this.#issuers.size && !this.#resource) throw new Error("auth.resource: with issuers, give this server's public MCP address (https://…/mcp); it is the only audience their tokens are accepted for")
+    if (this.#resource) {
+      let url: URL
+      try {
+        url = new URL(this.#resource)
+      } catch {
+        throw new Error(`auth.resource: "${this.#resource}" is not a URL`)
+      }
+      if (!/^https?:$/.test(url.protocol) || url.hash || url.search) throw new Error(`auth.resource: "${this.#resource}" must be an http(s) URL without query or fragment`)
     }
   }
 
@@ -134,52 +171,66 @@ export class TokenVerifier {
     this.#dev = dev
   }
 
-  #keysFor(iss: string | undefined): KeySet | CryptoKey | null {
+  /** The keys and the audiences of an issuer for this request; why not, as an AuthError. */
+  #trustOf(iss: string | undefined, trust: RequestTrust): { keys: KeySet | CryptoKey; audience: string[]; issuer: string } {
     // A configured issuer always keeps its own keys: the dev authority's names come from request headers and must never shadow one.
     const configured = iss ? this.#issuers.get(iss) : undefined
-    if (configured) return configured
-    if (this.#dev && iss && this.#dev.issues(iss)) return this.#dev.publicKey
-    return null
+    if (configured) return { keys: configured, audience: [this.#resource!], issuer: iss! }
+    if (this.#dev && iss && this.#dev.issues(iss)) {
+      if (!trust.dev) throw new AuthError("dev sign-in answers callers on a loopback address only")
+      // Every name the dev authority answers under is one authority, one tenant space.
+      return { keys: this.#dev.publicKey, audience: [DEV_ISSUER, ...(trust.requestResource ? [trust.requestResource] : [])], issuer: DEV_ISSUER }
+    }
+    throw new AuthError(`untrusted issuer ${iss ?? "(none)"}`)
   }
 
   /** The caller an access token names. Throws AuthError with the reason. */
-  async verify(token: string): Promise<Caller & { claims: JWTPayload }> {
+  async verify(token: string, trust: RequestTrust): Promise<Caller & { claims: JWTPayload }> {
     let iss: string | undefined
     try {
       iss = decodeJwt(token).iss
     } catch {
       throw new AuthError("malformed token")
     }
-    const keys = this.#keysFor(iss)
-    if (!keys) throw new AuthError(`untrusted issuer ${iss ?? "(none)"}`)
+    const { keys, audience, issuer } = this.#trustOf(iss, trust)
     let payload: JWTPayload
     try {
-      ;({ payload } = await jwtVerify(token, keys as Parameters<typeof jwtVerify>[1], { audience: this.#audiences(), clockTolerance: 30, requiredClaims: ["exp", "sub"] }))
+      ;({ payload } = await jwtVerify(token, keys as Parameters<typeof jwtVerify>[1], { typ: ACCESS_TOKEN_TYPE, audience, clockTolerance: 30, requiredClaims: ["exp", "sub", "aud"] }))
     } catch (error) {
-      throw new AuthError(error instanceof Error ? error.message : "invalid token")
+      const message = error instanceof Error ? error.message : "invalid token"
+      throw new AuthError(/"aud"/.test(message) ? `the token is for another server (this one is ${audience.join(" or ")})` : message)
     }
     const m = payload[TOKEN_CLAIM] as HostClaim | undefined
-    if (!m || typeof m.installation !== "string" || !m.installation) throw new AuthError(`the token has no ${TOKEN_CLAIM}.installation`)
+    if (!m || typeof m.installation !== "string" || !INSTALLATION.test(m.installation)) throw new AuthError(`the token has no valid ${TOKEN_CLAIM}.installation`)
+    const host = m.host === "workspace" ? "workspace" : "plain"
+    if (host === "workspace") {
+      // A workspace host signs a token per request: short, with an id, used once.
+      if (typeof payload.jti !== "string" || !payload.jti || typeof payload.iat !== "number") throw new AuthError("a workspace host's token needs jti and iat")
+      if (payload.exp! - payload.iat > HOST_TOKEN_SECONDS) throw new AuthError(`a workspace host's token lives ${HOST_TOKEN_SECONDS} seconds at most`)
+      const left = Math.max(1, payload.exp! + 30 - Math.floor(Date.now() / 1000))
+      if (!(await this.#once(`jti:${issuer}:${payload.jti}`, left * 1000))) throw new AuthError("this token was already used (a workspace host's token is for one request)")
+    }
     return {
-      installation: m.installation,
+      installation: tenantOf(m.installation, issuer),
+      installationId: m.installation,
       person: m.person && typeof m.person.id === "string" ? { id: m.person.id, name: String(m.person.name ?? "") } : null,
       permissions: new Set(Array.isArray(m.permissions) ? m.permissions.filter((p) => typeof p === "string") : []),
       ...(typeof m.locale === "string" ? { locale: m.locale } : {}),
-      host: m.host === "workspace" ? "workspace" : "plain",
+      host,
       issuer: iss!,
       subject: String(payload.sub ?? ""),
       claims: payload,
     }
   }
 
-  /** Checks a confirmation proof for this caller, tool, arguments and call id. Returns why not, or null when it holds. */
-  async checkConfirmation(proof: string, expected: { issuer: string; subject: string; tool: string; args: unknown; call: string | null }): Promise<string | null> {
-    const keys = this.#keysFor(expected.issuer)
-    if (!keys) return "untrusted issuer"
+  /** Checks a confirmation proof for this caller, installation, tool, arguments (as received) and call id. Returns why not, or null when it holds. */
+  async checkConfirmation(proof: string, expected: { issuer: string; subject: string; installation: string; tool: string; args: unknown; call: string | null }, trust: RequestTrust): Promise<string | null> {
     try {
-      const { payload } = await jwtVerify(proof, keys as Parameters<typeof jwtVerify>[1], { typ: CONFIRMATION_TYPE, issuer: expected.issuer, audience: this.#audiences(), clockTolerance: 30 })
+      const { keys, audience } = this.#trustOf(expected.issuer, trust)
+      const { payload } = await jwtVerify(proof, keys as Parameters<typeof jwtVerify>[1], { typ: CONFIRMATION_TYPE, issuer: expected.issuer, audience, clockTolerance: 30 })
       if (typeof payload.iat !== "number" || typeof payload.exp !== "number" || payload.exp - payload.iat > 300) return "a proof lives 5 minutes at most"
       if (payload.sub !== expected.subject) return "the proof is for someone else"
+      if (payload.installation !== expected.installation) return "the proof is for another installation"
       if (payload.tool !== expected.tool) return "the proof is for another tool"
       if (payload.args !== argsHash(expected.args)) return "the proof is for other arguments"
       if (!expected.call || payload.call !== expected.call) return "the proof is for another call"
@@ -205,7 +256,7 @@ export async function generateSigningKey(): Promise<SigningKey> {
 export async function signAccessToken(key: SigningKey, claims: { iss: string; aud: string | string[]; sub: string; modelapp: HostClaim; lifetimeSeconds?: number; scope?: string }): Promise<string> {
   const now = Math.floor(Date.now() / 1000)
   return new SignJWT({ [TOKEN_CLAIM]: claims.modelapp, ...(claims.scope ? { scope: claims.scope } : {}) })
-    .setProtectedHeader({ alg: "EdDSA", typ: "at+jwt", kid: key.kid })
+    .setProtectedHeader({ alg: "EdDSA", typ: ACCESS_TOKEN_TYPE, kid: key.kid })
     .setIssuer(claims.iss)
     .setAudience(claims.aud)
     .setSubject(claims.sub)
@@ -215,10 +266,10 @@ export async function signAccessToken(key: SigningKey, claims: { iss: string; au
     .sign(key.privateKey)
 }
 
-/** A confirmation proof (spec §10): the person confirmed exactly these arguments for this call. */
-export async function signConfirmation(key: SigningKey, claims: { iss: string; aud: string; sub: string; tool: string; args: unknown; call: string; lifetimeSeconds?: number }): Promise<string> {
+/** A confirmation proof (spec §7): the person confirmed exactly these arguments, as sent, for this call of this installation. */
+export async function signConfirmation(key: SigningKey, claims: { iss: string; aud: string; sub: string; installation: string; tool: string; args: unknown; call: string; lifetimeSeconds?: number }): Promise<string> {
   const now = Math.floor(Date.now() / 1000)
-  return new SignJWT({ tool: claims.tool, args: argsHash(claims.args), call: claims.call })
+  return new SignJWT({ installation: claims.installation, tool: claims.tool, args: argsHash(claims.args), call: claims.call })
     .setProtectedHeader({ alg: "EdDSA", typ: CONFIRMATION_TYPE, kid: key.kid })
     .setIssuer(claims.iss)
     .setAudience(claims.aud)
@@ -230,27 +281,35 @@ export async function signConfirmation(key: SigningKey, claims: { iss: string; a
 
 // ------------------------------------------------------------ the dev authority
 
-const LOOPBACK = /^(127\.\d+\.\d+\.\d+|::1|localhost)$/
+const LOOPBACK = /^(127\.\d+\.\d+\.\d+|::1|::ffff:127\.\d+\.\d+\.\d+|localhost)$/
 
-export function isLoopback(host: string): boolean {
-  return LOOPBACK.test(host)
+export function isLoopback(host: string | null | undefined): boolean {
+  return typeof host === "string" && LOOPBACK.test(host)
 }
+
+const DEV_CODE_TYPE = `${PROTOCOL_ID}-dev-code+jwt`
+const DEV_REFRESH_TYPE = `${PROTOCOL_ID}-dev-refresh+jwt`
+/** Wrong sign-in codes before the dev sign-in closes until the app restarts. */
+export const DEV_CODE_ATTEMPTS = 5
 
 const html = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!)
 
 /**
- * A minimal OAuth 2.1 authorization server for development (spec §9): dynamic
+ * A minimal OAuth 2.1 authorization server for development (spec §7): dynamic
  * client registration (any client), authorization code with PKCE S256, a
- * sign-in page listing test people that asks for the one-time code printed
- * on the console, refresh tokens. Stateless: codes and refresh tokens are
- * JWTs signed with the dev key. Every token's issuer is the origin the
- * request came to (so a tunnel works); the key is what is checked.
+ * sign-in page listing test people that asks for the code printed on the
+ * console (five wrong codes close the sign-in until the app restarts),
+ * refresh tokens. Stateless: codes and refresh tokens are JWTs signed with
+ * the dev key. Every token's issuer is the origin the request came to (so a
+ * tunnel works); the key is what is checked. The server answers it only to
+ * callers on a loopback address (server.ts).
  */
 export class DevAuthority {
   readonly code: string
   readonly people: (Person & { permissions?: string[] | "all" })[]
   readonly installation: string
   #key: SigningKey | null = null
+  #wrongCodes = 0
   publicKey!: CryptoKey
   readonly #origins = new Set<string>([DEV_ISSUER])
 
@@ -297,6 +356,8 @@ export class DevAuthority {
     const iss = input.issuer ?? DEV_ISSUER
     this.#origins.add(iss)
     return signAccessToken(this.key, {
+      // A workspace host's token is for one request.
+      ...(input.host === "workspace" ? { lifetimeSeconds: HOST_TOKEN_SECONDS } : {}),
       iss,
       aud: input.audience,
       sub: person.id,
@@ -350,12 +411,17 @@ export class DevAuthority {
       )
     if (!p("redirect_uri") || !p("code_challenge") || p("code_challenge_method") !== "S256") return new Response("redirect_uri and a S256 code_challenge are required", { status: 400 })
     if (request.method !== "POST") return page()
-    if (p("code").trim().toUpperCase() !== this.code) return page("Wrong code.")
+    if (this.#wrongCodes >= DEV_CODE_ATTEMPTS) return page("Too many wrong codes: restart the app to sign in again.")
+    if (p("code").trim().toUpperCase() !== this.code.toUpperCase()) {
+      this.#wrongCodes++
+      if (this.#wrongCodes >= DEV_CODE_ATTEMPTS) console.warn(`[${PROTOCOL_ID}] dev sign-in closed after ${DEV_CODE_ATTEMPTS} wrong codes: restart the app to open it again`)
+      return page("Wrong code.")
+    }
     const person = this.people.find((x) => x.id === p("person"))
     if (!person) return page("Unknown person.")
     this.#origins.add(origin)
     const code = await new SignJWT({ k: "code", person: person.id, challenge: p("code_challenge"), redirect: p("redirect_uri"), client: p("client_id") })
-      .setProtectedHeader({ alg: "EdDSA", kid: this.key.kid })
+      .setProtectedHeader({ alg: "EdDSA", typ: DEV_CODE_TYPE, kid: this.key.kid })
       .setIssuer(origin)
       .setAudience(`${PROTOCOL_ID}-dev-code`)
       .setIssuedAt()
@@ -375,7 +441,7 @@ export class DevAuthority {
     if (form.get("grant_type") === "authorization_code") {
       let claims: JWTPayload
       try {
-        ;({ payload: claims } = await jwtVerify(form.get("code") ?? "", this.publicKey, { audience: `${PROTOCOL_ID}-dev-code` }))
+        ;({ payload: claims } = await jwtVerify(form.get("code") ?? "", this.publicKey, { typ: DEV_CODE_TYPE, audience: `${PROTOCOL_ID}-dev-code` }))
       } catch {
         return fail("invalid_grant", "unknown or expired code")
       }
@@ -385,7 +451,7 @@ export class DevAuthority {
       person = String(claims.person)
     } else if (form.get("grant_type") === "refresh_token") {
       try {
-        const { payload } = await jwtVerify(form.get("refresh_token") ?? "", this.publicKey, { audience: `${PROTOCOL_ID}-dev-refresh` })
+        const { payload } = await jwtVerify(form.get("refresh_token") ?? "", this.publicKey, { typ: DEV_REFRESH_TYPE, audience: `${PROTOCOL_ID}-dev-refresh` })
         person = String(payload.person)
       } catch {
         return fail("invalid_grant", "unknown or expired refresh token")
@@ -395,7 +461,7 @@ export class DevAuthority {
     if (!who) return fail("invalid_grant", "unknown person")
     this.#origins.add(origin)
     const access = await this.token({ person: who.id, audience: resource, issuer: origin })
-    const refresh = await new SignJWT({ person: who.id }).setProtectedHeader({ alg: "EdDSA", kid: this.key.kid }).setIssuer(origin).setAudience(`${PROTOCOL_ID}-dev-refresh`).setIssuedAt().setExpirationTime("30d").sign(this.key.privateKey)
+    const refresh = await new SignJWT({ person: who.id }).setProtectedHeader({ alg: "EdDSA", typ: DEV_REFRESH_TYPE, kid: this.key.kid }).setIssuer(origin).setAudience(`${PROTOCOL_ID}-dev-refresh`).setIssuedAt().setExpirationTime("30d").sign(this.key.privateKey)
     return json({ access_token: access, token_type: "Bearer", expires_in: 3600, refresh_token: refresh, scope: OAUTH_SCOPE })
   }
 }

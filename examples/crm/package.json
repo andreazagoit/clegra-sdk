@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Reference app: a small CRM (companies, contacts, deals) in memory, per installation \u2014 one defineApp object. Invented data.",
   "scripts": {
-    "dev": "tsx watch src/main.ts",
+    "dev": "MODELAPP_DEV=1 tsx watch src/main.ts",
     "start": "tsx src/main.ts",
     "test": "tsx --test src/app.test.ts",
     "typecheck": "tsc --noEmit -p ."
