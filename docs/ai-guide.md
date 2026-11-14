@@ -123,6 +123,12 @@ Template data: `card { title, subtitle?, status?, fields: [{ label, value }], ur
 `chart { kind: bar|line|pie, points: [{ label, value }], format?, currency? }`.
 
 `query` given to `list`: `{ filters: { field: value | { in: [...] } | { gte?, lte? } }, text?, sort?: { field, dir }, cursor?, limit }`.
+`sort` is already checked (a `sort: true` field the caller may see): apply it, or the sortable headers do nothing.
+
+An action's `input` is its form: `ref("entity")` becomes a picker, `.meta({ label, currency, labels })` the words,
+required/min/max/date are checked before sending, and an input the schema refuses comes back per field
+(`error.fields`). Views add no confirmation of their own: confirming is the host's (annotations, elicitation, or a
+workspace host's proof).
 
 `ctx`: `app`, `installation`, `person` (`{ id, name }` or null), `permissions`,
 `can(p)`, `locale`, `host` (`"workspace" | "plain"`), `settings`, `call`,

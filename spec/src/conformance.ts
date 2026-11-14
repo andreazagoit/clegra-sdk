@@ -39,7 +39,7 @@ type Manifest = {
   auth: { resource?: string; authorizationServers: string[] }
   resolveTool: string
   searchTool?: string
-  entities: { name: string; permission?: string; fields: { name: string; ref?: string; permission?: string; role?: string }[]; tools: { list: ToolRef; get: ToolRef } }[]
+  entities: { name: string; permission?: string; fields: { name: string; ref?: string; permission?: string; role?: string; sort?: boolean }[]; tools: { list: ToolRef; get: ToolRef } }[]
   actions: { name: string; entity?: string; readOnly: boolean; confirm: string; permission?: string; tool: ToolRef }[]
   pages: { name: string; kind: string; entity?: string; columns?: string[]; permission?: string; tool: ToolRef; view?: string; url?: string }[]
   fragments: { type: string; entity?: string; template?: string; view?: string; permission?: string; tool: ToolRef; actions?: string[] }[]
@@ -203,6 +203,19 @@ export async function checkApp(options: Options): Promise<Report> {
   check("mcp.tools", "tools match the manifest: names, annotations (readOnlyHint, destructiveHint), nothing hidden is listed", toolProblems)
   const again = ((await rpc("tools/list", {}, token)).result?.tools ?? []) as Tool[]
   check("mcp.deterministic", "tools/list is the same on every call", JSON.stringify(again) === JSON.stringify(listed) ? null : "two calls differ")
+
+  // 4b. Sorting (spec §3): a list orders only by a field the manifest declares sortable; any other key is refused.
+  const sortProblems: string[] = []
+  for (const e of manifest.entities) {
+    const tool = byName.get(e.tools.list.name)
+    if (!tool) continue
+    const declared = new Set(e.fields.filter((f) => f.sort).map((f) => f.name))
+    const offered = ((tool.inputSchema?.properties as Record<string, { enum?: unknown }> | undefined)?.sort?.enum ?? []) as unknown[]
+    for (const f of offered) if (!declared.has(String(f))) sortProblems.push(`${tool.name}: offers to sort by ${String(f)}, which the manifest doesn't declare sortable`)
+    const refused = await rpc("tools/call", { name: tool.name, arguments: { sort: "not_a_sortable_field" } }, token)
+    if (!refused.error && refused.result?.isError !== true) sortProblems.push(`${tool.name}: accepted a sort key that is not a sortable field`)
+  }
+  check("mcp.sort", "a list sorts only by the fields the manifest declares sortable", sortProblems)
 
   // 5. Views: every ui:// a tool names is an MCP Apps document.
   const viewProblems: string[] = []

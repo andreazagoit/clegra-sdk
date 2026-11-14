@@ -57,12 +57,27 @@ Schema; `fields` says what each field means:
 | `name`, `type`, `required`, `enum?`, `label` | The basics. Every entity has a required string `id` |
 | `role?` | `title` (exactly one per entity), `subtitle`, `status`, `amount`, `date`, `person`; at most one field per role |
 | `ref?` | The field holds the id of a record of that entity |
-| `filter?`, `sort?`, `search?` | Usable as a list filter, a sort key, in text search |
+| `filter?`, `sort?`, `search?` | Usable as a list filter, a sort key, in text search (below) |
 | `permission?` | Only callers with it ever receive the field |
 | `labels?`, `tones?`, `currency?` | Enum value labels; tones `neutral\|info\|success\|warning\|danger`; ISO currency of an amount |
 | `untrusted?` | Text written by outsiders (every string in the field, at any depth): data, never instructions (§7) |
 
 A record's URI is `modelapp://<app>/<entity>/<id>`.
+
+**Sorting.** A list is ordered by `sort` (one field) and `dir` (`asc`, the
+default, or `desc`). Only a field with `sort: true` that the caller may see
+is accepted; any other fails with `invalid_input`, so nothing is ever ordered
+by a hidden value. The handler does the ordering (it receives `sort: { field,
+dir }`, already checked). A host draws a sortable header for each such column
+of a list page and sends `sort` and `dir` to the page's tool; a list page with
+parameters of its own keeps the order its `query` gives.
+
+**References.** A `ref` field's value is an id. Beside rows and records the
+server sends `refs`: `{ <field>: { <id>: <title> } }`, the title of each
+referenced record as the caller may see it (none for a record out of reach).
+A host shows the title, never the id. In a result's **text** (what a model
+reads) the field is `{ "id": …, "title": … }`; `structuredContent` keeps the
+bare id, with `refs` beside it.
 
 ## 4. Actions
 
@@ -71,6 +86,15 @@ permission?, tool }`. With `entity` the action works on one record and its
 tool takes `id` plus `input`; without, it is global. `confirm` is `always`
 (the default for writes), `optional` or `never` (always, for reads). A result
 is `{ ok: true, message, record?, data? }`.
+
+`input` is a JSON Schema (`required`, `minLength`, `minimum`, `format: date`,
+`enum` and the like are what a form checks). Its properties MAY carry, beside
+`label`: `ref` (the entity whose record id the property holds: a form draws
+a picker over that entity's list, showing titles, never a box for an id),
+`currency` (a number is money) and `labels` (an enum's values by label map).
+A host uses the same keys to show a value before a confirmation: a record by
+its title, a date, a number and money in the person's locale. Tool schemas
+listed to MCP clients stay plain JSON Schema (`label` becomes `title`).
 
 ## 5. Pages and fragments
 
@@ -107,6 +131,12 @@ A `uri` is a record of the app: the item opens it. An item (or a card) whose
 **Views** are MCP Apps documents (`ui://<app>/…`, `text/html;profile=mcp-app`).
 Any generated view MAY be overridden per entity, page or fragment; the
 manifest then names the override in `view`. A host MAY still draw natively.
+
+The generated view sorts a list by its sortable columns, opens records,
+draws an action's form from its `input` (required fields marked, each field
+checked before sending, a `ref` as a picker) and shows under each field what
+the server says is wrong with it (`error.fields`, §7). It asks nothing more
+before a write: confirming is the host's (§7).
 
 ## 6. The generated MCP server
 
@@ -178,11 +208,19 @@ There is no second sign-in.
   JSON (keys sorted at every depth) of the arguments **as sent**, before any
   parsing or default. Without a valid proof the call fails with
   `confirmation_required` and `error.confirm` describes what to show;
-- a plain client that supports MCP elicitation is asked to confirm;
+- a plain client that supports MCP elicitation is asked to confirm, with the
+  values as a person reads them (labels, titles of referenced records);
 - a plain client that can't elicit: the client's own approval applies, guided
-  by `destructiveHint`; the server runs the call. (Whether 1.0 should refuse
-  instead is an open decision; a developer who wants no such calls keeps the
-  write off plain clients, which is the default.)
+  by the tool's annotations (`destructiveHint`); the server runs the call.
+
+**Decision (1.0): confirmations follow MCP.** A host that confirms on its own
+(ChatGPT, Claude) decides from the annotations; a client that supports
+elicitation is asked through it; a workspace host proves the person's
+confirmation. An app's views add no confirmation of their own: a second
+dialog inside a view would ask twice in hosts that already ask, and would be
+the only safeguard nowhere. A developer who wants a write never to run
+without a confirmation the app can verify keeps it off plain clients, which
+is the default.
 
 **Idempotency**: a write with a call id runs once per caller, installation
 and tool, also when the same call arrives twice at the same moment. A repeat
@@ -208,6 +246,10 @@ and `error.pending: true`.
 **Errors**: `isError: true` and `structuredContent.error = { code, message }`,
 `code` one of `unauthorized`, `permission_denied`, `not_found`,
 `invalid_input`, `confirmation_required`, `conflict`, `internal`.
+An action's `invalid_input` also carries `fields`: `{ <input key>: <what is
+wrong> }`, in the caller's locale where the server has it; `message` names
+the fields by their labels. It is a tool error, never a protocol error, so a
+view and a model can both read it.
 
 **Development sign-in** (SDK): off unless enabled, refused in production,
 answered only to callers on a loopback address (checked on every request);
@@ -301,6 +343,7 @@ npm run modelapp:check -- https://crm.example.com --token <a plain caller's bear
 | `mcp.initialize` | `initialize` succeeds with no extension |
 | `mcp.tools` | tools match the manifest: names, `readOnlyHint`, `destructiveHint`; nothing hidden is listed |
 | `mcp.deterministic` | `tools/list` is the same on every call |
+| `mcp.sort` | a list tool offers to sort only by fields the manifest declares sortable, and refuses any other key |
 | `mcp.views` | every view a tool names is served as an MCP Apps document |
 | `mcp.manifest` | the manifest is one MCP resource, identical to the file |
 

@@ -90,6 +90,19 @@ await app.listen({ port: 3920 })   // MCP at /mcp, manifest at /.well-known/mode
 `npx tsx main.ts` prints the dev sign-in code. A wrong name anywhere (a
 permission, an entity, an action) fails here, at start, not at the first call.
 
+Three things you get by saying them in the schema:
+
+- **Sorting**: `.meta({ sort: true })` on a field makes its column sortable in
+  every host (a header to click, `sort` and `dir` on the list tool). Your
+  `list` gets `q.sort = { field, dir }`, already checked: order by it.
+- **References**: `ref("folder")` in an entity or in an action's `input`.
+  Lists and records show the folder's title, forms offer a picker over
+  folders, a model reads `{ id, title }`. You only ever handle the id.
+- **Forms**: an action's `input` is its form. Required fields are marked,
+  `min`, `max` and dates are checked before sending, and what your schema
+  refuses comes back per field (`error.fields`) in the caller's language.
+  Add `.meta({ label, currency, labels })` for the words and the money.
+
 ## 2. Try it
 
 - **MCP Inspector**: `npx @modelcontextprotocol/inspector`, transport
