@@ -41,6 +41,8 @@ button{font:inherit;border:1px solid var(--line);background:var(--bg2);color:var
 form.act{margin-top:8px;display:grid;gap:6px}input,select,textarea{font:inherit;padding:6px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg)}
 .bar{display:grid;grid-template-columns:minmax(70px,max-content) 1fr max-content;gap:6px 10px;align-items:center}.bar i{display:block;height:10px;background:var(--accent);border-radius:4px}
 .msg{margin-top:8px;font-size:13px}.err{color:#c62828}
+th.sort{cursor:pointer;user-select:none;white-space:nowrap}th.sort:hover{color:var(--fg)}th.sort:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.req{color:#c62828}.ferr{color:#c62828;font-size:12px;min-height:0}.bad{border-color:#c62828}form.act label{display:block}
 `
 
 const SCRIPT = `
@@ -59,6 +61,15 @@ const SCRIPT = `
   };
   // Whatever goes wrong with a call the view made is said where the person is looking.
   const fail = (e) => { const text = String((e && e.message) || e || "Failed"); const box = root.querySelector(".box"); if (box) say(box, text, true); else { root.innerHTML = '<div class="box err">' + esc(text) + "</div>"; resize(); } };
+  // The view's own few words (what the app's labels don't cover), in the host's language when the view has it.
+  const STR = {
+    en: { required: "Required", tooShort: "At least {n} characters", tooLong: "At most {n} characters", min: "At least {n}", max: "At most {n}", date: "Enter a date", number: "Enter a number", search: "Search…", choose: "Choose…", none: "No results", done: "Done.", noAccess: "No access", notAvailable: "Not available", sortBy: "Sort by {n}" },
+    it: { required: "Obbligatorio", tooShort: "Almeno {n} caratteri", tooLong: "Al massimo {n} caratteri", min: "Almeno {n}", max: "Al massimo {n}", date: "Inserisci una data", number: "Inserisci un numero", search: "Cerca…", choose: "Scegli…", none: "Nessun risultato", done: "Fatto.", noAccess: "Nessun accesso", notAvailable: "Non disponibile", sortBy: "Ordina per {n}" },
+    es: { required: "Obligatorio", tooShort: "Al menos {n} caracteres", tooLong: "Como máximo {n} caracteres", min: "Al menos {n}", max: "Como máximo {n}", date: "Introduce una fecha", number: "Introduce un número", search: "Buscar…", choose: "Elige…", none: "Sin resultados", done: "Hecho.", noAccess: "Sin acceso", notAvailable: "No disponible", sortBy: "Ordenar por {n}" },
+    fr: { required: "Obligatoire", tooShort: "Au moins {n} caractères", tooLong: "Au plus {n} caractères", min: "Au moins {n}", max: "Au plus {n}", date: "Saisissez une date", number: "Saisissez un nombre", search: "Rechercher…", choose: "Choisir…", none: "Aucun résultat", done: "Fait.", noAccess: "Pas d'accès", notAvailable: "Non disponible", sortBy: "Trier par {n}" },
+    de: { required: "Erforderlich", tooShort: "Mindestens {n} Zeichen", tooLong: "Höchstens {n} Zeichen", min: "Mindestens {n}", max: "Höchstens {n}", date: "Datum eingeben", number: "Zahl eingeben", search: "Suchen…", choose: "Auswählen…", none: "Keine Ergebnisse", done: "Erledigt.", noAccess: "Kein Zugriff", notAvailable: "Nicht verfügbar", sortBy: "Sortieren nach {n}" },
+  };
+  const tr = (k, n) => String((STR[String(locale).split("-")[0].toLowerCase()] || STR.en)[k] || STR.en[k]).replace("{n}", n === undefined ? "" : n);
   let refs = {};
   const fmt = (v, col) => {
     if (col && col.ref && refs[col.name] && refs[col.name][v]) return esc(refs[col.name][v]);
@@ -77,22 +88,60 @@ const SCRIPT = `
   const errorOf = (r) => { const s = resultOf(r); return (r && r.isError) ? ((s.error && s.error.message) || (r.content && r.content[0] && r.content[0].text) || "Failed") : null; };
 
   function actionForm(container, action, record) {
-    const props = (action.input && action.input.properties) || {};
+    const schema = action.input || {};
+    const props = schema.properties || {};
+    const required = new Set(Array.isArray(schema.required) ? schema.required : []);
     const keys = Object.keys(props).filter((k) => k !== "id");
-    const run = async (args) => {
-      try { const r = await callTool(action.tool, Object.assign({}, record ? { id: record.id } : {}, args)); const e = errorOf(r); if (e) return say(container, e, true); const s = resultOf(r); say(container, s.message || "Done."); if (lastCall && (s.record || !record)) { try { await reload(); } catch (e) { return fail(e); } const box = root.querySelector(".box"); if (box) say(box, s.message || "Done."); } }
+    // What is wrong with each field, said under it; true when something was said.
+    const showErrors = (form, errs) => { let any = false; form.querySelectorAll("[data-err]").forEach((d) => { const m = errs[d.dataset.err]; d.textContent = m || ""; const el = form.elements[d.dataset.err]; if (el && el.classList) { el.classList.toggle("bad", Boolean(m)); el.setAttribute("aria-invalid", m ? "true" : "false"); } if (m) any = true; }); resize(); return any; };
+    const run = async (args, form) => {
+      const button = form && form.querySelector("button.primary"); if (button) button.disabled = true;
+      try {
+        const r = await callTool(action.tool, Object.assign({}, record ? { id: record.id } : {}, args)); const e = errorOf(r);
+        if (e) { const fields = resultOf(r).error && resultOf(r).error.fields; if (form && fields && showErrors(form, fields)) return; return say(container, e, true); }
+        if (form) form.remove();
+        const s = resultOf(r); say(container, s.message || tr("done")); if (lastCall && (s.record || !record)) { try { await reload(); } catch (e) { return fail(e); } const box = root.querySelector(".box"); if (box) say(box, s.message || tr("done")); }
+      }
       catch (e) { say(container, String(e && e.message || e), true); }
+      finally { if (button) button.disabled = false; }
     };
-    if (!keys.length) return run({});
-    const f = document.createElement("form"); f.className = "act";
-    f.innerHTML = keys.map((k) => { const p = props[k]; const label = esc(p.title || k);
-      if (Array.isArray(p.enum)) return "<label>" + label + '<br><select name="' + esc(k) + '">' + p.enum.map((v) => "<option>" + esc(v) + "</option>").join("") + "</select></label>";
-      if (p.type === "boolean") return '<label><input type="checkbox" name="' + esc(k) + '"> ' + label + "</label>";
-      return "<label>" + label + '<br><input name="' + esc(k) + '" type="' + (p.type === "number" || p.type === "integer" ? "number" : p.format === "date" ? "date" : "text") + '"></label>'; }).join("") + '<div class="row"><button class="primary" type="button">' + esc(action.title) + "</button></div>";
+    if (!keys.length) return run({}, null);
+    const open = container.querySelector(":scope > form.act"); if (open) open.remove();
+    const f = document.createElement("form"); f.className = "act"; f.noValidate = true;
+    f.innerHTML = keys.map((k) => { const p = props[k]; const must = required.has(k);
+      const label = esc(p.title || k) + (p.currency ? " (" + esc(p.currency) + ")" : "") + (must ? ' <span class="req" title="' + esc(tr("required")) + '">*</span>' : "");
+      const attrs = ' name="' + esc(k) + '"' + (must ? ' aria-required="true"' : "");
+      const err = '<div class="ferr" data-err="' + esc(k) + '" role="alert"></div>';
+      // Another record's id: a picker over that entity's list (searched by text when it can be), showing titles.
+      if (p.ref && p.ref.tool) return "<label>" + label + "<br>" + (p.ref.search ? '<input type="search" data-ref-search="' + esc(k) + '" placeholder="' + esc(tr("search")) + '" aria-label="' + esc(tr("search")) + '"> ' : "") + "<select" + attrs + ' data-ref="' + esc(k) + '"><option value="">' + esc(tr("choose")) + "</option></select></label>" + err;
+      if (Array.isArray(p.enum)) return "<label>" + label + "<br><select" + attrs + ">" + (must ? "" : '<option value="">—</option>') + p.enum.map((v) => '<option value="' + esc(v) + '">' + esc((p.labels && p.labels[v]) || v) + "</option>").join("") + "</select></label>" + err;
+      if (p.type === "boolean") return '<label><input type="checkbox" name="' + esc(k) + '"> ' + esc(p.title || k) + "</label>";
+      const num = p.type === "number" || p.type === "integer";
+      return "<label>" + label + "<br><input" + attrs + ' type="' + (num ? "number" : p.format === "date" ? "date" : "text") + '"' + (num && p.type === "number" ? ' step="any"' : "") + (typeof p.minimum === "number" ? ' min="' + p.minimum + '"' : "") + (typeof p.maximum === "number" ? ' max="' + p.maximum + '"' : "") + (typeof p.maxLength === "number" ? ' maxlength="' + p.maxLength + '"' : "") + "></label>" + err; }).join("") + '<div class="row"><button class="primary" type="button">' + esc(action.title) + "</button></div>";
+    const loadRef = async (k, q) => {
+      const p = props[k]; const sel = f.elements[k]; if (!sel) return; const keep = sel.value;
+      try { const r = await callTool(p.ref.tool, Object.assign({ limit: 25 }, q ? { query: q } : {})); if (errorOf(r)) return; const rows = resultOf(r).rows || [];
+        sel.innerHTML = '<option value="">' + esc(tr(rows.length ? "choose" : "none")) + "</option>" + rows.map((row) => '<option value="' + esc(row.id) + '">' + esc(row[p.ref.title] === undefined || row[p.ref.title] === null ? row.id : row[p.ref.title]) + "</option>").join("");
+        if (keep && rows.some((row) => row.id === keep)) sel.value = keep; else if (q && rows.length === 1) sel.value = rows[0].id; resize(); } catch {}
+    };
+    const check = (k, el) => { const p = props[k]; if (p.type === "boolean") return null; const v = el.value;
+      if (v === "") return required.has(k) ? tr("required") : null;
+      if (p.type === "number" || p.type === "integer") { const n = Number(v); if (!Number.isFinite(n) || (p.type === "integer" && !Number.isInteger(n))) return tr("number"); if (typeof p.minimum === "number" && n < p.minimum) return tr("min", fmt(p.minimum)); if (typeof p.maximum === "number" && n > p.maximum) return tr("max", fmt(p.maximum)); return null; }
+      if (p.format === "date" && !/^\\d{4}-\\d{2}-\\d{2}$/.test(v)) return tr("date");
+      if (typeof p.minLength === "number" && v.length < p.minLength) return tr("tooShort", p.minLength);
+      if (typeof p.maxLength === "number" && v.length > p.maxLength) return tr("tooLong", p.maxLength);
+      return null; };
     // A click, not a form submission: views run in a sandbox without allow-forms.
     f.onsubmit = (e) => e.preventDefault();
-    f.querySelector("button.primary").onclick = () => { const args = {}; for (const k of keys) { const el = f.elements[k]; const p = props[k]; if (!el) continue; if (p.type === "boolean") args[k] = el.checked; else if (el.value !== "") args[k] = (p.type === "number" || p.type === "integer") ? Number(el.value) : el.value; } f.remove(); run(args); };
-    container.appendChild(f); resize();
+    f.querySelector("button.primary").onclick = () => {
+      const args = {}; const errs = {};
+      for (const k of keys) { const el = f.elements[k]; const p = props[k]; if (!el) continue; const bad = check(k, el); if (bad) errs[k] = bad; if (p.type === "boolean") args[k] = el.checked; else if (el.value !== "") args[k] = (p.type === "number" || p.type === "integer") ? Number(el.value) : el.value; }
+      if (showErrors(f, errs)) { const first = f.querySelector(".bad"); if (first && first.focus) first.focus(); return; }
+      run(args, f);
+    };
+    container.appendChild(f);
+    for (const k of keys) if (props[k].ref && props[k].ref.tool) { loadRef(k, ""); const box = f.querySelector('[data-ref-search="' + k + '"]'); let timer; if (box) box.oninput = () => { clearTimeout(timer); timer = setTimeout(() => loadRef(k, box.value.trim()), 250); }; }
+    resize();
   }
   function actionsBar(el, actions, record) {
     if (!actions || !actions.length) return;
@@ -128,7 +177,7 @@ const SCRIPT = `
   function fragmentBox(fr) {
     const el = document.createElement("div"); el.className = "box";
     const d = fr.data || {};
-    if (fr.state && fr.state !== "ok") { el.innerHTML = '<span class="muted">' + esc(fr.state === "no-access" ? "No access" : "Not available") + "</span>"; return el; }
+    if (fr.state && fr.state !== "ok") { el.innerHTML = '<span class="muted">' + esc(tr(fr.state === "no-access" ? "noAccess" : "notAvailable")) + "</span>"; return el; }
     if (fr.template === "record" && fr.view) return recordBox(fr.view, fr.data);
     let h = fr.title ? "<h3>" + esc(fr.title) + "</h3>" : "";
     if (fr.template === "stat") { const v = typeof d.value === "number" ? (d.format === "money" ? new Intl.NumberFormat(locale, { style: "currency", currency: d.currency || "EUR" }).format(d.value) : d.format === "percent" ? new Intl.NumberFormat(locale, { style: "percent" }).format(d.value) : new Intl.NumberFormat(locale).format(d.value)) : d.value; h += '<div class="muted">' + esc(d.label) + '</div><div class="stat">' + esc(v) + "</div>" + (d.hint ? '<div class="muted">' + esc(d.hint) + "</div>" : ""); }
@@ -151,11 +200,16 @@ const SCRIPT = `
       const box = document.createElement("div"); box.className = "box";
       const cols = v.columns;
       box.innerHTML = "<h2>" + esc(v.title) + (typeof s.total === "number" ? ' <span class="muted">· ' + esc(s.total) + "</span>" : "") + "</h2>" +
-        "<table><thead><tr>" + cols.map((c) => "<th>" + esc(c.label) + "</th>").join("") + "</tr></thead><tbody>" +
+        "<table><thead><tr>" + cols.map((c) => { const on = v.sort && v.sort.field === c.name ? v.sort.dir : null;
+          // A sortable column's header sorts by it: first ascending, again descending. The app checks the field (and refuses one the caller may not see).
+          return c.sort && v.tool ? '<th class="sort" tabindex="0" role="columnheader" data-sort="' + esc(c.name) + '" aria-sort="' + (on === "asc" ? "ascending" : on === "desc" ? "descending" : "none") + '" title="' + esc(tr("sortBy", c.label)) + '">' + esc(c.label) + (on ? (on === "asc" ? " ▲" : " ▼") : "") + "</th>" : "<th>" + esc(c.label) + "</th>"; }).join("") + "</tr></thead><tbody>" +
         (s.rows || []).map((r, i) => '<tr class="link" data-i="' + i + '">' + cols.map((c) => "<td" + (c.role === "amount" || c.type === "number" ? ' class="num"' : "") + ">" + fmt(r[c.name], c) + "</td>").join("") + "</tr>").join("") +
         "</tbody></table>" + ((s.rows || []).length ? "" : '<p class="muted">—</p>');
       if (v.tool && !lastCall) lastCall = { name: v.tool, args: v.args || {} };
-      box.querySelectorAll("tr.link").forEach((tr) => tr.onclick = () => open(v.getTool, { id: s.rows[Number(tr.dataset.i)].id }));
+      box.querySelectorAll("tr.link").forEach((row) => row.onclick = () => open(v.getTool, { id: s.rows[Number(row.dataset.i)].id }));
+      box.querySelectorAll("th.sort").forEach((th) => { const go = async () => { const field = th.dataset.sort; const args = Object.assign({}, v.args || {}, { sort: field, dir: v.sort && v.sort.field === field && v.sort.dir === "asc" ? "desc" : "asc" }); delete args.cursor;
+        try { const r = await callTool(v.tool, args); const e = errorOf(r); if (e) return fail(e); lastCall = { name: v.tool, args }; render(resultOf(r)); } catch (e) { fail(e); } };
+        th.onclick = go; th.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); } }; });
       if (s.next && v.tool) { const more = document.createElement("button"); more.textContent = "…"; more.style.marginTop = "8px"; more.onclick = async () => { try { const r = await callTool(v.tool, Object.assign({}, v.args || {}, { cursor: s.next })); const e = errorOf(r); if (e) return fail(e); render(resultOf(r)); } catch (e) { fail(e); } }; box.appendChild(more); }
       root.appendChild(box);
     } else if (v.kind === "record") {

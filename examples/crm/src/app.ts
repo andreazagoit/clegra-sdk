@@ -231,7 +231,7 @@ export const app = defineApp({
       on: "deal",
       title: { en: "Move to stage", it: "Sposta di fase" },
       description: { en: "Moves an open deal to another open stage, or to lost", it: "Sposta una trattativa aperta in un'altra fase aperta, o tra le perse" },
-      input: z.object({ stage: z.enum(["lead", "qualified", "proposal", "lost"]).meta({ label: { en: "Stage", it: "Fase" } }) }),
+      input: z.object({ stage: z.enum(["lead", "qualified", "proposal", "lost"]).meta({ label: { en: "Stage", it: "Fase" }, labels: stageLabels }) }),
       confirm: "optional",
       permission: "deals.edit",
       expose: { plain: true },
@@ -261,7 +261,7 @@ export const app = defineApp({
       input: z.object({
         name: z.string().min(2).max(120).meta({ label: { en: "Name", it: "Nome" } }),
         company: ref("company").meta({ label: { en: "Company", it: "Azienda" } }),
-        value: z.number().min(0).meta({ label: { en: "Value (EUR)", it: "Valore (EUR)" } }),
+        value: z.number().min(0).meta({ label: { en: "Value", it: "Valore" }, currency: "EUR" }),
         closeDate: z.iso.date().meta({ label: { en: "Close date", it: "Chiusura prevista" } }),
       }),
       permission: "deals.edit",

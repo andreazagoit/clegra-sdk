@@ -133,6 +133,23 @@ const TEMPLATE_KEYS = new Set(["uri", "kind", "format", "currency"])
 
 const text = (t: string): CallToolResult["content"] => [{ type: "text", text: t }]
 
+/**
+ * A tool's input as it is listed (the same JSON Schema), left for the SDK's own handler to check: an action's
+ * input is validated there (#runAction), so what is wrong is said field by field, in the caller's language,
+ * as a tool error a view and a model can read, not as a protocol error in English.
+ */
+function listedOnly(schema: z.ZodObject, title: (label: Label) => string): z.ZodObject {
+  const std = (schema as unknown as { "~standard": Record<string, unknown> })["~standard"]
+  // Listed as plain JSON Schema: the meaning keys (`label`, `ref`, `currency`, …) are the manifest's, a plain client gets each field's `title`.
+  const listed = () => {
+    const raw = jsonSchemaOf(schema, "input") as { properties?: Record<string, Record<string, unknown>> }
+    const plain = plainSchema(raw) as { properties?: Record<string, Record<string, unknown>> }
+    for (const [k, p] of Object.entries(raw.properties ?? {})) if (isLabel(p.label) && plain.properties?.[k]) plain.properties[k]!.title = title(p.label)
+    return plain
+  }
+  return { "~standard": { ...std, validate: (value: unknown) => ({ value }), jsonSchema: { input: listed, output: listed } } } as unknown as z.ZodObject
+}
+
 /** Whether the client of this request can answer an elicitation (MCP 2026-07-28: capabilities ride every request). */
 function elicits(ctx: ServerContext): boolean {
   const caps = (ctx.mcpReq.envelope as Record<string, unknown> | undefined)?.["io.modelcontextprotocol/clientCapabilities"] as { elicitation?: unknown } | undefined
@@ -413,6 +430,7 @@ export class AppServer {
       ...(f.tones ? { tones: f.tones } : {}),
       ...(f.currency ? { currency: f.currency } : {}),
       ...(f.ref ? { ref: f.ref } : {}),
+      ...(f.sort ? { sort: true } : {}),
     }
   }
 
@@ -420,8 +438,75 @@ export class AppServer {
     // The form's labels in the caller's language (plainSchema keeps only bare-string labels).
     const raw = jsonSchemaOf(a.input, "input") as { properties?: Record<string, Record<string, unknown>> }
     const input = plainSchema(raw) as { properties?: Record<string, Record<string, unknown>> }
-    for (const [k, p] of Object.entries(raw.properties ?? {})) if (isLabel(p.label) && input.properties?.[k]) input.properties[k]!.title = this.#t(caller, p.label)
+    for (const [k, p] of Object.entries(raw.properties ?? {})) {
+      const shown = input.properties?.[k]
+      if (!shown) continue
+      if (isLabel(p.label)) shown.title = this.#t(caller, p.label)
+      if (typeof p.currency === "string") shown.currency = p.currency
+      if (p.labels && typeof p.labels === "object") shown.labels = Object.fromEntries(Object.entries(p.labels as Record<string, Label>).filter(([, l]) => isLabel(l)).map(([v, l]) => [v, this.#t(caller, l)]))
+      // An input that holds another record's id: the form offers a picker over that entity's list (its tool, the field that names a record), never a box for a raw id.
+      const target = typeof p.ref === "string" ? this.#entities.get(p.ref) : undefined
+      if (target && this.#canSee(target, caller) && (caller.host !== "plain" || target.tools.list.plain)) {
+        const title = this.#visibleFields(target, caller).find((f) => f.role === "title")
+        shown.ref = { entity: target.name, tool: target.tools.list.name, title: title?.name ?? "id", search: this.#visibleFields(target, caller).some((f) => f.search) }
+      }
+    }
     return { tool: a.tool, title: this.#t(caller, a.config.title), confirm: a.confirm, input }
+  }
+
+  /**
+   * An input that failed its schema, said field by field in the caller's language (Zod's own locales):
+   * `error.fields` maps each input key to what is wrong with it, the message names the fields by their labels.
+   */
+  #invalid(schema: z.ZodObject, error: z.ZodError, caller: Caller): CallToolResult {
+    const raw = jsonSchemaOf(schema, "input") as { properties?: Record<string, Record<string, unknown>> }
+    const fields: Record<string, string> = {}
+    for (const issue of error.issues) {
+      const key = issue.path.map(String).join(".") || "_"
+      fields[key] ??= issue.message
+    }
+    const label = (key: string) => {
+      const l = raw.properties?.[key.split(".")[0]!]?.label
+      return isLabel(l) ? this.#t(caller, l) : key
+    }
+    const message = Object.entries(fields).map(([k, m]) => (k === "_" ? m : `${label(k)}: ${m}`)).join("; ")
+    return failure("invalid_input", message, { fields })
+  }
+
+  /** Zod's messages in the caller's language, when Zod has it (else English). */
+  #zodLocale(caller: Caller): { error?: z.core.$ZodErrorMap } {
+    const lang = (caller.locale ?? this.locale).split("-")[0]!.toLowerCase()
+    const make = (z.locales as unknown as Record<string, (() => { localeError: z.core.$ZodErrorMap }) | undefined>)[lang]
+    return typeof make === "function" ? { error: make().localeError } : {}
+  }
+
+  /**
+   * An action's input as a person reads it before confirming (label → value): referenced records by their titles,
+   * dates, numbers and money in the caller's language. What can't be named stays as sent.
+   */
+  async #shownInput(a: ActionRecord, received: Record<string, unknown>, caller: Caller, ctx: Context): Promise<{ label: string; value: string }[]> {
+    const raw = jsonSchemaOf(a.input, "input") as { properties?: Record<string, Record<string, unknown>> }
+    const locale = caller.locale ?? this.locale
+    const out: { label: string; value: string }[] = []
+    for (const [k, v] of Object.entries(received)) {
+      if (v === undefined || v === null || v === "") continue
+      const p = raw.properties?.[k] ?? {}
+      let label = isLabel(p.label) ? this.#t(caller, p.label) : k
+      let value = typeof v === "string" ? v : JSON.stringify(v)
+      const target = k === "id" && a.entity ? a.entity : typeof p.ref === "string" ? this.#entities.get(p.ref) : undefined
+      if (k === "id" && a.entity) label = this.#t(caller, a.entity.config.label)
+      try {
+        if (target && typeof v === "string" && this.#canSee(target, caller)) {
+          const row = await target.config.get(v, ctx)
+          if (row) value = this.#recordCard(target, this.#strip(target, row as Record<string, unknown>, caller), caller).title
+        } else if (typeof v === "number") value = typeof p.currency === "string" ? new Intl.NumberFormat(locale, { style: "currency", currency: p.currency }).format(v) : new Intl.NumberFormat(locale).format(v)
+        else if (typeof v === "string" && p.format === "date" && /^\d{4}-\d{2}-\d{2}$/.test(v)) value = new Intl.DateTimeFormat(locale, { dateStyle: "medium" }).format(new Date(`${v}T12:00:00`))
+        else if (typeof v === "boolean") value = v ? "✓" : "—"
+        else if (typeof v === "string" && p.labels && isLabel((p.labels as Record<string, unknown>)[v])) value = this.#t(caller, (p.labels as Record<string, Label>)[v])
+      } catch {}
+      out.push({ label, value })
+    }
+    return out
   }
 
   #recordActions(entity: EntityRecord, caller: Caller) {
@@ -488,21 +573,48 @@ export class AppServer {
     return { rows, ...(result.next ? { next: result.next } : {}), ...(typeof result.total === "number" ? { total: result.total } : {}) }
   }
 
-  /** Titles of the records a list's ref fields point to (field → id → title), as this caller may see them. */
-  async #refs(entity: EntityRecord, rows: Record<string, unknown>[], caller: Caller, ctx: Context): Promise<Record<string, Record<string, string>>> {
+  /**
+   * Titles of the records a list's ref fields point to (field → id → title), as this caller may see them.
+   * `pointers`: the titles that are outsiders' text are noted there (under `/refs`), like any untrusted value.
+   */
+  async #refs(entity: EntityRecord, rows: Record<string, unknown>[], caller: Caller, ctx: Context, pointers?: string[]): Promise<Record<string, Record<string, string>>> {
     const out: Record<string, Record<string, string>> = {}
-    for (const f of this.#visibleFields(entity, caller)) {
-      const target = f.ref ? this.#entities.get(f.ref) : undefined
-      if (!target || !this.#canSee(target, caller)) continue
-      const ids = [...new Set(rows.map((r) => r[f.name]).filter((v): v is string => typeof v === "string"))].slice(0, 50)
-      const titles: Record<string, string> = {}
-      await Promise.all(
-        ids.map(async (id) => {
-          const row = await target.config.get(id, ctx)
-          if (row) titles[id] = this.#recordCard(target, this.#strip(target, row as Record<string, unknown>, caller), caller).title
-        }),
-      )
-      out[f.name] = titles
+    await Promise.all(
+      this.#visibleFields(entity, caller).map(async (f) => {
+        const target = f.ref ? this.#entities.get(f.ref) : undefined
+        if (!target || !this.#canSee(target, caller)) return
+        const ids = [...new Set(rows.map((r) => r[f.name]).filter((v): v is string => typeof v === "string"))].slice(0, 50)
+        const titles: Record<string, string> = {}
+        await Promise.all(
+          ids.map(async (id) => {
+            const row = await target.config.get(id, ctx)
+            if (row) titles[id] = this.#recordCard(target, this.#strip(target, row as Record<string, unknown>, caller), caller).title
+          }),
+        )
+        out[f.name] = titles
+      }),
+    )
+    // In declaration order, whatever finished first.
+    const ordered: Record<string, Record<string, string>> = {}
+    for (const f of entity.fields) {
+      if (!out[f.name]) continue
+      ordered[f.name] = out[f.name]!
+      if (pointers && this.#untrustedTitle(this.#entities.get(f.ref!)!)) for (const id of Object.keys(ordered[f.name]!)) pointers.push(`/refs/${pointerKey(f.name)}/${pointerKey(id)}`)
+    }
+    return ordered
+  }
+
+  #untrustedTitle(entity: EntityRecord): boolean {
+    return entity.fields.some((f) => f.role === "title" && f.untrusted)
+  }
+
+  /** A row as a model reads it, with the records it references named: `{ id, title }` in place of a bare id (an outsider's title wrapped). */
+  #named(entity: EntityRecord, row: Record<string, unknown>, refs: Record<string, Record<string, string>>): Record<string, unknown> {
+    const out = { ...row }
+    for (const f of entity.fields) {
+      const id = out[f.name]
+      const title = f.ref && typeof id === "string" ? refs[f.name]?.[id] : undefined
+      if (title !== undefined) out[f.name] = { id, title: this.#untrustedTitle(this.#entities.get(f.ref!)!) ? untrustedText(title) : title }
     }
     return out
   }
@@ -587,8 +699,8 @@ export class AppServer {
     const ctx = this.#context(caller, meta, notes)
     if (!this.#mayUse(a, caller)) return failure("permission_denied", `You may not use ${this.#t(caller, a.config.title)}.`)
     const { id, ...rest } = args
-    const parsed = a.input.safeParse(a.entity ? rest : args)
-    if (!parsed.success) return failure("invalid_input", z.prettifyError(parsed.error))
+    const parsed = a.input.safeParse(a.entity ? rest : args, this.#zodLocale(caller))
+    if (!parsed.success) return this.#invalid(a.input, parsed.error, caller)
     let record: Record<string, unknown> | undefined
     if (a.entity) {
       if (typeof id !== "string" || !id) return failure("invalid_input", "id: the record's id is required")
@@ -625,7 +737,7 @@ export class AppServer {
       if (a.write && a.confirm === "always" && caller.host === "plain" && mctx && elicits(mctx)) {
         const answer = inputResponse(mctx.mcpReq.inputResponses, "confirm")
         if (answer.kind !== "elicit") {
-          const lines = Object.entries(received).map(([k, v]) => `${k}: ${typeof v === "string" ? v : JSON.stringify(v)}`).join("; ")
+          const lines = (await this.#shownInput(a, received, caller, ctx)).map((l) => `${l.label}: ${l.value}`).join("; ")
           return inputRequired({ inputRequests: { confirm: inputRequired.elicit({ message: `${this.#t(caller, a.config.title)}${lines ? ` (${lines})` : ""}?`, requestedSchema: z.object({ confirm: z.boolean() }) }) } }) as unknown as CallToolResult
         }
         if (answer.action !== "accept" || answer.content?.confirm !== true) return failure("confirmation_required", "Not confirmed.")
@@ -765,13 +877,15 @@ export class AppServer {
         },
         guard(e.tools.list.name, async (args, mctx) => {
           const ctx = ctxOf(mctx)
-          const out = await this.#list(e, caller, ctx, this.#queryOf(e, caller, args))
+          const query = this.#queryOf(e, caller, args)
+          const out = await this.#list(e, caller, ctx, query)
           const uris = out.rows.map((r) => this.uri(e.name, String(r.id)))
           const pointers: string[] = []
           const marked = out.rows.map((r, i) => this.#markRow(e, r, `/rows/${i}`, pointers))
+          const refs = await this.#refs(e, out.rows, caller, ctx, pointers)
           return {
-            content: text(JSON.stringify({ rows: marked.map((r, i) => ({ uri: uris[i], ...r })), ...(out.next ? { next: out.next } : {}), ...(out.total !== undefined ? { total: out.total } : {}) })),
-            structuredContent: { entity: e.name, ...out, uris, refs: await this.#refs(e, out.rows, caller, ctx), view: { kind: "list", title: plural, columns: columns(), tool: e.tools.list.name, args, getTool: e.tools.get.name } },
+            content: text(JSON.stringify({ rows: marked.map((r, i) => ({ uri: uris[i], ...this.#named(e, r, refs) })), ...(out.next ? { next: out.next } : {}), ...(out.total !== undefined ? { total: out.total } : {}) })),
+            structuredContent: { entity: e.name, ...out, uris, refs, view: { kind: "list", title: plural, columns: columns(), tool: e.tools.list.name, args, getTool: e.tools.get.name, ...(query.sort ? { sort: query.sort } : {}) } },
             ...this.#marks(pointers),
           }
         }),
@@ -793,9 +907,10 @@ export class AppServer {
           const pointers: string[] = []
           const marked = this.#markRow(e, record, "/record", pointers)
           const uri = this.uri(e.name, String(record.id))
+          const refs = await this.#refs(e, [record], caller, ctx, pointers)
           return {
-            content: text(JSON.stringify({ uri, ...marked })),
-            structuredContent: { entity: e.name, uri, record, refs: await this.#refs(e, [record], caller, ctx), view: { kind: "record", title: label, tool: e.tools.get.name, fields: this.#visibleFields(e, caller).map((f) => this.#column(f, caller)), actions: this.#recordActions(e, caller) } },
+            content: text(JSON.stringify({ uri, ...this.#named(e, marked, refs) })),
+            structuredContent: { entity: e.name, uri, record, refs, view: { kind: "record", title: label, tool: e.tools.get.name, fields: this.#visibleFields(e, caller).map((f) => this.#column(f, caller)), actions: this.#recordActions(e, caller) } },
             ...this.#marks(pointers),
           }
         }),
@@ -851,11 +966,12 @@ export class AppServer {
           const entity = this.#entities.get(parsed.type)
           const record = r.data as Record<string, unknown>
           const pointers: string[] = []
-          const marked = entity ? this.#markRow(entity, record, "/record", pointers) : this.#markResolved(r, "", pointers)
+          const refs = entity ? await this.#refs(entity, [record], caller, ctx, pointers) : {}
+          const marked = entity ? this.#named(entity, this.#markRow(entity, record, "/record", pointers), refs) : this.#markResolved(r, "", pointers)
           const title = "title" in r ? r.title : ""
           return {
             content: text(JSON.stringify({ id: r.uri, title: entity ? this.#markCard(entity, { title }, "", []).title : title, text: JSON.stringify(marked), url: r.uri, metadata: { type: parsed.type } })),
-            structuredContent: entity ? { entity: entity.name, uri: r.uri, record, refs: await this.#refs(entity, [record], caller, ctx), view: r.template === "record" ? { ...("view" in r ? r.view : {}), title: t(entity.config.label) } : undefined } : { ...r, view: { kind: "fragment", title } },
+            structuredContent: entity ? { entity: entity.name, uri: r.uri, record, refs, view: r.template === "record" ? { ...("view" in r ? r.view : {}), title: t(entity.config.label) } : undefined } : { ...r, view: { kind: "fragment", title } },
             ...this.#marks(pointers),
           }
         }),
@@ -876,13 +992,21 @@ export class AppServer {
         const ctx = ctxOf(mctx)
         const results = []
         const pointers: string[] = []
-        for (const uri of args.uris as string[]) {
-          const parsed = this.parseUri(uri)
-          if (!parsed) {
+        // Every URI is read at once (one slow record doesn't hold the others); the answer keeps the order asked.
+        const uris = args.uris as string[]
+        const resolved = await Promise.all(
+          uris.map((uri) => {
+            const parsed = this.parseUri(uri)
+            return parsed ? this.#resolve({ type: parsed.type, params: parsed.params }, caller, ctx).then((r) => ({ parsed, r })) : null
+          }),
+        )
+        for (const [i, uri] of uris.entries()) {
+          const found = resolved[i]
+          if (!found) {
             results.push({ uri, state: "gone" })
             continue
           }
-          const r = await this.#resolve({ type: parsed.type, params: parsed.params }, caller, ctx)
+          const { parsed, r } = found
           if (r.state !== "ok") results.push({ uri, state: r.state })
           else {
             // For the host: which values are outsiders' text (it wraps them before a model reads them).
@@ -909,7 +1033,7 @@ export class AppServer {
         {
           title,
           description: `${t(a.config.description) || title}${a.write ? (a.confirm === "always" ? " (a change; the person confirms it first)" : " (a change)") : ""}.`,
-          inputSchema: input,
+          inputSchema: listedOnly(input, t),
           annotations: { title, readOnlyHint: !a.write, destructiveHint: a.write && a.confirm === "always", idempotentHint: !a.write, openWorldHint: false },
           _meta: this.#callable(),
         },
@@ -939,20 +1063,22 @@ export class AppServer {
         guard(p.tool.name, async (args, mctx) => {
           const ctx = ctxOf(mctx)
           const { cursor, limit, ...rest } = args
-          const parsed = params.safeParse(rest)
-          if (!parsed.success) return failure("invalid_input", z.prettifyError(parsed.error))
+          const parsed = params.safeParse(rest, this.#zodLocale(caller))
+          if (!parsed.success) return this.#invalid(params, parsed.error, caller)
           const pageParams = parsed.data as Record<string, unknown>
           if (c.kind === "list") {
             const e = this.#entities.get(c.entity.name)!
             const query = this.#queryOf(e, caller, { ...(c.query ? {} : pageParams), cursor, limit }, c.query ? c.query(pageParams as never) : undefined)
             const out = await this.#list(e, caller, ctx, query)
             const visible = new Set(this.#visibleFields(e, caller).map((f) => f.name))
-            const columns = c.columns.filter((n) => visible.has(n)).map((n) => this.#column(e.fields.find((f) => f.name === n)!, caller))
+            // A page with parameters of its own decides its order itself (query): its columns are not sortable from outside.
+            const columns = c.columns.filter((n) => visible.has(n)).map((n) => this.#column(e.fields.find((f) => f.name === n)!, caller)).map(({ sort, ...col }) => (sort && !c.params ? { ...col, sort } : col))
             const pointers: string[] = []
             const marked = out.rows.map((r, i) => this.#markRow(e, r, `/rows/${i}`, pointers))
+            const refs = await this.#refs(e, out.rows, caller, ctx, pointers)
             return {
-              content: text(JSON.stringify({ page: p.name, rows: marked, ...(out.next ? { next: out.next } : {}) })),
-              structuredContent: { page: p.name, entity: e.name, params: pageParams, ...out, uris: out.rows.map((r) => this.uri(e.name, String(r.id))), refs: await this.#refs(e, out.rows, caller, ctx), view: { kind: "list", title, columns, tool: p.tool.name, args: pageParams, getTool: e.tools.get.name } },
+              content: text(JSON.stringify({ page: p.name, rows: marked.map((r) => this.#named(e, r, refs)), ...(out.next ? { next: out.next } : {}) })),
+              structuredContent: { page: p.name, entity: e.name, params: pageParams, ...out, uris: out.rows.map((r) => this.uri(e.name, String(r.id))), refs, view: { kind: "list", title, columns, tool: p.tool.name, args: pageParams, getTool: e.tools.get.name, ...(query.sort && !c.params ? { sort: query.sort } : {}) } },
               ...this.#marks(pointers),
             }
           }
@@ -1011,7 +1137,18 @@ export class AppServer {
     const labelled = (schema: z.ZodObject): Record<string, unknown> => {
       const raw = jsonSchemaOf(schema, "input") as { properties?: Record<string, Record<string, unknown>> }
       const plain = plainSchema(raw) as { properties?: Record<string, Record<string, unknown>> }
-      for (const [k, p] of Object.entries(raw.properties ?? {})) if (isLabel(p.label) && plain.properties?.[k]) plain.properties[k]!.label = L(p.label)
+      for (const [k, p] of Object.entries(raw.properties ?? {})) {
+        const shown = plain.properties?.[k]
+        if (!shown) continue
+        if (isLabel(p.label)) shown.label = L(p.label)
+        // What a host needs to draw the field and to show its value before a confirmation: the entity an id belongs to, a number's currency.
+        if (typeof p.ref === "string") {
+          if (!this.#entities.has(p.ref)) throw new Error(`an action's input "${k}": ref "${p.ref}" is not an entity`)
+          shown.ref = p.ref
+        }
+        if (typeof p.currency === "string") shown.currency = p.currency
+        if (p.labels && typeof p.labels === "object") shown.labels = Object.fromEntries(Object.entries(p.labels as Record<string, Label>).filter(([, l]) => isLabel(l)).map(([v, l]) => [v, L(l)!]))
+      }
       return plain as Record<string, unknown>
     }
     const entities = [...this.#entities.values()].map((e) => {

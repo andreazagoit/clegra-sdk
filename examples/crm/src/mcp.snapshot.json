@@ -577,19 +577,15 @@
       "ui": null,
       "inputSchema": {
         "type": "object",
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
           "id": {
             "type": "string",
             "description": "The deal's id"
           },
           "note": {
-            "label": {
-              "en": "Note",
-              "it": "Nota"
-            },
             "type": "string",
-            "maxLength": 500
+            "maxLength": 500,
+            "title": "Note"
           }
         },
         "required": [
@@ -611,7 +607,6 @@
       "ui": null,
       "inputSchema": {
         "type": "object",
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
           "id": {
             "type": "string",
@@ -625,10 +620,7 @@
               "proposal",
               "lost"
             ],
-            "label": {
-              "en": "Stage",
-              "it": "Fase"
-            }
+            "title": "Stage"
           }
         },
         "required": [
@@ -651,7 +643,6 @@
       "ui": null,
       "inputSchema": {
         "type": "object",
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
           "id": {
             "type": "string",
@@ -661,10 +652,7 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 500,
-            "label": {
-              "en": "Note",
-              "it": "Nota"
-            }
+            "title": "Note"
           }
         },
         "required": [
@@ -687,41 +675,27 @@
       "ui": null,
       "inputSchema": {
         "type": "object",
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
           "name": {
             "type": "string",
             "minLength": 2,
             "maxLength": 120,
-            "label": {
-              "en": "Name",
-              "it": "Nome"
-            }
+            "title": "Name"
           },
           "company": {
             "type": "string",
-            "ref": "company",
-            "label": {
-              "en": "Company",
-              "it": "Azienda"
-            }
+            "title": "Company"
           },
           "value": {
             "type": "number",
             "minimum": 0,
-            "label": {
-              "en": "Value (EUR)",
-              "it": "Valore (EUR)"
-            }
+            "title": "Value"
           },
           "closeDate": {
             "type": "string",
             "format": "date",
             "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$",
-            "label": {
-              "en": "Close date",
-              "it": "Chiusura prevista"
-            }
+            "title": "Close date"
           }
         },
         "required": [
@@ -1769,6 +1743,28 @@
               "label": {
                 "en": "Stage",
                 "it": "Fase"
+              },
+              "labels": {
+                "lead": {
+                  "en": "Lead",
+                  "it": "Contatto"
+                },
+                "qualified": {
+                  "en": "Qualified",
+                  "it": "Qualificata"
+                },
+                "proposal": {
+                  "en": "Proposal",
+                  "it": "Proposta"
+                },
+                "won": {
+                  "en": "Won",
+                  "it": "Vinta"
+                },
+                "lost": {
+                  "en": "Lost",
+                  "it": "Persa"
+                }
               }
             }
           },
@@ -1849,15 +1845,17 @@
               "label": {
                 "en": "Company",
                 "it": "Azienda"
-              }
+              },
+              "ref": "company"
             },
             "value": {
               "type": "number",
               "minimum": 0,
               "label": {
-                "en": "Value (EUR)",
-                "it": "Valore (EUR)"
-              }
+                "en": "Value",
+                "it": "Valore"
+              },
+              "currency": "EUR"
             },
             "closeDate": {
               "type": "string",
