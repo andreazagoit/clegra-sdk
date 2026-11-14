@@ -1,0 +1,25 @@
+{
+  "name": "@mcpw/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "MCP Workspaces v1 SDK (placeholder name): one MCP server that is also a complete business application — entities, actions, pages, fragments, agents — usable by plain MCP hosts and mounted natively by workspace hosts (docs/mcp-workspaces/spec.md).",
+  "license": "MIT",
+  "engines": { "node": ">=20" },
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts",
+    "./testing": "./src/testing.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "tsx --test \"src/**/*.test.ts\""
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "^2.4.0",
+    "jose": "^6.2.13"
+  },
+  "peerDependencies": {
+    "zod": "^4.0.0"
+  }
+}

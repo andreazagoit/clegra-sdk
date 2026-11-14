@@ -1,0 +1,21 @@
+{
+  "name": "mcpw-example-crm",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "MCP Workspaces v1 example: a small CRM (companies, contacts, deals) in memory, per installation. Invented data.",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "start": "tsx src/main.ts",
+    "test": "tsx --test src/app.test.ts",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "@mcpw/server": "file:../../../packages/mcp-workspaces",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.23.15",
+    "typescript": "^5"
+  }
+}
