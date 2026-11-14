@@ -118,9 +118,11 @@ const SCRIPT = `
       if (p.type === "boolean") return '<label><input type="checkbox" name="' + esc(k) + '"> ' + esc(p.title || k) + "</label>";
       const num = p.type === "number" || p.type === "integer";
       return "<label>" + label + "<br><input" + attrs + ' type="' + (num ? "number" : p.format === "date" ? "date" : "text") + '"' + (num && p.type === "number" ? ' step="any"' : "") + (typeof p.minimum === "number" ? ' min="' + p.minimum + '"' : "") + (typeof p.maximum === "number" ? ' max="' + p.maximum + '"' : "") + (typeof p.maxLength === "number" ? ' maxlength="' + p.maxLength + '"' : "") + "></label>" + err; }).join("") + '<div class="row"><button class="primary" type="button">' + esc(action.title) + "</button></div>";
+    // The latest ask per field wins: an earlier, slower answer (the first full list) never replaces what was searched after it.
+    const asked = {};
     const loadRef = async (k, q) => {
-      const p = props[k]; const sel = f.elements[k]; if (!sel) return; const keep = sel.value;
-      try { const r = await callTool(p.ref.tool, Object.assign({ limit: 25 }, q ? { query: q } : {})); if (errorOf(r)) return; const rows = resultOf(r).rows || [];
+      const p = props[k]; const sel = f.elements[k]; if (!sel) return; const keep = sel.value; const turn = asked[k] = (asked[k] || 0) + 1;
+      try { const r = await callTool(p.ref.tool, Object.assign({ limit: 25 }, q ? { query: q } : {})); if (turn !== asked[k] || errorOf(r)) return; const rows = resultOf(r).rows || [];
         sel.innerHTML = '<option value="">' + esc(tr(rows.length ? "choose" : "none")) + "</option>" + rows.map((row) => '<option value="' + esc(row.id) + '">' + esc(row[p.ref.title] === undefined || row[p.ref.title] === null ? row.id : row[p.ref.title]) + "</option>").join("");
         if (keep && rows.some((row) => row.id === keep)) sel.value = keep; else if (q && rows.length === 1) sel.value = rows[0].id; resize(); } catch {}
     };
