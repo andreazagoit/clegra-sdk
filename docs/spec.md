@@ -213,6 +213,76 @@ and `error.pending: true`.
 answered only to callers on a loopback address (checked on every request);
 the sign-in code allows five wrong attempts.
 
+### Client registration (development sign-in)
+
+The development authorization server knows a client in two ways:
+
+- **A Client ID Metadata Document** (what current MCP clients use, MCP
+  authorization 2025-11-25): the `client_id` is the https URL of a JSON
+  document that describes the client. The server metadata says
+  `client_id_metadata_document_supported: true`.
+- **Dynamic Client Registration** (RFC 7591) at `registration_endpoint`, kept
+  for clients that don't send a metadata document yet. Any client is
+  registered; its redirect addresses are not checked.
+
+For a URL `client_id`:
+
+- The URL is https, has a path, and has no fragment, user name, password or
+  `.`/`..` segment. A query is accepted.
+- The document is a JSON object whose `client_id` is that URL, the same
+  string, with a non-empty `redirect_uris`. `client_name` is shown on the
+  sign-in page. Only public clients: `token_endpoint_auth_method` is `none`
+  or absent, and there is no `client_secret`.
+- `redirect_uri` MUST be one of `redirect_uris`, exactly. One exception
+  (RFC 8252): for `http://127.0.0.1`, `http://localhost` and `http://[::1]`
+  the port may differ. A request that fails any of these gets an error page;
+  it is never redirected.
+- At the token endpoint `client_id` is required and MUST be the one the code
+  was issued to.
+- Fetching the document: nothing is requested unless the host is public. IP
+  literals and names that are loopback, private, link-local, carrier-grade
+  NAT, unique-local, multicast or unspecified are refused (also as
+  IPv4-mapped IPv6, and `localhost`, `*.localhost`, `*.local`, `*.internal`),
+  and so is a name when any address it resolves to is one of those. Redirects
+  are not followed. The answer must be `200`, JSON, at most 64 KB, within 5
+  seconds. It is kept as `Cache-Control` says (`max-age` between a minute and
+  a day, five minutes by default, not at all with `no-store`); a failure is
+  kept 30 seconds.
+- A known limit: the addresses are checked, then the request resolves the
+  name again, so DNS rebinding is not excluded. The connection is not pinned
+  to the checked address. This is a development server; a production one
+  should pin it.
+
+### Production: an app with its own authorization server
+
+The SDK is not an authorization server outside development. For MCP clients
+(ChatGPT, Claude, others) to connect to an app that signs people in itself,
+its authorization server needs:
+
+- OAuth 2.1 authorization code with PKCE `S256`.
+- Metadata (RFC 8414, or OpenID Connect discovery) with
+  `code_challenge_methods_supported`. Clients refuse a server that does not
+  list it.
+- Protected-resource metadata (RFC 9728). The SDK serves it;
+  `auth.authorizationServers` names the authorization server (default: the
+  issuers of `auth.issuers`).
+- The `resource` parameter (RFC 8707): the token's `aud` MUST be the app's
+  `auth.resource`.
+- Client registration, in this order of preference:
+  1. Client ID Metadata Documents: `client_id_metadata_document_supported:
+     true`, the document fetched with the protections above (and the
+     connection pinned), `redirect_uri` matched exactly, no secrets for
+     public clients.
+  2. Dynamic Client Registration (RFC 7591), optional, for clients that
+     don't send a metadata document yet.
+  3. Clients registered by hand, where the server can do neither.
+- Tokens the app can verify. The SDK accepts a signed JWT whose header has
+  `typ: at+jwt`, with `iss` exactly one of `auth.issuers`, `aud` =
+  `auth.resource`, `exp`, `sub`, and the `modelapp` claim with a valid
+  `installation` (above). The signature is checked against the issuer's key
+  set: `<issuer>/.well-known/jwks.json`, or the issuer's `jwksUri`. Clocks
+  may differ by 30 seconds. Opaque tokens are not accepted.
+
 ## 8. Conformance
 
 [`packages/modelapp-spec`](../../packages/modelapp-spec) checks any app from outside,

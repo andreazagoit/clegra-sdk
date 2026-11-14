@@ -1,5 +1,7 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto"
+import { lookup as dnsLookup } from "node:dns/promises"
 import { existsSync, readFileSync, writeFileSync } from "node:fs"
+import { isIP } from "node:net"
 
 import {
   createLocalJWKSet,
@@ -110,7 +112,12 @@ export type DevOptions = {
   keyFile?: string
   /** The one-time code the sign-in page asks for (default: random, printed on start). */
   code?: string
+  /** For tests: how a client's metadata document is fetched and its host resolved (default: the global `fetch` and the system resolver). */
+  clientMetadata?: ClientMetadataTransport
 }
+
+/** How a Client ID Metadata Document is reached: `fetch` gets it, `lookup` gives every address of its host. */
+export type ClientMetadataTransport = { fetch?: typeof fetch; lookup?: (host: string) => Promise<string[]> }
 
 export class AuthError extends Error {
   constructor(message: string) {
@@ -294,15 +301,277 @@ export const DEV_CODE_ATTEMPTS = 5
 
 const html = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!)
 
+// ------------------------------------------------------------ client id metadata documents
+
 /**
- * A minimal OAuth 2.1 authorization server for development (spec §7): dynamic
- * client registration (any client), authorization code with PKCE S256, a
- * sign-in page listing test people that asks for the code printed on the
- * console (five wrong codes close the sign-in until the app restarts),
- * refresh tokens. Stateless: codes and refresh tokens are JWTs signed with
- * the dev key. Every token's issuer is the origin the request came to (so a
- * tunnel works); the key is what is checked. The server answers it only to
- * callers on a loopback address (server.ts).
+ * A client may identify itself with the https URL of a JSON document that
+ * describes it (OAuth Client ID Metadata Documents, what MCP clients use
+ * since the 2025-11-25 authorization spec). The server fetches a URL that
+ * whoever opens the sign-in page chose (through a tunnel that is anyone), so
+ * the fetch must never reach this machine or its network: everything below
+ * that refuses an address is there for that.
+ */
+
+/** What the dev authorization server keeps of a client's metadata document. */
+export type ClientMetadata = { client_id: string; client_name?: string; redirect_uris: string[] }
+
+/** Why a client's metadata document, or its address, is refused. */
+export class ClientMetadataError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = "ClientMetadataError"
+  }
+}
+
+export const CLIENT_METADATA_MAX_BYTES = 64 * 1024
+export const CLIENT_METADATA_TIMEOUT_MS = 5000
+const CLIENT_CACHE_ENTRIES = 100
+const CLIENT_CACHE_DEFAULT_SECONDS = 300
+const CLIENT_CACHE_MIN_SECONDS = 60
+const CLIENT_CACHE_MAX_SECONDS = 24 * 3600
+const CLIENT_CACHE_FAILED_SECONDS = 30
+
+/** A `client_id` that claims to be a URL: it is handled as a metadata document address (and refused when it is not a valid one), never as an opaque id. */
+const claimsUrl = (clientId: string) => /^https?:\/\//i.test(clientId)
+
+function publicV4(a: number, b: number, c: number): boolean {
+  if (a === 0 || a === 10 || a === 127 || a >= 224) return false // "this network", private, loopback, multicast and reserved
+  if (a === 100 && b >= 64 && b <= 127) return false // carrier-grade NAT
+  if (a === 169 && b === 254) return false // link-local (cloud metadata services live here)
+  if (a === 172 && b >= 16 && b <= 31) return false
+  if (a === 192 && b === 168) return false
+  if (a === 192 && b === 0 && (c === 0 || c === 2)) return false // protocol assignments, documentation
+  if (a === 198 && (b === 18 || b === 19)) return false // benchmarking
+  if ((a === 198 && b === 51 && c === 100) || (a === 203 && b === 0 && c === 113)) return false // documentation
+  return true
+}
+
+/** The eight 16-bit groups of an IPv6 address `isIP` accepted. */
+function v6Groups(ip: string): number[] {
+  let s = ip.split("%")[0]!
+  if (s.includes(".")) {
+    const cut = s.lastIndexOf(":")
+    const [a = 0, b = 0, c = 0, d = 0] = s.slice(cut + 1).split(".").map(Number)
+    s = `${s.slice(0, cut + 1)}${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`
+  }
+  const [head = "", tail] = s.split("::")
+  const parse = (part: string) => part.split(":").filter(Boolean).map((g) => parseInt(g, 16))
+  const left = parse(head)
+  const right = tail === undefined ? [] : parse(tail)
+  return [...left, ...new Array<number>(Math.max(0, 8 - left.length - right.length)).fill(0), ...right]
+}
+
+/**
+ * Whether an IP address (v4 or v6, brackets allowed) is one on the public
+ * internet. False for loopback, private, link-local, carrier-grade NAT,
+ * unique-local, multicast, unspecified, documentation and reserved ranges,
+ * for an IPv6 address that carries one of those IPv4 addresses (mapped,
+ * NAT64, 6to4), and for anything that is not an IP address.
+ */
+export function isPublicAddress(address: string): boolean {
+  const ip = address.replace(/^\[|\]$/g, "")
+  const kind = isIP(ip)
+  if (kind === 4) {
+    const [a = 0, b = 0, c = 0] = ip.split(".").map(Number)
+    return publicV4(a, b, c)
+  }
+  if (kind !== 6) return false
+  const [g0 = 0, g1 = 0, g2 = 0, g3 = 0, g4 = 0, g5 = 0, g6 = 0, g7 = 0] = v6Groups(ip)
+  const embedded = (hi: number, lo: number) => publicV4(hi >> 8, hi & 255, lo >> 8)
+  // ::ffff:a.b.c.d (IPv4-mapped) and the old ::a.b.c.d: the IPv4 address decides (so `::` and `::1` are refused too).
+  if (!g0 && !g1 && !g2 && !g3 && !g4 && (g5 === 0xffff || g5 === 0)) return embedded(g6, g7)
+  if (g0 === 0x64 && g1 === 0xff9b) return !g2 && !g3 && !g4 && !g5 && embedded(g6, g7) // NAT64; its local-use prefix is refused
+  if (g0 === 0x2002) return embedded(g1, g2) // 6to4
+  if (g0 === 0x2001 && (g1 === 0 || g1 === 0xdb8)) return false // Teredo, documentation
+  // What is left is public only inside global unicast (2000::/3): unique-local fc00::/7, link-local fe80::/10 and multicast ff00::/8 are outside it.
+  return (g0 & 0xe000) === 0x2000
+}
+
+/** Why a host may not be fetched from, before any DNS: a non-public IP literal, or a name that is local by definition. Null when it may. */
+function hostProblem(hostname: string): string | null {
+  const host = hostname.replace(/^\[|\]$/g, "").replace(/\.$/, "").toLowerCase()
+  if (isIP(host)) return isPublicAddress(host) ? null : `${host} is not a public address`
+  if (!host.includes(".") || /(^|\.)(localhost|local|internal)$/.test(host)) return `${host || "(no host)"} is not a public host name`
+  return null
+}
+
+/** Why a `client_id` is not a valid Client ID Metadata Document URL; null when it is one. */
+export function clientMetadataUrlProblem(clientId: string): string | null {
+  // Checked on the text as sent: the URL parser would quietly drop spaces and resolve dot segments.
+  if (/[\s\x00-\x1f\\]/.test(clientId)) return "it contains spaces, control characters or backslashes"
+  let url: URL
+  try {
+    url = new URL(clientId)
+  } catch {
+    return "it is not a URL"
+  }
+  if (url.protocol !== "https:" || !/^https:\/\//i.test(clientId)) return "it must be an https URL"
+  if (clientId.includes("#")) return "it must not have a fragment"
+  const [authority = "", ...rest] = clientId.slice(8).split(/[?]/)[0]!.split("/")
+  if (authority.includes("@") || url.username || url.password) return "it must not carry a user name or password"
+  if (url.pathname === "/" || !rest.length) return "it needs a path (https://host/path), not only a host"
+  if (rest.some((segment) => /^(\.|%2e){1,2}$/i.test(segment))) return "its path must not contain . or .. segments"
+  return hostProblem(url.hostname)
+}
+
+export const isClientMetadataUrl = (clientId: string) => clientMetadataUrlProblem(clientId) === null
+
+/** A fetched metadata document, checked: it must be the document of exactly this `client_id`, of a public client. Throws ClientMetadataError. */
+export function validateClientMetadata(clientId: string, document: unknown): ClientMetadata {
+  if (!document || typeof document !== "object" || Array.isArray(document)) throw new ClientMetadataError("the metadata document is not a JSON object")
+  const d = document as Record<string, unknown>
+  if (d.client_id !== clientId) throw new ClientMetadataError("the metadata document's client_id is not the URL it was fetched from (they must be the same string)")
+  if (!Array.isArray(d.redirect_uris) || !d.redirect_uris.length || !d.redirect_uris.every((u) => typeof u === "string" && u)) throw new ClientMetadataError("the metadata document needs redirect_uris, a non-empty array of strings")
+  for (const uri of d.redirect_uris as string[]) {
+    let scheme: string
+    try {
+      scheme = new URL(uri).protocol
+    } catch {
+      throw new ClientMetadataError("a redirect_uri of the metadata document is not an absolute URL")
+    }
+    if (uri.includes("#") || /^(javascript|data|vbscript|file|blob|about):$/.test(scheme)) throw new ClientMetadataError("a redirect_uri of the metadata document has a fragment or a scheme a browser must not be sent to")
+  }
+  if (d.client_name !== undefined && typeof d.client_name !== "string") throw new ClientMetadataError("the metadata document's client_name must be a string")
+  // A document anyone can read cannot hold a shared secret (the draft forbids it); a client with a key pair is a kind this server does not do.
+  if ("client_secret" in d || "client_secret_expires_at" in d) throw new ClientMetadataError("the metadata document must not carry client_secret or client_secret_expires_at")
+  if (d.token_endpoint_auth_method !== undefined && d.token_endpoint_auth_method !== "none") throw new ClientMetadataError(`the dev authorization server supports public clients only: token_endpoint_auth_method must be "none" or absent (private_key_jwt and client secrets are not supported)`)
+  return { client_id: clientId, redirect_uris: [...(d.redirect_uris as string[])], ...(typeof d.client_name === "string" && d.client_name.trim() ? { client_name: d.client_name.trim() } : {}) }
+}
+
+const LOOPBACK_REDIRECT = /^(127\.0\.0\.1|localhost|\[::1\])$/
+
+/**
+ * Whether `redirect` is one of a client's registered redirect URIs: the same
+ * string, with one exception (RFC 8252 §7.3): for `http://127.0.0.1`,
+ * `http://localhost` and `http://[::1]` the port may differ, because a native
+ * client listens on whatever port the system gives it.
+ */
+export function redirectUriAllowed(redirect: string, registered: readonly string[]): boolean {
+  if (!redirect) return false
+  if (registered.includes(redirect)) return true
+  let asked: URL
+  try {
+    asked = new URL(redirect)
+  } catch {
+    return false
+  }
+  if (asked.protocol !== "http:" || !LOOPBACK_REDIRECT.test(asked.hostname) || redirect.includes("#") || /[\s\\]/.test(redirect)) return false
+  asked.port = ""
+  return registered.some((r) => {
+    try {
+      const known = new URL(r)
+      if (known.protocol !== "http:" || !LOOPBACK_REDIRECT.test(known.hostname)) return false
+      known.port = ""
+      return known.href === asked.href
+    } catch {
+      return false
+    }
+  })
+}
+
+/** How long a fetched document may be kept, in seconds, from its `Cache-Control`: 0 for `no-store`/`no-cache`, else `max-age` held between a minute and a day, five minutes without one. */
+export function clientMetadataCacheSeconds(cacheControl: string | null): number {
+  const value = (cacheControl ?? "").toLowerCase()
+  if (/(^|[\s,])no-(store|cache)\b/.test(value)) return 0
+  const age = /(?:^|[\s,])max-age\s*=\s*"?(\d{1,12})/.exec(value)
+  return age ? Math.min(CLIENT_CACHE_MAX_SECONDS, Math.max(CLIENT_CACHE_MIN_SECONDS, Number(age[1]))) : CLIENT_CACHE_DEFAULT_SECONDS
+}
+
+const systemLookup = async (host: string) => (await dnsLookup(host, { all: true })).map((a) => a.address)
+
+/**
+ * Fetches and checks the metadata document of a URL `client_id`. Nothing is
+ * requested unless the URL is valid and every address its host resolves to
+ * is public; redirects are not followed; the answer must be 200, JSON, at
+ * most 64 KB, within 5 seconds. Throws ClientMetadataError.
+ *
+ * The limit of this: the addresses are checked, then `fetch` resolves the
+ * name again, so a DNS server that answers differently the second time (DNS
+ * rebinding) gets the request sent to an address that was not checked. What
+ * it can do with that is small (https only, so the internal host would have
+ * to hold a certificate for the attacker's name; no redirects; the body is
+ * only ever parsed as a metadata document), but it is not nothing: a
+ * production authorization server should pin the connection to the address
+ * it checked.
+ */
+export async function fetchClientMetadata(clientId: string, transport: ClientMetadataTransport = {}): Promise<{ metadata: ClientMetadata; cacheSeconds: number }> {
+  const problem = clientMetadataUrlProblem(clientId)
+  if (problem) throw new ClientMetadataError(`client_id is not a valid metadata document URL: ${problem}`)
+  const host = new URL(clientId).hostname.replace(/^\[|\]$/g, "")
+  if (!isIP(host)) {
+    let addresses: string[]
+    try {
+      addresses = await (transport.lookup ?? systemLookup)(host)
+    } catch {
+      throw new ClientMetadataError(`the client's host ${host} does not resolve`)
+    }
+    if (!addresses.length) throw new ClientMetadataError(`the client's host ${host} does not resolve`)
+    // One private address among public ones is enough to refuse: which one the connection would use is not ours to choose.
+    const inside = addresses.find((a) => !isPublicAddress(a))
+    if (inside) throw new ClientMetadataError(`the client's host ${host} resolves to ${inside}, which is not a public address`)
+  }
+  let response: Response
+  let text: string
+  try {
+    response = await (transport.fetch ?? fetch)(clientId, { method: "GET", redirect: "error", credentials: "omit", headers: { accept: "application/json" }, signal: AbortSignal.timeout(CLIENT_METADATA_TIMEOUT_MS) })
+    // A redirect could lead inside the network after the host was checked. `redirect: "error"` already refuses it; this is for a fetch that does not.
+    if (response.redirected || response.status !== 200) {
+      void response.body?.cancel().catch(() => {})
+      throw new ClientMetadataError(`the client's metadata document answered ${response.redirected ? "with a redirect" : response.status} (it must answer 200, without redirects)`)
+    }
+    if (!/^application\/([\w.!#$&^-]+\+)?json\s*(;|$)/i.test(response.headers.get("content-type") ?? "")) {
+      void response.body?.cancel().catch(() => {})
+      throw new ClientMetadataError("the client's metadata document is not served as JSON (content-type application/json)")
+    }
+    text = await readCapped(response, CLIENT_METADATA_MAX_BYTES)
+  } catch (error) {
+    if (error instanceof ClientMetadataError) throw error
+    throw new ClientMetadataError(`the client's metadata document could not be fetched (${error instanceof Error && error.name === "TimeoutError" ? "no answer in time" : "network error or redirect"})`)
+  }
+  let document: unknown
+  try {
+    document = JSON.parse(text)
+  } catch {
+    throw new ClientMetadataError("the client's metadata document is not valid JSON")
+  }
+  return { metadata: validateClientMetadata(clientId, document), cacheSeconds: clientMetadataCacheSeconds(response.headers.get("cache-control")) }
+}
+
+/** The body as text, read piece by piece and dropped as soon as it passes `max` bytes (a Content-Length can lie, so the bytes are counted). */
+async function readCapped(response: Response, max: number): Promise<string> {
+  const tooLarge = () => new ClientMetadataError(`the client's metadata document is larger than ${max / 1024} KB`)
+  if (Number(response.headers.get("content-length") ?? 0) > max) {
+    void response.body?.cancel().catch(() => {})
+    throw tooLarge()
+  }
+  if (!response.body) return ""
+  const reader = response.body.getReader()
+  const chunks: Uint8Array[] = []
+  let size = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    size += value.byteLength
+    if (size > max) {
+      void reader.cancel().catch(() => {})
+      throw tooLarge()
+    }
+    chunks.push(value)
+  }
+  return Buffer.concat(chunks).toString("utf8")
+}
+
+/**
+ * A minimal OAuth 2.1 authorization server for development (spec §7): clients
+ * identify themselves with a Client ID Metadata Document URL (fetched and
+ * checked, above) or register dynamically (any client); authorization code
+ * with PKCE S256, a sign-in page listing test people that asks for the code
+ * printed on the console (five wrong codes close the sign-in until the app
+ * restarts), refresh tokens. Stateless but for a small cache of client
+ * documents: codes and refresh tokens are JWTs signed with the dev key.
+ * Every token's issuer is the origin the request came to (so a tunnel
+ * works); the key is what is checked. The server answers it only to callers
+ * on a loopback address (server.ts).
  */
 export class DevAuthority {
   readonly code: string
@@ -312,6 +581,8 @@ export class DevAuthority {
   #wrongCodes = 0
   publicKey!: CryptoKey
   readonly #origins = new Set<string>([DEV_ISSUER])
+  /** Client documents by client_id, oldest first; a failed fetch is kept too, briefly, so a broken client cannot make this server hammer a host. */
+  readonly #clients = new Map<string, { until: number; result: Promise<ClientMetadata> }>()
 
   constructor(readonly options: DevOptions, private readonly app: { name: string; title: string; allPermissions: () => string[] }) {
     this.code = options.code ?? randomBytes(4).toString("hex").toUpperCase()
@@ -365,6 +636,27 @@ export class DevAuthority {
     })
   }
 
+  /** The checked metadata document of a URL `client_id`, from the cache or fetched. Throws ClientMetadataError. */
+  #client(clientId: string): Promise<ClientMetadata> {
+    const kept = this.#clients.get(clientId)
+    if (kept && kept.until > Date.now()) return kept.result
+    this.#clients.delete(clientId)
+    // An address that is refused without a request costs nothing to refuse again: only what was fetched is kept.
+    if (clientMetadataUrlProblem(clientId)) return fetchClientMetadata(clientId, this.options.clientMetadata).then((r) => r.metadata)
+    while (this.#clients.size >= CLIENT_CACHE_ENTRIES) this.#clients.delete(this.#clients.keys().next().value!)
+    const entry = { until: Date.now() + CLIENT_CACHE_FAILED_SECONDS * 1000, result: Promise.resolve(null as unknown as ClientMetadata) }
+    entry.result = fetchClientMetadata(clientId, this.options.clientMetadata).then(({ metadata, cacheSeconds }) => {
+      // `no-store`: requests already waiting share this answer, the next one fetches again.
+      if (!cacheSeconds) {
+        if (this.#clients.get(clientId) === entry) this.#clients.delete(clientId)
+      } else entry.until = Date.now() + cacheSeconds * 1000
+      return metadata
+    })
+    entry.result.catch(() => {})
+    this.#clients.set(clientId, entry)
+    return entry.result
+  }
+
   /** Answers the authorization server's paths; null for any other path. */
   async handle(request: Request, origin: string, resource: string): Promise<Response | null> {
     const url = new URL(request.url)
@@ -377,6 +669,7 @@ export class DevAuthority {
         authorization_endpoint: `${origin}/oauth/authorize`,
         token_endpoint: `${origin}/oauth/token`,
         registration_endpoint: `${origin}/oauth/register`,
+        client_id_metadata_document_supported: true,
         jwks_uri: `${origin}/.well-known/jwks.json`,
         response_types_supported: ["code"],
         grant_types_supported: ["authorization_code", "refresh_token"],
@@ -398,18 +691,41 @@ export class DevAuthority {
   async #authorize(request: Request, url: URL, origin: string, resource: string): Promise<Response> {
     const form = request.method === "POST" ? new URLSearchParams(await request.text()) : url.searchParams
     const p = (k: string) => form.get(k) ?? ""
-    const page = (error = "") =>
+    const shell = (body: string, status: number) =>
       new Response(
         `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sign in · ${html(this.app.title)} (dev)</title>
-<style>body{font:15px system-ui,sans-serif;max-width:420px;margin:48px auto;padding:0 16px;color:#1d1d1f}h1{font-size:20px}label{display:block;margin:12px 0 4px}select,input,button{font:inherit;padding:8px;width:100%;box-sizing:border-box}button{margin-top:16px;background:#1d1d1f;color:#fff;border:0;border-radius:8px}.e{color:#b00020}.n{color:#666;font-size:13px}</style></head>
-<body><h1>${html(this.app.title)} — development sign-in</h1><p class="n">Test people only. The code is printed on the app's console.</p>${error ? `<p class="e">${html(error)}</p>` : ""}
+<style>body{font:15px system-ui,sans-serif;max-width:420px;margin:48px auto;padding:0 16px;color:#1d1d1f}h1{font-size:20px}label{display:block;margin:12px 0 4px}select,input,button{font:inherit;padding:8px;width:100%;box-sizing:border-box}button{margin-top:16px;background:#1d1d1f;color:#fff;border:0;border-radius:8px}.e{color:#b00020}.n{color:#666;font-size:13px}.c{padding:10px 12px;border:1px solid #d2d2d7;border-radius:8px;overflow-wrap:anywhere}</style></head>
+<body><h1>${html(this.app.title)} — development sign-in</h1>${body}</body></html>`,
+        { status, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-frame-options": "DENY" } },
+      )
+    let client: ClientMetadata | null = null
+    // Who is asking, as its own metadata document says: shown so the developer sees which client the sign-in is for.
+    const asking = () => {
+      if (!client) return ""
+      const host = html(new URL(client.client_id).host)
+      const name = client.client_name ? `<strong>${html(client.client_name.slice(0, 80))}</strong> (${host})` : `<strong>${host}</strong>`
+      return `<p class="c">${name} is asking to sign in.<br><span class="n">From the client's metadata document: ${html(client.client_id)}</span></p>`
+    }
+    const page = (error = "") =>
+      shell(
+        `<p class="n">Test people only. The code is printed on the app's console.</p>${asking()}${error ? `<p class="e">${html(error)}</p>` : ""}
 <form method="post" action="/oauth/authorize">${["client_id", "redirect_uri", "state", "code_challenge", "code_challenge_method", "scope", "resource"].map((k) => `<input type="hidden" name="${k}" value="${html(p(k))}">`).join("")}
 <label>Person</label><select name="person">${this.people.map((x) => `<option value="${html(x.id)}">${html(x.name)}</option>`).join("")}</select>
 <label>Code</label><input name="code" autocomplete="off" required autofocus>
-<button type="submit">Sign in</button></form></body></html>`,
-        { status: error ? 400 : 200, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-frame-options": "DENY" } },
+<button type="submit">Sign in</button></form>`,
+        error ? 400 : 200,
       )
+    // A client that is not who it says, or a redirect address that is not its own: the answer stays here, nothing is ever sent to that address.
+    const refuse = (why: string) => shell(`<p class="e">This client cannot sign in: ${html(why)}.</p><p class="n">Nothing was sent to the client: its redirect address is not trusted.</p>`, 400)
     if (!p("redirect_uri") || !p("code_challenge") || p("code_challenge_method") !== "S256") return new Response("redirect_uri and a S256 code_challenge are required", { status: 400 })
+    if (claimsUrl(p("client_id"))) {
+      try {
+        client = await this.#client(p("client_id"))
+      } catch (error) {
+        return refuse(error instanceof ClientMetadataError ? error.message : "its metadata document could not be read")
+      }
+      if (!redirectUriAllowed(p("redirect_uri"), client.redirect_uris)) return refuse("redirect_uri is not one of the redirect_uris of its metadata document (it must match exactly; only the port of a loopback address may differ)")
+    }
     if (request.method !== "POST") return page()
     if (this.#wrongCodes >= DEV_CODE_ATTEMPTS) return page("Too many wrong codes: restart the app to sign in again.")
     if (p("code").trim().toUpperCase() !== this.code.toUpperCase()) {
@@ -438,6 +754,8 @@ export class DevAuthority {
     const form = new URLSearchParams(await request.text())
     const fail = (error: string, description: string) => json({ error, error_description: description }, 400)
     let person: string
+    let client = ""
+    const sent = form.get("client_id") ?? ""
     if (form.get("grant_type") === "authorization_code") {
       let claims: JWTPayload
       try {
@@ -448,20 +766,34 @@ export class DevAuthority {
       const verifier = form.get("code_verifier") ?? ""
       if (createHash("sha256").update(verifier).digest("base64url") !== claims.challenge) return fail("invalid_grant", "PKCE check failed")
       if (form.get("redirect_uri") && form.get("redirect_uri") !== claims.redirect) return fail("invalid_grant", "redirect_uri differs")
+      // A code is for the client it was given to. A client known by its metadata document must say who it is; others may leave client_id out, as before.
+      client = typeof claims.client === "string" ? claims.client : ""
+      if (sent ? sent !== client : claimsUrl(client)) return fail("invalid_grant", sent ? "the code was issued to another client_id" : "client_id is required")
+      if (claimsUrl(client)) {
+        try {
+          const metadata = await this.#client(client)
+          if (!redirectUriAllowed(String(claims.redirect ?? ""), metadata.redirect_uris)) return fail("invalid_grant", "redirect_uri is no longer one of the client's redirect_uris")
+        } catch (error) {
+          return fail("invalid_client", error instanceof ClientMetadataError ? error.message : "the client's metadata document could not be read")
+        }
+      }
       person = String(claims.person)
     } else if (form.get("grant_type") === "refresh_token") {
       try {
         const { payload } = await jwtVerify(form.get("refresh_token") ?? "", this.publicKey, { typ: DEV_REFRESH_TYPE, audience: `${PROTOCOL_ID}-dev-refresh` })
         person = String(payload.person)
+        client = typeof payload.client === "string" ? payload.client : ""
       } catch {
         return fail("invalid_grant", "unknown or expired refresh token")
       }
+      // A refresh token stays with the metadata-document client it was issued to.
+      if (claimsUrl(client) && sent !== client) return fail("invalid_grant", "the refresh token was issued to another client_id")
     } else return fail("unsupported_grant_type", "authorization_code or refresh_token")
     const who = this.people.find((x) => x.id === person)
     if (!who) return fail("invalid_grant", "unknown person")
     this.#origins.add(origin)
     const access = await this.token({ person: who.id, audience: resource, issuer: origin })
-    const refresh = await new SignJWT({ person: who.id }).setProtectedHeader({ alg: "EdDSA", typ: DEV_REFRESH_TYPE, kid: this.key.kid }).setIssuer(origin).setAudience(`${PROTOCOL_ID}-dev-refresh`).setIssuedAt().setExpirationTime("30d").sign(this.key.privateKey)
+    const refresh = await new SignJWT({ person: who.id, ...(client ? { client } : {}) }).setProtectedHeader({ alg: "EdDSA", typ: DEV_REFRESH_TYPE, kid: this.key.kid }).setIssuer(origin).setAudience(`${PROTOCOL_ID}-dev-refresh`).setIssuedAt().setExpirationTime("30d").sign(this.key.privateKey)
     return json({ access_token: access, token_type: "Bearer", expires_in: 3600, refresh_token: refresh, scope: OAUTH_SCOPE })
   }
 }

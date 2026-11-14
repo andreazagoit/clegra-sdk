@@ -99,7 +99,8 @@ permission, an entity, an action) fails here, at start, not at the first call.
 - **ChatGPT / Claude**: they need https. `cloudflared tunnel --url
   http://127.0.0.1:3920` gives a public address; add `<address>/mcp` as a
   connector and sign in with the code. Lists, records and the dashboard show
-  as MCP Apps views.
+  as MCP Apps views. A client says who it is with the URL of its metadata
+  document, or registers dynamically: both work in dev, with nothing to set up.
 - **A workspace host** installs the app from its address and reads the manifest.
 
 ## 3. Test it
