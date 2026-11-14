@@ -1,24 +1,30 @@
-# MCP Workspaces
+# Apps that are also MCP servers
 
-> v1, draft 1.0 (2026-11-14). Placeholder names (`mcpw`, `@mcpw/server`)
-> wait for open question Q1.
+> Draft 1.0 (2026-11-14). **Working name**: the final name is chosen before
+> publishing; `mcpw` and `@mcpw/server` are working tokens.
 
-**One MCP server that is also a complete business application.** You declare
-entities, actions, pages and fragments on top of the official MCP SDK.
-ChatGPT, Claude and any MCP host use it as plain MCP tools with MCP Apps
-views; a workspace host (Clegra is the first) reads its card and mounts the
-whole app natively: pages in the navigation, record cards, actions behind a
-confirmation, agents.
+You describe an app once, as **one typed object**: entities, actions, pages,
+fragments, agents, permissions, settings. From it you get
+
+- a **JSON manifest** that a workspace host (Clegra is the first) reads with
+  one fetch to draw the app natively, and
+- a **plain MCP server** — tools with correct annotations and MCP Apps views —
+  that ChatGPT, Claude and any MCP client use with nothing extra.
+
+```ts
+export default defineApp({ name, title, version, locale, auth, permissions, settings, entities, actions, pages, fragments, agents })
+```
 
 | Read | For |
 |---|---|
-| [spec.md](spec.md) | The v1 specification (normative, ~4 pages) |
-| [quickstart.md](quickstart.md) | Your first app in ten minutes, run in ChatGPT and in a workspace |
-| [examples/crm.md](examples/crm.md) | The CRM example, explained; code in [`examples/mcp-workspaces/crm`](../../examples/mcp-workspaces/crm) |
-| [ai-guide.md](ai-guide.md), [llms.txt](llms.txt) | Building an app with an AI coding agent |
-| [future/](future/README.md) | Everything beyond v1, kept as non-normative future extensions |
+| [spec.md](spec.md) | The specification (normative, short) |
+| [quickstart.md](quickstart.md) | A first app: write, run in the Inspector and ChatGPT, test |
+| [ai-guide.md](ai-guide.md) ([llms.txt](llms.txt)) | The single-file reference for coding agents |
+| [examples/crm.md](examples/crm.md) | The reference app; code in [`examples/mcp-workspaces/crm`](../../examples/mcp-workspaces/crm) |
+| [`packages/app-spec`](../../packages/app-spec) | The manifest's JSON Schema and the conformance checks, independent of the SDK |
+| [future/](future/README.md) | Earlier, larger drafts: non-normative, not part of 1.0 |
 
-**Status.** The SDK is built: [`packages/mcp-workspaces`](../../packages/mcp-workspaces)
-(`@mcpw/server`, private for now), with unit tests. Clegra installs v1 apps
-from their URL. Open questions: Q1 (names), and everything listed in
-[future/](future/README.md).
+**Status.** SDK: [`packages/mcp-workspaces`](../../packages/mcp-workspaces)
+(`@mcpw/server`, private for now), with unit tests, a snapshot of the CRM's
+generated MCP output and the conformance checks. `npm run mcpw:test`,
+`npm run mcpw:crm`, `npm run mcpw:conformance -- <url>`.

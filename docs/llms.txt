@@ -1,24 +1,14 @@
-# MCP Workspaces v1
+# Apps that are also MCP servers (working name)
 
-> One MCP server (official TypeScript SDK, Streamable HTTP) that is also a complete business application: entities, actions, pages, fragments, agents. Plain MCP hosts (ChatGPT, Claude) get tools and MCP Apps views; workspace hosts (Clegra) read a JSON card and mount the app natively. SDK: `@mcpw/server` (placeholder name).
+> One typed object — `defineApp({ entities, actions, pages, fragments, agents, … })` from `@mcpw/server` — becomes a JSON manifest (for hosts that draw the app natively) and a plain, conformant MCP server with tools, annotations and MCP Apps views (for ChatGPT, Claude and any MCP client). No MCP extension required.
 
-## Docs
+## Start here
 
-- [Specification](spec.md): the v1 rules (normative)
-- [Quickstart](quickstart.md): run the CRM example, write and test a first app
-- [AI guide](ai-guide.md): rules and checklist for coding agents
-- [CRM example](examples/crm.md): companies, contacts, deals; permissions, confirmations, a dashboard, a custom view
+- [AI guide](ai-guide.md): the complete single-file reference for coding agents — the whole `defineApp` shape, the rules, the common mistakes, a full example. Read this one file to build an app.
 
-## API in one screen
+## More
 
-- `new McpWorkspacesServer({ name, title, version, description?, icons?, locale?, auth? })`
-- `registerEntity(name, { label, plural?, description?, icon?, schema: z.object(...).meta-annotated, permission?, get(id, ctx), list(query, ctx) })` → handle
-- field `.meta({ role: "title"|"subtitle"|"status"|"amount"|"date"|"person", label, ref, permission, filter, sort, search, labels, tones, currency, untrusted })`; `ref("entity")`
-- `registerAction(name, { entity?, title, description?, input?: z.object, readOnly?, confirm?: "always"|"optional"|"never", permission?, plainHosts? }, (input, ctx, record) => ({ message?, record?, data? }))`
-- `registerPage(name, { kind: "list", entity, columns, params?, query? } | { kind: "record", entity, sections? } | { kind: "dashboard", params?, fragments } | { kind: "custom", view: { html } } | { kind: "custom", url })`
-- `registerFragment(type, { title, description, params, template: "card"|"stat"|"list"|"chart", data } | { …, view: { html }, data })`
-- `registerAgent(name, { title, description, instructions, tools, tier })`, `registerPermission(id, { label, default? })`, `registerSetting(id, { label, type })`
-- `ctx`: `installation`, `person`, `permissions`, `can()`, `locale`, `t()`, `settings`, `call`, `host`, `notify()`, `uri()`
-- `WorkspaceError(code, message)`; codes `permission_denied`, `not_found`, `invalid_input`, `confirmation_required`, `conflict`, `internal`
-- Derived tools: `<entity>_list`, `<entity>_get`, `search`, `fetch`, actions (`<entity>_<action>` or `<action>`), `open_<page>`, `show_<fragment>`, `mcpw_resolve` (hosts only)
-- Card: `GET /.well-known/mcp-workspace.json` and resource `mcpw://<app>`
+- [Specification](spec.md): the manifest, the generated MCP server, enforcement, conformance (normative, short)
+- [Quickstart](quickstart.md): a first app, run in the MCP Inspector and ChatGPT, tested
+- [CRM example](examples/crm.md): the reference app; code in `examples/mcp-workspaces/crm/src/app.ts`
+- JSON Schema of the manifest: `packages/app-spec/schema/app-manifest.schema.json`
