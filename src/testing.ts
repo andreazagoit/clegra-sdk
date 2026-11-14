@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto"
 
-import type { McpWorkspacesServer } from "./server"
+import type { App } from "./define"
 
 /**
  * A test client (spec-level, over the real HTTP path): JSON-RPC to
@@ -19,7 +19,7 @@ export type TestClientOptions = {
   token?: string | null
 }
 
-export async function testClient(app: McpWorkspacesServer, options: TestClientOptions = {}) {
+export async function testClient(app: App, options: TestClientOptions = {}) {
   const token = options.token === undefined ? await app.devToken(options) : options.token
   let id = 0
   const rpc = async (method: string, params: Record<string, unknown>): Promise<{ status: number; result?: unknown; error?: { code: number; message: string } }> => {
@@ -54,7 +54,7 @@ export async function testClient(app: McpWorkspacesServer, options: TestClientOp
     /** A write as a workspace host does it after the person's «Confirm»: a call id and a proof. */
     async confirmed(name: string, args: Record<string, unknown>, call: string = randomUUID()): Promise<ToolCallResult> {
       const proof = await app.devConfirmation({ tool: name, args, call, ...(options.person ? { person: options.person } : {}) })
-      return this.call(name, args, { "mcpw/call": call, "mcpw/confirmation": proof })
+      return this.call(name, args, { mcpw: { call, confirmation: proof } })
     },
     async readResource(uri: string): Promise<{ uri: string; mimeType?: string; text?: string; _meta?: Record<string, unknown> }[]> {
       const r = await rpc("resources/read", { uri })

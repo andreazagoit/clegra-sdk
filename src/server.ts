@@ -4,7 +4,7 @@ import { createMcpHandler, inputRequired, inputResponse, McpServer, type CallToo
 import { z } from "zod"
 
 import { AuthError, DevAuthority, isLoopback, TokenVerifier, type AuthOptions, type Caller, type Person } from "./auth"
-import { manifestPath, manifestUri, SPEC_VERSION, type Manifest, type ManifestField } from "./manifest"
+import { MANIFEST_PATH, manifestUri, SPEC_VERSION, type Manifest, type ManifestField } from "./manifest"
 import { labelMap, localize, type Label } from "./labels"
 import { fieldsOf, jsonSchemaOf, plainSchema, type FieldInfo } from "./meaning"
 import { MemoryStore, type IdempotencyStore } from "./store"
@@ -864,7 +864,7 @@ export class AppServer {
         f.tool.name,
         {
           title,
-          description: `${t(f.config.description)} Shows it as a live fragment; don't repeat its data in full.`,
+          description: `${t(f.config.description).replace(/[.\s]*$/, "")}. Shows it as a live fragment; don't repeat its data in full.`,
           inputSchema: f.config.params,
           annotations: { title, ...read },
           _meta: this.#ui(f.config.view ? this.#fragmentViewUri(f.type) : this.#viewUri()),
@@ -967,7 +967,8 @@ export class AppServer {
           description: L(f.config.description),
           ...(f.config.icon ? { icon: f.config.icon } : {}),
           params: plainSchema(jsonSchemaOf(f.config.params, "input")) as Record<string, unknown>,
-          ...(f.config.template ? { template: f.config.template } : { view: this.#fragmentViewUri(f.type) }),
+          ...(f.config.template ? { template: f.config.template } : {}),
+          ...(f.config.view ? { view: this.#fragmentViewUri(f.type) } : {}),
           tool: f.tool,
           ...perm(f.config.permission, `fragment "${f.type}"`),
           ...(f.config.actions?.length ? { actions: f.config.actions.map((h) => h.name) } : {}),
@@ -1094,8 +1095,8 @@ export class AppServer {
     const resource = this.options.auth?.resource ?? `${origin}/mcp`
     const json = (body: unknown, status = 200, headers: Record<string, string> = {}) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", ...CORS, ...headers } })
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS })
-    if (url.pathname === manifestPath(this.name)) return json(this.manifest(), 200, { "cache-control": "public, max-age=30" })
-    if (url.pathname === "/" && request.method === "GET" && (request.headers.get("accept") ?? "").includes("application/json")) return json({ name: this.name, manifest: manifestPath(this.name), mcp: "/mcp" })
+    if (url.pathname === MANIFEST_PATH) return json(this.manifest(), 200, { "cache-control": "public, max-age=30" })
+    if (url.pathname === "/" && request.method === "GET" && (request.headers.get("accept") ?? "").includes("application/json")) return json({ name: this.name, manifest: MANIFEST_PATH, mcp: "/mcp" })
     if (url.pathname === "/health") return json({ ok: true, name: this.name, version: this.options.version })
     if (url.pathname === "/.well-known/oauth-protected-resource" || url.pathname === "/.well-known/oauth-protected-resource/mcp") {
       const auth = this.options.auth ?? {}
@@ -1108,7 +1109,7 @@ export class AppServer {
       const answered = await dev.handle(request, origin, resource)
       if (answered) return answered
     }
-    if (url.pathname !== "/mcp") return new Response(`${localize(this.options.title, this.locale, this.locale)}: MCP at /mcp, manifest at ${manifestPath(this.name)}`, { status: 404, headers: { "content-type": "text/plain; charset=utf-8" } })
+    if (url.pathname !== "/mcp") return new Response(`${localize(this.options.title, this.locale, this.locale)}: MCP at /mcp, manifest at ${MANIFEST_PATH}`, { status: 404, headers: { "content-type": "text/plain; charset=utf-8" } })
     const caller = await this.#caller(request, resource)
     if (caller instanceof Response) return caller
     const response = await this.#handler.fetch(request, { authInfo: { token: "verified", clientId: caller.issuer, scopes: [], extra: { caller } } })
@@ -1146,7 +1147,7 @@ export class AppServer {
     })
     await new Promise<void>((resolve) => http.listen(port, host, resolve))
     const url = `http://${host}:${port}`
-    console.log(`${localize(this.options.title, this.locale, this.locale)} — MCP ${url}/mcp · manifest ${url}${manifestPath(this.name)}`)
+    console.log(`${localize(this.options.title, this.locale, this.locale)} — MCP ${url}/mcp · manifest ${url}${MANIFEST_PATH}`)
     if (this.#dev) console.log(`DEV AUTH ON (never in production) — sign-in code: ${this.#dev.code}`)
     return { url, close: () => new Promise((resolve) => http.close(() => resolve())) }
   }

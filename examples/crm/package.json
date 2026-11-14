@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "MCP Workspaces v1 example: a small CRM (companies, contacts, deals) in memory, per installation. Invented data.",
+  "description": "Reference app: a small CRM (companies, contacts, deals) in memory, per installation \u2014 one defineApp object. Invented data.",
   "scripts": {
     "dev": "tsx watch src/main.ts",
     "start": "tsx src/main.ts",
@@ -16,6 +16,7 @@
   },
   "devDependencies": {
     "tsx": "^4.23.15",
-    "typescript": "^5"
+    "typescript": "^5",
+    "@mcpw/spec": "file:../../../packages/app-spec"
   }
 }

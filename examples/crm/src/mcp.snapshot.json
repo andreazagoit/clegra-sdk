@@ -1,0 +1,2614 @@
+{
+  "tools": [
+    {
+      "name": "company_list",
+      "title": "Companies",
+      "description": "A customer or prospect company. Lists companies with filters, sort and paging (pass `cursor` from the previous result's `next`).",
+      "annotations": {
+        "title": "Companies",
+        "readOnlyHint": true,
+        "idempotentHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "ui": "ui://crm/view",
+      "inputSchema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "city": {
+            "description": "City: a value, { in: [...] }, or a range { gte, lte }",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "in": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "in"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "gte": {
+                    "type": "string"
+                  },
+                  "lte": {
+                    "type": "string"
+                  }
+                }
+              }
+            ]
+          },
+          "industry": {
+            "description": "Industry: a value, { in: [...] }, or a range { gte, lte }",
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "manufacturing",
+                  "retail",
+                  "services",
+                  "software"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "in": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "manufacturing",
+                        "retail",
+                        "services",
+                        "software"
+                      ]
+                    }
+                  }
+                },
+                "required": [
+                  "in"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "gte": {
+                    "type": "string",
+                    "enum": [
+                      "manufacturing",
+                      "retail",
+                      "services",
+                      "software"
+                    ]
+                  },
+                  "lte": {
+                    "type": "string",
+                    "enum": [
+                      "manufacturing",
+                      "retail",
+                      "services",
+                      "software"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          "query": {
+            "description": "Text to search for",
+            "type": "string",
+            "maxLength": 200
+          },
+          "sort": {
+            "description": "Field to sort by",
+            "type": "string",
+            "enum": [
+              "name"
+            ]
+          },
+          "dir": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ]
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "company_get",
+      "title": "Company",
+      "description": "One company by id, with the actions available on it.",
+      "annotations": {
+        "title": "Company",
+        "readOnlyHint": true,
+        "idempotentHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "ui": "ui://crm/view",
+      "inputSchema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The company's id"
+          }
+        },
+        "required": [
+          "id"
+        ]
+      }
+    },
+    {
+      "name": "contact_list",
+      "title": "Contacts",
+      "description": "A person at a company. Lists contacts with filters, sort and paging (pass `cursor` from the previous result's `next`).",
+      "annotations": {
+        "title": "Contacts",
+        "readOnlyHint": true,
+        "idempotentHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "ui": "ui://crm/view",
+      "inputSchema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "company": {
+            "description": "Company: a value, { in: [...] }, or a range { gte, lte }",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "in": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "in"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "gte": {
+                    "type": "string"
+                  },
+                  "lte": {
+                    "type": "string"
+                  }
+                }
+              }
+            ]
+          },
+          "query": {
+            "description": "Text to search for",
+            "type": "string",
+            "maxLength": 200
+          },
+          "sort": {
+            "description": "Field to sort by",
+            "type": "string",
+            "enum": [
+              "name",
+              "lastCall"
+            ]
+          },
+          "dir": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ]
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "contact_get",
+      "title": "Contact",
+      "description": "One contact by id, with the actions available on it.",
+      "annotations": {
+        "title": "Contact",
+        "readOnlyHint": true,
+        "idempotentHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "ui": "ui://crm/view",
+      "inputSchema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The contact's id"
+          }
+        },
+        "required": [
+          "id"
+        ]
+      }
+    },
+    {
+      "name": "deal_list",
+      "title": "Deals",
+      "description": "A sales opportunity with a company. Lists deals with filters, sort and paging (pass `cursor` from the previous result's `next`).",
+      "annotations": {
+        "title": "Deals",
+        "readOnlyHint": true,
+        "idempotentHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "ui": "ui://crm/view",
+      "inputSchema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "company": {
+            "description": "Company: a value, { in: [...] }, or a range { gte, lte }",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "in": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "in"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "gte": {
+                    "type": "string"
+                  },
+                  "lte": {
+                    "type": "string"
+                  }
+                }
+              }
+            ]
+          },
+          "stage": {
+            "description": "Stage: a value, { in: [...] }, or a range { gte, lte }",
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "lead",
+                  "qualified",
+                  "proposal",
+                  "won",
+                  "lost"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "in": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "lead",
+                        "qualified",
+                        "proposal",
+                        "won",
+                        "lost"
+                      ]
+                    }
+                  }
+                },
+                "required": [
+                  "in"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "gte": {
+                    "type": "string",
+                    "enum": [
+                      "lead",
+                      "qualified",
+                      "proposal",
+                      "won",
+                      "lost"
+                    ]
+                  },
+                  "lte": {
+                    "type": "string",
+                    "enum": [
+                      "lead",
+                      "qualified",
+                      "proposal",
+                      "won",
+                      "lost"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          "closeDate": {
+            "description": "Close date: a value, { in: [...] }, or a range { gte, lte }",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "in": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "in"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "gte": {
+                    "type": "string"
+                  },
+                  "lte": {
+                    "type": "string"
+                  }
+                }
+              }
+            ]
+          },
+          "query": {
+            "description": "Text to search for",
+            "type": "string",
+            "maxLength": 200
+          },
+          "sort": {
+            "description": "Field to sort by",
+            "type": "string",
+            "enum": [
+              "value",
+              "closeDate"
+            ]
+          },
+          "dir": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ]
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "deal_get",
+      "title": "Deal",
+      "description": "One deal by id, with the actions available on it.",
+      "annotations": {
+        "title": "Deal",
+        "readOnlyHint": true,
+        "idempotentHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "ui": "ui://crm/view",
+      "inputSchema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The deal's id"
+          }
+        },
+        "required": [
+          "id"
+        ]
+      }
+    },
+    {
+      "name": "search",
+      "title": "Search",
+      "description": "Searches Companies, Contacts, Deals by text. Returns ids (URIs) to pass to fetch.",
+      "annotations": {
+        "readOnlyHint": true,
+        "idempotentHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "ui": "ui://crm/view",
+      "inputSchema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "query": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50
+          }
+        },
+        "required": [
+          "query"
+        ]
+      }
+    },
+    {
+      "name": "fetch",
+      "title": "Fetch",
+      "description": "One record by its id (a URI from search or a list), with all fields the caller may see.",
+      "annotations": {
+        "readOnlyHint": true,
+        "idempotentHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "ui": "ui://crm/view",
+      "inputSchema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The record's URI"
+          }
+        },
+        "required": [
+          "id"
+        ]
+      }
+    },
+    {
+      "name": "mcpw_resolve",
+      "title": "Resolve",
+      "description": "For hosts: fragment and record URIs resolved for the viewer.",
+      "annotations": {
+        "readOnlyHint": true,
+        "idempotentHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "ui": null,
+      "inputSchema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "uris": {
+            "maxItems": 50,
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "want": {
+            "type": "string",
+            "enum": [
+              "reference",
+              "fragment",
+              "snapshot"
+            ]
+          }
+        },
+        "required": [
+          "uris"
+        ]
+      }
+    },
+    {
+      "name": "deal_mark_won",
+      "title": "Mark as won",
+      "description": "Closes the deal as won. Only when the person says so (a change; the person confirms it first).",
+      "annotations": {
+        "title": "Mark as won",
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false
+      },
+      "ui": null,
+      "inputSchema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The deal's id"
+          },
+          "note": {
+            "label": {
+              "en": "Note",
+              "it": "Nota"
+            },
+            "type": "string",
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "id"
+        ]
+      }
+    },
+    {
+      "name": "deal_set_stage",
+      "title": "Move to stage",
+      "description": "Moves an open deal to another open stage, or to lost (a change).",
+      "annotations": {
+        "title": "Move to stage",
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false
+      },
+      "ui": null,
+      "inputSchema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The deal's id"
+          },
+          "stage": {
+            "type": "string",
+            "enum": [
+              "lead",
+              "qualified",
+              "proposal",
+              "lost"
+            ],
+            "label": {
+              "en": "Stage",
+              "it": "Fase"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "stage"
+        ]
+      }
+    },
+    {
+      "name": "contact_log_call",
+      "title": "Log a call",
+      "description": "Records that we called this contact today, with a note (a change; the person confirms it first).",
+      "annotations": {
+        "title": "Log a call",
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false
+      },
+      "ui": null,
+      "inputSchema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The contact's id"
+          },
+          "note": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "label": {
+              "en": "Note",
+              "it": "Nota"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "note"
+        ]
+      }
+    },
+    {
+      "name": "create_deal",
+      "title": "New deal",
+      "description": "Creates a deal for a company (a change; the person confirms it first).",
+      "annotations": {
+        "title": "New deal",
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false
+      },
+      "ui": null,
+      "inputSchema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 120,
+            "label": {
+              "en": "Name",
+              "it": "Nome"
+            }
+          },
+          "company": {
+            "type": "string",
+            "ref": "company",
+            "label": {
+              "en": "Company",
+              "it": "Azienda"
+            }
+          },
+          "value": {
+            "type": "number",
+            "minimum": 0,
+            "label": {
+              "en": "Value (EUR)",
+              "it": "Valore (EUR)"
+            }
+          },
+          "closeDate": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$",
+            "label": {
+              "en": "Close date",
+              "it": "Chiusura prevista"
+            }
+          }
+        },
+        "required": [
+          "name",
+          "company",
+          "value",
+          "closeDate"
+        ]
+      }
+    },
+    {
+      "name": "open_deals",
+      "title": "Deals",
+      "description": "Opens the page «Deals». Its parameters set the state it opens in.",
+      "annotations": {
+        "title": "Deals",
+        "readOnlyHint": true,
+        "idempotentHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "ui": "ui://crm/view",
+      "inputSchema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "company": {
+            "description": "Company: a value, { in: [...] }, or a range { gte, lte }",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "in": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "in"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "gte": {
+                    "type": "string"
+                  },
+                  "lte": {
+                    "type": "string"
+                  }
+                }
+              }
+            ]
+          },
+          "stage": {
+            "description": "Stage: a value, { in: [...] }, or a range { gte, lte }",
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "lead",
+                  "qualified",
+                  "proposal",
+                  "won",
+                  "lost"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "in": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "lead",
+                        "qualified",
+                        "proposal",
+                        "won",
+                        "lost"
+                      ]
+                    }
+                  }
+                },
+                "required": [
+                  "in"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "gte": {
+                    "type": "string",
+                    "enum": [
+                      "lead",
+                      "qualified",
+                      "proposal",
+                      "won",
+                      "lost"
+                    ]
+                  },
+                  "lte": {
+                    "type": "string",
+                    "enum": [
+                      "lead",
+                      "qualified",
+                      "proposal",
+                      "won",
+                      "lost"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          "closeDate": {
+            "description": "Close date: a value, { in: [...] }, or a range { gte, lte }",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "in": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "in"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "gte": {
+                    "type": "string"
+                  },
+                  "lte": {
+                    "type": "string"
+                  }
+                }
+              }
+            ]
+          },
+          "query": {
+            "description": "Text to search for",
+            "type": "string",
+            "maxLength": 200
+          },
+          "sort": {
+            "description": "Field to sort by",
+            "type": "string",
+            "enum": [
+              "value",
+              "closeDate"
+            ]
+          },
+          "dir": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ]
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "open_companies",
+      "title": "Companies",
+      "description": "Opens the page «Companies». Its parameters set the state it opens in.",
+      "annotations": {
+        "title": "Companies",
+        "readOnlyHint": true,
+        "idempotentHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "ui": "ui://crm/view",
+      "inputSchema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "city": {
+            "description": "City: a value, { in: [...] }, or a range { gte, lte }",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "in": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "in"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "gte": {
+                    "type": "string"
+                  },
+                  "lte": {
+                    "type": "string"
+                  }
+                }
+              }
+            ]
+          },
+          "industry": {
+            "description": "Industry: a value, { in: [...] }, or a range { gte, lte }",
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "manufacturing",
+                  "retail",
+                  "services",
+                  "software"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "in": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "manufacturing",
+                        "retail",
+                        "services",
+                        "software"
+                      ]
+                    }
+                  }
+                },
+                "required": [
+                  "in"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "gte": {
+                    "type": "string",
+                    "enum": [
+                      "manufacturing",
+                      "retail",
+                      "services",
+                      "software"
+                    ]
+                  },
+                  "lte": {
+                    "type": "string",
+                    "enum": [
+                      "manufacturing",
+                      "retail",
+                      "services",
+                      "software"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          "query": {
+            "description": "Text to search for",
+            "type": "string",
+            "maxLength": 200
+          },
+          "sort": {
+            "description": "Field to sort by",
+            "type": "string",
+            "enum": [
+              "name"
+            ]
+          },
+          "dir": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ]
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "open_contacts",
+      "title": "Contacts",
+      "description": "Opens the page «Contacts». Its parameters set the state it opens in.",
+      "annotations": {
+        "title": "Contacts",
+        "readOnlyHint": true,
+        "idempotentHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "ui": "ui://crm/view",
+      "inputSchema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "company": {
+            "description": "Company: a value, { in: [...] }, or a range { gte, lte }",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "in": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "in"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "gte": {
+                    "type": "string"
+                  },
+                  "lte": {
+                    "type": "string"
+                  }
+                }
+              }
+            ]
+          },
+          "query": {
+            "description": "Text to search for",
+            "type": "string",
+            "maxLength": 200
+          },
+          "sort": {
+            "description": "Field to sort by",
+            "type": "string",
+            "enum": [
+              "name",
+              "lastCall"
+            ]
+          },
+          "dir": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ]
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "open_pipeline",
+      "title": "Pipeline",
+      "description": "Opens the page «Pipeline». Its parameters set the state it opens in.",
+      "annotations": {
+        "title": "Pipeline",
+        "readOnlyHint": true,
+        "idempotentHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "ui": "ui://crm/pages/pipeline",
+      "inputSchema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "days": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 365
+          }
+        }
+      }
+    },
+    {
+      "name": "open_forecast",
+      "title": "Forecast",
+      "description": "Opens the page «Forecast»: A weighted forecast you can tune. Its parameters set the state it opens in.",
+      "annotations": {
+        "title": "Forecast",
+        "readOnlyHint": true,
+        "idempotentHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "ui": "ui://crm/pages/forecast",
+      "inputSchema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {}
+      }
+    },
+    {
+      "name": "show_pipeline_total",
+      "title": "Open pipeline",
+      "description": "The total value of open deals. Shows it as a live fragment; don't repeat its data in full.",
+      "annotations": {
+        "title": "Open pipeline",
+        "readOnlyHint": true,
+        "idempotentHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "ui": "ui://crm/view",
+      "inputSchema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {}
+      }
+    },
+    {
+      "name": "show_deals_by_stage",
+      "title": "Deals by stage",
+      "description": "How many deals are in each stage. Shows it as a live fragment; don't repeat its data in full.",
+      "annotations": {
+        "title": "Deals by stage",
+        "readOnlyHint": true,
+        "idempotentHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "ui": "ui://crm/view",
+      "inputSchema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {}
+      }
+    },
+    {
+      "name": "show_closing_soon",
+      "title": "Closing soon",
+      "description": "Open deals closing within some days. Shows it as a live fragment; don't repeat its data in full.",
+      "annotations": {
+        "title": "Closing soon",
+        "readOnlyHint": true,
+        "idempotentHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "ui": "ui://crm/view",
+      "inputSchema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "days": {
+            "default": 60,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 365
+          }
+        }
+      }
+    }
+  ],
+  "resources": [
+    {
+      "uri": "mcpw://crm",
+      "mimeType": "application/json"
+    },
+    {
+      "uri": "ui://crm/view",
+      "mimeType": "text/html;profile=mcp-app"
+    },
+    {
+      "uri": "ui://crm/pages/pipeline",
+      "mimeType": "text/html;profile=mcp-app"
+    },
+    {
+      "uri": "ui://crm/pages/forecast",
+      "mimeType": "text/html;profile=mcp-app"
+    }
+  ],
+  "manifest": {
+    "specVersion": "1.0",
+    "name": "crm",
+    "title": {
+      "en": "CRM",
+      "it": "CRM"
+    },
+    "version": "1.0.0",
+    "description": {
+      "en": "Companies, contacts and deals of a small sales team.",
+      "it": "Aziende, contatti e trattative di un piccolo team commerciale."
+    },
+    "locale": "en",
+    "mcp": {
+      "url": "/mcp"
+    },
+    "auth": {
+      "audience": "crm",
+      "authorizationServers": []
+    },
+    "view": "ui://crm/view",
+    "resolveTool": "mcpw_resolve",
+    "searchTool": "search",
+    "entities": [
+      {
+        "name": "company",
+        "label": {
+          "en": "Company",
+          "it": "Azienda"
+        },
+        "plural": {
+          "en": "Companies",
+          "it": "Aziende"
+        },
+        "description": {
+          "en": "A customer or prospect company",
+          "it": "Un'azienda cliente o potenziale"
+        },
+        "icon": "building-2",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "city": {
+              "type": "string"
+            },
+            "industry": {
+              "type": "string",
+              "enum": [
+                "manufacturing",
+                "retail",
+                "services",
+                "software"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "name",
+            "city",
+            "industry"
+          ],
+          "additionalProperties": false
+        },
+        "fields": [
+          {
+            "name": "id",
+            "type": "string",
+            "required": true,
+            "label": {
+              "en": "id"
+            }
+          },
+          {
+            "name": "name",
+            "type": "string",
+            "required": true,
+            "role": "title",
+            "label": {
+              "en": "Name",
+              "it": "Nome"
+            },
+            "sort": true,
+            "search": true
+          },
+          {
+            "name": "city",
+            "type": "string",
+            "required": true,
+            "role": "subtitle",
+            "label": {
+              "en": "City",
+              "it": "Città"
+            },
+            "filter": true
+          },
+          {
+            "name": "industry",
+            "type": "string",
+            "required": true,
+            "enum": [
+              "manufacturing",
+              "retail",
+              "services",
+              "software"
+            ],
+            "label": {
+              "en": "Industry",
+              "it": "Settore"
+            },
+            "filter": true,
+            "labels": {
+              "manufacturing": {
+                "en": "Manufacturing",
+                "it": "Manifattura"
+              },
+              "retail": {
+                "en": "Retail",
+                "it": "Commercio"
+              },
+              "services": {
+                "en": "Services",
+                "it": "Servizi"
+              },
+              "software": {
+                "en": "Software"
+              }
+            }
+          }
+        ],
+        "tools": {
+          "list": {
+            "name": "company_list",
+            "plain": true
+          },
+          "get": {
+            "name": "company_get",
+            "plain": true
+          }
+        },
+        "searchable": true
+      },
+      {
+        "name": "contact",
+        "label": {
+          "en": "Contact",
+          "it": "Contatto"
+        },
+        "plural": {
+          "en": "Contacts",
+          "it": "Contatti"
+        },
+        "description": {
+          "en": "A person at a company",
+          "it": "Una persona di un'azienda"
+        },
+        "icon": "user",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "email": {
+              "type": "string",
+              "title": "Email"
+            },
+            "company": {
+              "type": "string"
+            },
+            "lastCall": {
+              "type": "string"
+            },
+            "lastNote": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "name",
+            "email",
+            "company"
+          ],
+          "additionalProperties": false
+        },
+        "fields": [
+          {
+            "name": "id",
+            "type": "string",
+            "required": true,
+            "label": {
+              "en": "id"
+            }
+          },
+          {
+            "name": "name",
+            "type": "string",
+            "required": true,
+            "role": "title",
+            "label": {
+              "en": "Name",
+              "it": "Nome"
+            },
+            "sort": true,
+            "search": true
+          },
+          {
+            "name": "email",
+            "type": "string",
+            "required": true,
+            "role": "subtitle",
+            "label": {
+              "en": "Email"
+            },
+            "search": true
+          },
+          {
+            "name": "company",
+            "type": "string",
+            "required": true,
+            "label": {
+              "en": "Company",
+              "it": "Azienda"
+            },
+            "ref": "company",
+            "filter": true
+          },
+          {
+            "name": "lastCall",
+            "type": "string",
+            "required": false,
+            "role": "date",
+            "label": {
+              "en": "Last call",
+              "it": "Ultima chiamata"
+            },
+            "sort": true
+          },
+          {
+            "name": "lastNote",
+            "type": "string",
+            "required": false,
+            "label": {
+              "en": "Last note",
+              "it": "Ultima nota"
+            },
+            "untrusted": true
+          }
+        ],
+        "tools": {
+          "list": {
+            "name": "contact_list",
+            "plain": true
+          },
+          "get": {
+            "name": "contact_get",
+            "plain": true
+          }
+        },
+        "searchable": true
+      },
+      {
+        "name": "deal",
+        "label": {
+          "en": "Deal",
+          "it": "Trattativa"
+        },
+        "plural": {
+          "en": "Deals",
+          "it": "Trattative"
+        },
+        "description": {
+          "en": "A sales opportunity with a company",
+          "it": "Un'opportunità di vendita con un'azienda"
+        },
+        "icon": "briefcase",
+        "permission": "deals.view",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "company": {
+              "type": "string"
+            },
+            "stage": {
+              "type": "string",
+              "enum": [
+                "lead",
+                "qualified",
+                "proposal",
+                "won",
+                "lost"
+              ]
+            },
+            "value": {
+              "type": "number"
+            },
+            "closeDate": {
+              "type": "string"
+            },
+            "owner": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "name",
+            "company",
+            "stage",
+            "value",
+            "closeDate",
+            "owner"
+          ],
+          "additionalProperties": false
+        },
+        "fields": [
+          {
+            "name": "id",
+            "type": "string",
+            "required": true,
+            "label": {
+              "en": "id"
+            }
+          },
+          {
+            "name": "name",
+            "type": "string",
+            "required": true,
+            "role": "title",
+            "label": {
+              "en": "Deal",
+              "it": "Trattativa"
+            },
+            "search": true
+          },
+          {
+            "name": "company",
+            "type": "string",
+            "required": true,
+            "label": {
+              "en": "Company",
+              "it": "Azienda"
+            },
+            "ref": "company",
+            "filter": true
+          },
+          {
+            "name": "stage",
+            "type": "string",
+            "required": true,
+            "enum": [
+              "lead",
+              "qualified",
+              "proposal",
+              "won",
+              "lost"
+            ],
+            "role": "status",
+            "label": {
+              "en": "Stage",
+              "it": "Fase"
+            },
+            "filter": true,
+            "labels": {
+              "lead": {
+                "en": "Lead",
+                "it": "Contatto"
+              },
+              "qualified": {
+                "en": "Qualified",
+                "it": "Qualificata"
+              },
+              "proposal": {
+                "en": "Proposal",
+                "it": "Proposta"
+              },
+              "won": {
+                "en": "Won",
+                "it": "Vinta"
+              },
+              "lost": {
+                "en": "Lost",
+                "it": "Persa"
+              }
+            },
+            "tones": {
+              "lead": "neutral",
+              "qualified": "info",
+              "proposal": "warning",
+              "won": "success",
+              "lost": "danger"
+            }
+          },
+          {
+            "name": "value",
+            "type": "number",
+            "required": true,
+            "role": "amount",
+            "label": {
+              "en": "Value",
+              "it": "Valore"
+            },
+            "permission": "deals.values",
+            "sort": true,
+            "currency": "EUR"
+          },
+          {
+            "name": "closeDate",
+            "type": "string",
+            "required": true,
+            "role": "date",
+            "label": {
+              "en": "Close date",
+              "it": "Chiusura prevista"
+            },
+            "filter": true,
+            "sort": true
+          },
+          {
+            "name": "owner",
+            "type": "string",
+            "required": true,
+            "role": "person",
+            "label": {
+              "en": "Owner",
+              "it": "Responsabile"
+            }
+          }
+        ],
+        "tools": {
+          "list": {
+            "name": "deal_list",
+            "plain": true
+          },
+          "get": {
+            "name": "deal_get",
+            "plain": true
+          }
+        },
+        "searchable": true
+      }
+    ],
+    "actions": [
+      {
+        "name": "mark_won",
+        "tool": {
+          "name": "deal_mark_won",
+          "plain": true
+        },
+        "entity": "deal",
+        "title": {
+          "en": "Mark as won",
+          "it": "Segna come vinta"
+        },
+        "description": {
+          "en": "Closes the deal as won. Only when the person says so",
+          "it": "Chiude la trattativa come vinta. Solo se la persona lo dice"
+        },
+        "icon": "trophy",
+        "input": {
+          "type": "object",
+          "properties": {
+            "note": {
+              "type": "string",
+              "maxLength": 500
+            }
+          }
+        },
+        "readOnly": false,
+        "confirm": "always",
+        "permission": "deals.edit"
+      },
+      {
+        "name": "set_stage",
+        "tool": {
+          "name": "deal_set_stage",
+          "plain": true
+        },
+        "entity": "deal",
+        "title": {
+          "en": "Move to stage",
+          "it": "Sposta di fase"
+        },
+        "description": {
+          "en": "Moves an open deal to another open stage, or to lost",
+          "it": "Sposta una trattativa aperta in un'altra fase aperta, o tra le perse"
+        },
+        "input": {
+          "type": "object",
+          "properties": {
+            "stage": {
+              "type": "string",
+              "enum": [
+                "lead",
+                "qualified",
+                "proposal",
+                "lost"
+              ]
+            }
+          },
+          "required": [
+            "stage"
+          ]
+        },
+        "readOnly": false,
+        "confirm": "optional",
+        "permission": "deals.edit"
+      },
+      {
+        "name": "log_call",
+        "tool": {
+          "name": "contact_log_call",
+          "plain": true
+        },
+        "entity": "contact",
+        "title": {
+          "en": "Log a call",
+          "it": "Registra chiamata"
+        },
+        "description": {
+          "en": "Records that we called this contact today, with a note",
+          "it": "Registra che abbiamo chiamato oggi questo contatto, con una nota"
+        },
+        "icon": "phone",
+        "input": {
+          "type": "object",
+          "properties": {
+            "note": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500
+            }
+          },
+          "required": [
+            "note"
+          ]
+        },
+        "readOnly": false,
+        "confirm": "always",
+        "permission": "contacts.edit"
+      },
+      {
+        "name": "create_deal",
+        "tool": {
+          "name": "create_deal",
+          "plain": true
+        },
+        "title": {
+          "en": "New deal",
+          "it": "Nuova trattativa"
+        },
+        "description": {
+          "en": "Creates a deal for a company",
+          "it": "Crea una trattativa per un'azienda"
+        },
+        "icon": "plus",
+        "input": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 2,
+              "maxLength": 120
+            },
+            "company": {
+              "type": "string"
+            },
+            "value": {
+              "type": "number",
+              "minimum": 0
+            },
+            "closeDate": {
+              "type": "string",
+              "format": "date",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+            }
+          },
+          "required": [
+            "name",
+            "company",
+            "value",
+            "closeDate"
+          ]
+        },
+        "readOnly": false,
+        "confirm": "always",
+        "permission": "deals.edit"
+      }
+    ],
+    "pages": [
+      {
+        "name": "deals",
+        "kind": "list",
+        "title": {
+          "en": "Deals",
+          "it": "Trattative"
+        },
+        "icon": "briefcase",
+        "params": {
+          "type": "object",
+          "properties": {
+            "company": {
+              "description": "Company: a value, { in: [...] }, or a range { gte, lte }",
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "in": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "in"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "gte": {
+                      "type": "string"
+                    },
+                    "lte": {
+                      "type": "string"
+                    }
+                  }
+                }
+              ]
+            },
+            "stage": {
+              "description": "Stage: a value, { in: [...] }, or a range { gte, lte }",
+              "anyOf": [
+                {
+                  "type": "string",
+                  "enum": [
+                    "lead",
+                    "qualified",
+                    "proposal",
+                    "won",
+                    "lost"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "in": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "lead",
+                          "qualified",
+                          "proposal",
+                          "won",
+                          "lost"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "in"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "gte": {
+                      "type": "string",
+                      "enum": [
+                        "lead",
+                        "qualified",
+                        "proposal",
+                        "won",
+                        "lost"
+                      ]
+                    },
+                    "lte": {
+                      "type": "string",
+                      "enum": [
+                        "lead",
+                        "qualified",
+                        "proposal",
+                        "won",
+                        "lost"
+                      ]
+                    }
+                  }
+                }
+              ]
+            },
+            "closeDate": {
+              "description": "Close date: a value, { in: [...] }, or a range { gte, lte }",
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "in": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "in"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "gte": {
+                      "type": "string"
+                    },
+                    "lte": {
+                      "type": "string"
+                    }
+                  }
+                }
+              ]
+            },
+            "query": {
+              "description": "Text to search for",
+              "type": "string",
+              "maxLength": 200
+            },
+            "sort": {
+              "description": "Field to sort by",
+              "type": "string",
+              "enum": [
+                "value",
+                "closeDate"
+              ]
+            },
+            "dir": {
+              "type": "string",
+              "enum": [
+                "asc",
+                "desc"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        "entity": "deal",
+        "columns": [
+          "name",
+          "company",
+          "stage",
+          "value",
+          "closeDate",
+          "owner"
+        ],
+        "tool": {
+          "name": "open_deals",
+          "plain": true
+        }
+      },
+      {
+        "name": "companies",
+        "kind": "list",
+        "title": {
+          "en": "Companies",
+          "it": "Aziende"
+        },
+        "icon": "building-2",
+        "params": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "description": "City: a value, { in: [...] }, or a range { gte, lte }",
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "in": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "in"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "gte": {
+                      "type": "string"
+                    },
+                    "lte": {
+                      "type": "string"
+                    }
+                  }
+                }
+              ]
+            },
+            "industry": {
+              "description": "Industry: a value, { in: [...] }, or a range { gte, lte }",
+              "anyOf": [
+                {
+                  "type": "string",
+                  "enum": [
+                    "manufacturing",
+                    "retail",
+                    "services",
+                    "software"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "in": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "manufacturing",
+                          "retail",
+                          "services",
+                          "software"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "in"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "gte": {
+                      "type": "string",
+                      "enum": [
+                        "manufacturing",
+                        "retail",
+                        "services",
+                        "software"
+                      ]
+                    },
+                    "lte": {
+                      "type": "string",
+                      "enum": [
+                        "manufacturing",
+                        "retail",
+                        "services",
+                        "software"
+                      ]
+                    }
+                  }
+                }
+              ]
+            },
+            "query": {
+              "description": "Text to search for",
+              "type": "string",
+              "maxLength": 200
+            },
+            "sort": {
+              "description": "Field to sort by",
+              "type": "string",
+              "enum": [
+                "name"
+              ]
+            },
+            "dir": {
+              "type": "string",
+              "enum": [
+                "asc",
+                "desc"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        "entity": "company",
+        "columns": [
+          "name",
+          "city",
+          "industry"
+        ],
+        "tool": {
+          "name": "open_companies",
+          "plain": true
+        }
+      },
+      {
+        "name": "contacts",
+        "kind": "list",
+        "title": {
+          "en": "Contacts",
+          "it": "Contatti"
+        },
+        "icon": "users",
+        "params": {
+          "type": "object",
+          "properties": {
+            "company": {
+              "description": "Company: a value, { in: [...] }, or a range { gte, lte }",
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "in": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "in"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "gte": {
+                      "type": "string"
+                    },
+                    "lte": {
+                      "type": "string"
+                    }
+                  }
+                }
+              ]
+            },
+            "query": {
+              "description": "Text to search for",
+              "type": "string",
+              "maxLength": 200
+            },
+            "sort": {
+              "description": "Field to sort by",
+              "type": "string",
+              "enum": [
+                "name",
+                "lastCall"
+              ]
+            },
+            "dir": {
+              "type": "string",
+              "enum": [
+                "asc",
+                "desc"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        "entity": "contact",
+        "columns": [
+          "name",
+          "email",
+          "company",
+          "lastCall"
+        ],
+        "tool": {
+          "name": "open_contacts",
+          "plain": true
+        }
+      },
+      {
+        "name": "deal",
+        "kind": "record",
+        "title": {
+          "en": "Deal",
+          "it": "Trattativa"
+        },
+        "icon": "briefcase",
+        "params": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ]
+        },
+        "entity": "deal",
+        "tool": {
+          "name": "deal_get",
+          "plain": true
+        },
+        "sections": [
+          {
+            "title": {
+              "en": "Deal",
+              "it": "Trattativa"
+            },
+            "fields": [
+              "name",
+              "company",
+              "stage",
+              "value"
+            ]
+          },
+          {
+            "title": {
+              "en": "Planning",
+              "it": "Pianificazione"
+            },
+            "fields": [
+              "closeDate",
+              "owner"
+            ]
+          }
+        ]
+      },
+      {
+        "name": "pipeline",
+        "kind": "dashboard",
+        "title": {
+          "en": "Pipeline",
+          "it": "Pipeline"
+        },
+        "icon": "chart-column",
+        "permission": "deals.view",
+        "params": {
+          "type": "object",
+          "properties": {
+            "days": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 365
+            }
+          }
+        },
+        "tool": {
+          "name": "open_pipeline",
+          "plain": true
+        },
+        "view": "ui://crm/pages/pipeline"
+      },
+      {
+        "name": "forecast",
+        "kind": "custom",
+        "title": {
+          "en": "Forecast",
+          "it": "Previsione"
+        },
+        "icon": "calculator",
+        "permission": "deals.values",
+        "params": {
+          "type": "object",
+          "properties": {}
+        },
+        "tool": {
+          "name": "open_forecast",
+          "plain": true
+        },
+        "view": "ui://crm/pages/forecast"
+      },
+      {
+        "name": "company",
+        "kind": "record",
+        "title": {
+          "en": "Company",
+          "it": "Azienda"
+        },
+        "icon": "building-2",
+        "params": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ]
+        },
+        "entity": "company",
+        "tool": {
+          "name": "company_get",
+          "plain": true
+        },
+        "derived": true
+      },
+      {
+        "name": "contact",
+        "kind": "record",
+        "title": {
+          "en": "Contact",
+          "it": "Contatto"
+        },
+        "icon": "user",
+        "params": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ]
+        },
+        "entity": "contact",
+        "tool": {
+          "name": "contact_get",
+          "plain": true
+        },
+        "derived": true
+      }
+    ],
+    "fragments": [
+      {
+        "type": "company",
+        "title": {
+          "en": "Company",
+          "it": "Azienda"
+        },
+        "entity": "company",
+        "template": "record",
+        "params": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ]
+        },
+        "tool": {
+          "name": "company_get",
+          "plain": true
+        }
+      },
+      {
+        "type": "contact",
+        "title": {
+          "en": "Contact",
+          "it": "Contatto"
+        },
+        "entity": "contact",
+        "template": "record",
+        "params": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ]
+        },
+        "tool": {
+          "name": "contact_get",
+          "plain": true
+        }
+      },
+      {
+        "type": "deal",
+        "title": {
+          "en": "Deal",
+          "it": "Trattativa"
+        },
+        "entity": "deal",
+        "template": "record",
+        "params": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ]
+        },
+        "tool": {
+          "name": "deal_get",
+          "plain": true
+        },
+        "permission": "deals.view"
+      },
+      {
+        "type": "pipeline_total",
+        "title": {
+          "en": "Open pipeline",
+          "it": "Pipeline aperta"
+        },
+        "description": {
+          "en": "The total value of open deals",
+          "it": "Il valore totale delle trattative aperte"
+        },
+        "params": {
+          "type": "object",
+          "properties": {}
+        },
+        "template": "stat",
+        "tool": {
+          "name": "show_pipeline_total",
+          "plain": true
+        },
+        "permission": "deals.values"
+      },
+      {
+        "type": "deals_by_stage",
+        "title": {
+          "en": "Deals by stage",
+          "it": "Trattative per fase"
+        },
+        "description": {
+          "en": "How many deals are in each stage",
+          "it": "Quante trattative ci sono in ogni fase"
+        },
+        "params": {
+          "type": "object",
+          "properties": {}
+        },
+        "template": "chart",
+        "tool": {
+          "name": "show_deals_by_stage",
+          "plain": true
+        },
+        "permission": "deals.view"
+      },
+      {
+        "type": "closing_soon",
+        "title": {
+          "en": "Closing soon",
+          "it": "In chiusura"
+        },
+        "description": {
+          "en": "Open deals closing within some days",
+          "it": "Trattative aperte che chiudono entro alcuni giorni"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "days": {
+              "default": 60,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 365
+            }
+          }
+        },
+        "template": "list",
+        "tool": {
+          "name": "show_closing_soon",
+          "plain": true
+        },
+        "permission": "deals.view",
+        "actions": [
+          "create_deal"
+        ]
+      }
+    ],
+    "agents": [
+      {
+        "name": "sales_assistant",
+        "title": {
+          "en": "Sales assistant",
+          "it": "Assistente vendite"
+        },
+        "description": {
+          "en": "Finds deals, prepares follow-ups, moves deals between stages",
+          "it": "Trova trattative, prepara i richiami, sposta le trattative di fase"
+        },
+        "instructions": "You help a sales team. Find deals and contacts with search and the list tools; never guess amounts, read them. Propose a stage change or a won deal only when the person asks, and let them confirm. Suggest calling contacts not called in the last followUpDays days.",
+        "tools": [
+          "deal_list",
+          "deal_get",
+          "contact_list",
+          "contact_get",
+          "company_list",
+          "company_get",
+          "deal_set_stage",
+          "deal_mark_won",
+          "contact_log_call"
+        ],
+        "tier": "fast",
+        "starters": [
+          {
+            "en": "Which deals close this month?",
+            "it": "Quali trattative chiudono questo mese?"
+          }
+        ]
+      }
+    ],
+    "permissions": [
+      {
+        "id": "deals.view",
+        "label": {
+          "en": "See deals",
+          "it": "Vedere le trattative"
+        },
+        "default": true
+      },
+      {
+        "id": "deals.edit",
+        "label": {
+          "en": "Change deals",
+          "it": "Modificare le trattative"
+        },
+        "default": true
+      },
+      {
+        "id": "deals.values",
+        "label": {
+          "en": "See deal values",
+          "it": "Vedere i valori delle trattative"
+        },
+        "default": false
+      },
+      {
+        "id": "contacts.edit",
+        "label": {
+          "en": "Log calls with contacts",
+          "it": "Registrare le chiamate ai contatti"
+        },
+        "default": true
+      }
+    ],
+    "settings": [
+      {
+        "id": "followUpDays",
+        "label": {
+          "en": "Follow-up after (days)",
+          "it": "Richiamare dopo (giorni)"
+        },
+        "type": "number",
+        "required": false,
+        "default": 7
+      }
+    ]
+  }
+}

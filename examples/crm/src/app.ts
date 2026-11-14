@@ -1,10 +1,11 @@
-// The canonical v1 example (docs/mcp-workspaces/examples/crm.md): a small CRM
-// with companies, contacts and deals, in memory, one copy of the data per
-// installation. Invented data only.
-import { McpWorkspacesServer, ref, WorkspaceError, type AuthOptions, type Context } from "@mcpw/server"
+// The reference app (docs/mcp-workspaces/examples/crm.md): a small CRM with
+// companies, contacts and deals, in memory, one copy of the data per
+// installation. Invented data only. The whole app is the one object at the
+// bottom: `export default defineApp({ … })`.
+import { AppError, defineApp, ref, type AuthOptions, type Context, type Query } from "@mcpw/server"
 import { z } from "zod"
 
-// ------------------------------------------------------------------ server
+// ------------------------------------------------------------------ who may call
 
 /** How the server accepts callers: dev sign-in locally, plus the issuers given by the environment (a Clegra node). */
 export function authFromEnv(env: NodeJS.ProcessEnv = process.env): AuthOptions {
@@ -34,26 +35,7 @@ export function authFromEnv(env: NodeJS.ProcessEnv = process.env): AuthOptions {
   }
 }
 
-export const app = new McpWorkspacesServer({
-  name: "crm",
-  title: { en: "CRM", it: "CRM" },
-  version: "1.0.0",
-  description: { en: "Companies, contacts and deals of a small sales team.", it: "Aziende, contatti e trattative di un piccolo team commerciale." },
-  locale: "en",
-  instructions: "A CRM. Use search or the *_list tools to find records, *_get for one record, open_pipeline for the overview. Changes need the person's confirmation.",
-  auth: authFromEnv(),
-})
-
-// ------------------------------------------------------------------ permissions and settings
-
-export const canViewDeals = app.registerPermission("deals.view", { label: { en: "See deals", it: "Vedere le trattative" }, default: true })
-export const canEditDeals = app.registerPermission("deals.edit", { label: { en: "Change deals", it: "Modificare le trattative" }, default: true })
-export const canSeeValues = app.registerPermission("deals.values", { label: { en: "See deal values", it: "Vedere i valori delle trattative" } })
-export const canEditContacts = app.registerPermission("contacts.edit", { label: { en: "Log calls with contacts", it: "Registrare le chiamate ai contatti" }, default: true })
-
-app.registerSetting("followUpDays", { label: { en: "Follow-up after (days)", it: "Richiamare dopo (giorni)" }, type: "number", default: 7 })
-
-// ------------------------------------------------------------------ entities
+// ------------------------------------------------------------------ schemas (fields carry their meaning)
 
 export const STAGES = ["lead", "qualified", "proposal", "won", "lost"] as const
 const stageLabels = {
@@ -144,7 +126,7 @@ export function resetData() {
 }
 
 /** A generic in-memory list: filters (value, in, range), text, sort, cursor. */
-function listOf<T extends Record<string, unknown>>(rows: T[], q: import("@mcpw/server").Query, textFields: (keyof T)[]) {
+function listOf<T extends Record<string, unknown>>(rows: T[], q: Query, textFields: (keyof T)[]) {
   const match = (row: T) =>
     Object.entries(q.filters).every(([field, f]) => {
       const v = row[field] as string | number | undefined
@@ -163,222 +145,210 @@ function listOf<T extends Record<string, unknown>>(rows: T[], q: import("@mcpw/s
   return { rows: all.slice(from, to), total: all.length, ...(to < all.length ? { next: String(to) } : {}) }
 }
 
-export const CompanyEntity = app.registerEntity("company", {
-  label: { en: "Company", it: "Azienda" },
-  plural: { en: "Companies", it: "Aziende" },
-  description: { en: "A customer or prospect company", it: "Un'azienda cliente o potenziale" },
-  icon: "building-2",
-  schema: companySchema,
-  get: (id, ctx) => dataOf(ctx).companies.get(id) ?? null,
-  list: (q, ctx) => listOf([...dataOf(ctx).companies.values()], q, ["name"]),
-})
-
-export const ContactEntity = app.registerEntity("contact", {
-  label: { en: "Contact", it: "Contatto" },
-  plural: { en: "Contacts", it: "Contatti" },
-  description: { en: "A person at a company", it: "Una persona di un'azienda" },
-  icon: "user",
-  schema: contactSchema,
-  get: (id, ctx) => dataOf(ctx).contacts.get(id) ?? null,
-  list: (q, ctx) => listOf([...dataOf(ctx).contacts.values()], q, ["name", "email"]),
-})
-
-export const DealEntity = app.registerEntity("deal", {
-  label: { en: "Deal", it: "Trattativa" },
-  plural: { en: "Deals", it: "Trattative" },
-  description: { en: "A sales opportunity with a company", it: "Un'opportunità di vendita con un'azienda" },
-  icon: "briefcase",
-  schema: dealSchema,
-  permission: canViewDeals,
-  get: (id, ctx) => dataOf(ctx).deals.get(id) ?? null,
-  list: (q, ctx) => listOf([...dataOf(ctx).deals.values()], q, ["name"]),
-})
-
-// ------------------------------------------------------------------ actions
-
-export const markWon = app.registerAction(
-  "mark_won",
-  {
-    entity: DealEntity,
-    title: { en: "Mark as won", it: "Segna come vinta" },
-    description: { en: "Closes the deal as won. Only when the person says so", it: "Chiude la trattativa come vinta. Solo se la persona lo dice" },
-    icon: "trophy",
-    input: z.object({ note: z.string().max(500).optional().meta({ label: { en: "Note", it: "Nota" } }) }),
-    confirm: "always",
-    permission: canEditDeals,
-  },
-  (input, ctx, deal) => {
-    if (deal.stage === "won" || deal.stage === "lost") throw new WorkspaceError("conflict", ctx.t({ en: `${deal.name} is already closed.`, it: `${deal.name} è già chiusa.` }))
-    dataOf(ctx).deals.set(deal.id, { ...deal, stage: "won", closeDate: new Date().toISOString().slice(0, 10) })
-    ctx.notify({ title: { en: `Deal won: ${deal.name}`, it: `Trattativa vinta: ${deal.name}` }, uri: ctx.uri("deal", deal.id) })
-    return { message: ctx.t({ en: `${deal.name} marked as won.`, it: `${deal.name} segnata come vinta.` }), record: deal.id }
-  },
-)
-
-export const setStage = app.registerAction(
-  "set_stage",
-  {
-    entity: DealEntity,
-    title: { en: "Move to stage", it: "Sposta di fase" },
-    description: { en: "Moves an open deal to another open stage, or to lost", it: "Sposta una trattativa aperta in un'altra fase aperta, o tra le perse" },
-    input: z.object({ stage: z.enum(["lead", "qualified", "proposal", "lost"]).meta({ label: { en: "Stage", it: "Fase" } }) }),
-    confirm: "optional",
-    permission: canEditDeals,
-  },
-  (input, ctx, deal) => {
-    if (deal.stage === "won" || deal.stage === "lost") throw new WorkspaceError("conflict", ctx.t({ en: "Closed deals don't move.", it: "Le trattative chiuse non si spostano." }))
-    dataOf(ctx).deals.set(deal.id, { ...deal, stage: input.stage })
-    return { message: ctx.t({ en: `${deal.name}: now ${stageLabels[input.stage].en}.`, it: `${deal.name}: ora ${stageLabels[input.stage].it}.` }), record: deal.id }
-  },
-)
-
-export const logCall = app.registerAction(
-  "log_call",
-  {
-    entity: ContactEntity,
-    title: { en: "Log a call", it: "Registra chiamata" },
-    description: { en: "Records that we called this contact today, with a note", it: "Registra che abbiamo chiamato oggi questo contatto, con una nota" },
-    icon: "phone",
-    input: z.object({ note: z.string().min(1).max(500).meta({ label: { en: "Note", it: "Nota" } }) }),
-    permission: canEditContacts,
-  },
-  (input, ctx, contact) => {
-    dataOf(ctx).contacts.set(contact.id, { ...contact, lastCall: new Date().toISOString().slice(0, 10), lastNote: input.note })
-    return { message: ctx.t({ en: `Call with ${contact.name} logged.`, it: `Chiamata con ${contact.name} registrata.` }), record: contact.id }
-  },
-)
-
-export const createDeal = app.registerAction(
-  "create_deal",
-  {
-    title: { en: "New deal", it: "Nuova trattativa" },
-    description: { en: "Creates a deal for a company", it: "Crea una trattativa per un'azienda" },
-    icon: "plus",
-    input: z.object({
-      name: z.string().min(2).max(120).meta({ label: { en: "Name", it: "Nome" } }),
-      company: ref("company").meta({ label: { en: "Company", it: "Azienda" } }),
-      value: z.number().min(0).meta({ label: { en: "Value (EUR)", it: "Valore (EUR)" } }),
-      closeDate: z.iso.date().meta({ label: { en: "Close date", it: "Chiusura prevista" } }),
-    }),
-    permission: canEditDeals,
-  },
-  (input, ctx) => {
-    const d = dataOf(ctx)
-    if (!d.companies.has(input.company)) throw new WorkspaceError("invalid_input", ctx.t({ en: `Unknown company ${input.company}.`, it: `Azienda ${input.company} sconosciuta.` }))
-    const id = `d${++d.seq}`
-    d.deals.set(id, { id, ...input, stage: "lead", owner: ctx.person?.id ?? "unknown" })
-    return { message: ctx.t({ en: `Deal «${input.name}» created.`, it: `Trattativa «${input.name}» creata.` }), record: ctx.uri("deal", id) }
-  },
-)
-
-// ------------------------------------------------------------------ fragments
-
 const openDeals = (ctx: Context) => [...dataOf(ctx).deals.values()].filter((d) => d.stage !== "won" && d.stage !== "lost")
 
-export const pipelineTotal = app.registerFragment("pipeline_total", {
-  title: { en: "Open pipeline", it: "Pipeline aperta" },
-  description: { en: "The total value of open deals", it: "Il valore totale delle trattative aperte" },
-  params: z.object({}),
-  permission: canSeeValues,
-  template: "stat",
-  data: (_p, ctx) => {
-    const open = openDeals(ctx)
-    return { label: ctx.t({ en: `${open.length} open deals`, it: `${open.length} trattative aperte` }), value: open.reduce((s, d) => s + d.value, 0), format: "money", currency: "EUR" }
+// ------------------------------------------------------------------ the app
+
+export const app = defineApp({
+  name: "crm",
+  title: { en: "CRM", it: "CRM" },
+  version: "1.0.0",
+  description: { en: "Companies, contacts and deals of a small sales team.", it: "Aziende, contatti e trattative di un piccolo team commerciale." },
+  locale: "en",
+  instructions: "A CRM. Use search or the *_list tools to find records, *_get for one record, open_pipeline for the overview. Changes need the person's confirmation.",
+  auth: authFromEnv(),
+
+  permissions: {
+    "deals.view": { label: { en: "See deals", it: "Vedere le trattative" }, default: true },
+    "deals.edit": { label: { en: "Change deals", it: "Modificare le trattative" }, default: true },
+    "deals.values": { label: { en: "See deal values", it: "Vedere i valori delle trattative" } },
+    "contacts.edit": { label: { en: "Log calls with contacts", it: "Registrare le chiamate ai contatti" }, default: true },
+  },
+
+  settings: {
+    followUpDays: { label: { en: "Follow-up after (days)", it: "Richiamare dopo (giorni)" }, type: "number", default: 7 },
+  },
+
+  entities: {
+    company: {
+      label: { en: "Company", it: "Azienda" },
+      plural: { en: "Companies", it: "Aziende" },
+      description: { en: "A customer or prospect company", it: "Un'azienda cliente o potenziale" },
+      icon: "building-2",
+      schema: companySchema,
+      get: (id, ctx) => dataOf(ctx).companies.get(id) ?? null,
+      list: (q, ctx) => listOf([...dataOf(ctx).companies.values()], q, ["name"]),
+    },
+    contact: {
+      label: { en: "Contact", it: "Contatto" },
+      plural: { en: "Contacts", it: "Contatti" },
+      description: { en: "A person at a company", it: "Una persona di un'azienda" },
+      icon: "user",
+      schema: contactSchema,
+      get: (id, ctx) => dataOf(ctx).contacts.get(id) ?? null,
+      list: (q, ctx) => listOf([...dataOf(ctx).contacts.values()], q, ["name", "email"]),
+    },
+    deal: {
+      label: { en: "Deal", it: "Trattativa" },
+      plural: { en: "Deals", it: "Trattative" },
+      description: { en: "A sales opportunity with a company", it: "Un'opportunità di vendita con un'azienda" },
+      icon: "briefcase",
+      schema: dealSchema,
+      permission: "deals.view",
+      get: (id, ctx) => dataOf(ctx).deals.get(id) ?? null,
+      list: (q, ctx) => listOf([...dataOf(ctx).deals.values()], q, ["name"]),
+    },
+  },
+
+  // Writes reach plain MCP clients (ChatGPT, Claude) only with `expose: { plain: true }`.
+  actions: {
+    mark_won: {
+      on: "deal",
+      title: { en: "Mark as won", it: "Segna come vinta" },
+      description: { en: "Closes the deal as won. Only when the person says so", it: "Chiude la trattativa come vinta. Solo se la persona lo dice" },
+      icon: "trophy",
+      input: z.object({ note: z.string().max(500).optional().meta({ label: { en: "Note", it: "Nota" } }) }),
+      confirm: true,
+      permission: "deals.edit",
+      expose: { plain: true },
+      run: (_input, ctx, deal) => {
+        if (deal.stage === "won" || deal.stage === "lost") throw new AppError("conflict", ctx.t({ en: `${deal.name} is already closed.`, it: `${deal.name} è già chiusa.` }))
+        dataOf(ctx).deals.set(deal.id, { ...deal, stage: "won", closeDate: new Date().toISOString().slice(0, 10) })
+        ctx.notify({ title: { en: `Deal won: ${deal.name}`, it: `Trattativa vinta: ${deal.name}` }, uri: ctx.uri("deal", deal.id) })
+        return { message: ctx.t({ en: `${deal.name} marked as won.`, it: `${deal.name} segnata come vinta.` }), record: deal.id }
+      },
+    },
+    set_stage: {
+      on: "deal",
+      title: { en: "Move to stage", it: "Sposta di fase" },
+      description: { en: "Moves an open deal to another open stage, or to lost", it: "Sposta una trattativa aperta in un'altra fase aperta, o tra le perse" },
+      input: z.object({ stage: z.enum(["lead", "qualified", "proposal", "lost"]).meta({ label: { en: "Stage", it: "Fase" } }) }),
+      confirm: "optional",
+      permission: "deals.edit",
+      expose: { plain: true },
+      run: (input, ctx, deal) => {
+        if (deal.stage === "won" || deal.stage === "lost") throw new AppError("conflict", ctx.t({ en: "Closed deals don't move.", it: "Le trattative chiuse non si spostano." }))
+        dataOf(ctx).deals.set(deal.id, { ...deal, stage: input.stage })
+        return { message: ctx.t({ en: `${deal.name}: now ${stageLabels[input.stage].en}.`, it: `${deal.name}: ora ${stageLabels[input.stage].it}.` }), record: deal.id }
+      },
+    },
+    log_call: {
+      on: "contact",
+      title: { en: "Log a call", it: "Registra chiamata" },
+      description: { en: "Records that we called this contact today, with a note", it: "Registra che abbiamo chiamato oggi questo contatto, con una nota" },
+      icon: "phone",
+      input: z.object({ note: z.string().min(1).max(500).meta({ label: { en: "Note", it: "Nota" } }) }),
+      permission: "contacts.edit",
+      expose: { plain: true },
+      run: (input, ctx, contact) => {
+        dataOf(ctx).contacts.set(contact.id, { ...contact, lastCall: new Date().toISOString().slice(0, 10), lastNote: input.note })
+        return { message: ctx.t({ en: `Call with ${contact.name} logged.`, it: `Chiamata con ${contact.name} registrata.` }), record: contact.id }
+      },
+    },
+    create_deal: {
+      title: { en: "New deal", it: "Nuova trattativa" },
+      description: { en: "Creates a deal for a company", it: "Crea una trattativa per un'azienda" },
+      icon: "plus",
+      input: z.object({
+        name: z.string().min(2).max(120).meta({ label: { en: "Name", it: "Nome" } }),
+        company: ref("company").meta({ label: { en: "Company", it: "Azienda" } }),
+        value: z.number().min(0).meta({ label: { en: "Value (EUR)", it: "Valore (EUR)" } }),
+        closeDate: z.iso.date().meta({ label: { en: "Close date", it: "Chiusura prevista" } }),
+      }),
+      permission: "deals.edit",
+      expose: { plain: true },
+      run: (input, ctx) => {
+        const d = dataOf(ctx)
+        if (!d.companies.has(input.company)) throw new AppError("invalid_input", ctx.t({ en: `Unknown company ${input.company}.`, it: `Azienda ${input.company} sconosciuta.` }))
+        const id = `d${++d.seq}`
+        d.deals.set(id, { id, ...input, stage: "lead", owner: ctx.person?.id ?? "unknown" })
+        return { message: ctx.t({ en: `Deal «${input.name}» created.`, it: `Trattativa «${input.name}» creata.` }), record: ctx.uri("deal", id) }
+      },
+    },
+  },
+
+  fragments: {
+    pipeline_total: {
+      title: { en: "Open pipeline", it: "Pipeline aperta" },
+      description: { en: "The total value of open deals", it: "Il valore totale delle trattative aperte" },
+      params: z.object({}),
+      permission: "deals.values",
+      template: "stat",
+      data: (_p, ctx) => {
+        const open = openDeals(ctx)
+        return { label: ctx.t({ en: `${open.length} open deals`, it: `${open.length} trattative aperte` }), value: open.reduce((s, d) => s + d.value, 0), format: "money", currency: "EUR" }
+      },
+    },
+    deals_by_stage: {
+      title: { en: "Deals by stage", it: "Trattative per fase" },
+      description: { en: "How many deals are in each stage", it: "Quante trattative ci sono in ogni fase" },
+      params: z.object({}),
+      permission: "deals.view",
+      template: "chart",
+      data: (_p, ctx) => ({ kind: "bar", points: STAGES.map((s) => ({ label: ctx.t(stageLabels[s]), value: [...dataOf(ctx).deals.values()].filter((d) => d.stage === s).length })) }),
+    },
+    closing_soon: {
+      title: { en: "Closing soon", it: "In chiusura" },
+      description: { en: "Open deals closing within some days", it: "Trattative aperte che chiudono entro alcuni giorni" },
+      params: z.object({ days: z.number().int().min(1).max(365).default(60) }),
+      permission: "deals.view",
+      template: "list",
+      actions: ["create_deal"],
+      data: (p, ctx) => {
+        const until = new Date(Date.now() + p.days * 86_400_000).toISOString().slice(0, 10)
+        return {
+          items: openDeals(ctx)
+            .filter((d) => d.closeDate <= until)
+            .sort((a, b) => a.closeDate.localeCompare(b.closeDate))
+            .map((d) => ({ title: d.name, subtitle: d.closeDate, status: ctx.t(stageLabels[d.stage]), uri: ctx.uri("deal", d.id) })),
+        }
+      },
+    },
+  },
+
+  pages: {
+    deals: { title: { en: "Deals", it: "Trattative" }, icon: "briefcase", list: "deal", columns: ["name", "company", "stage", "value", "closeDate", "owner"] },
+    companies: { title: { en: "Companies", it: "Aziende" }, icon: "building-2", list: "company", columns: ["name", "city", "industry"] },
+    contacts: { title: { en: "Contacts", it: "Contatti" }, icon: "users", list: "contact", columns: ["name", "email", "company", "lastCall"] },
+    deal: {
+      record: "deal",
+      sections: [
+        { title: { en: "Deal", it: "Trattativa" }, fields: ["name", "company", "stage", "value"] },
+        { title: { en: "Planning", it: "Pianificazione" }, fields: ["closeDate", "owner"] },
+      ],
+    },
+    pipeline: {
+      title: { en: "Pipeline", it: "Pipeline" },
+      icon: "chart-column",
+      permission: "deals.view",
+      params: z.object({ days: z.number().int().min(1).max(365).optional() }),
+      dashboard: (p: { days?: number }) => [
+        { type: "pipeline_total", params: {}, size: "small" },
+        { type: "deals_by_stage", params: {}, size: "medium" },
+        { type: "closing_soon", params: { days: p.days ?? 60 }, size: "medium" },
+      ],
+    },
+    // A custom page: our own MCP Apps document (forecast-view.ts) instead of a generated view.
+    forecast: {
+      title: { en: "Forecast", it: "Previsione" },
+      icon: "calculator",
+      description: { en: "A weighted forecast you can tune", it: "Una previsione pesata da regolare" },
+      permission: "deals.values",
+      view: { html: () => import("./forecast-view").then((m) => m.forecastHtml) },
+    },
+  },
+
+  agents: {
+    sales_assistant: {
+      title: { en: "Sales assistant", it: "Assistente vendite" },
+      description: { en: "Finds deals, prepares follow-ups, moves deals between stages", it: "Trova trattative, prepara i richiami, sposta le trattative di fase" },
+      instructions:
+        "You help a sales team. Find deals and contacts with search and the list tools; never guess amounts, read them. Propose a stage change or a won deal only when the person asks, and let them confirm. Suggest calling contacts not called in the last followUpDays days.",
+      uses: ["deal", "contact", "company", "set_stage", "mark_won", "log_call"],
+      tier: "fast",
+      starters: [{ en: "Which deals close this month?", it: "Quali trattative chiudono questo mese?" }],
+    },
   },
 })
 
-export const dealsByStage = app.registerFragment("deals_by_stage", {
-  title: { en: "Deals by stage", it: "Trattative per fase" },
-  description: { en: "How many deals are in each stage", it: "Quante trattative ci sono in ogni fase" },
-  params: z.object({}),
-  template: "chart",
-  data: (_p, ctx) => ({
-    kind: "bar",
-    points: STAGES.map((s) => ({ label: ctx.t(stageLabels[s]), value: [...dataOf(ctx).deals.values()].filter((d) => d.stage === s).length })),
-  }),
-})
-
-export const closingSoon = app.registerFragment("closing_soon", {
-  title: { en: "Closing soon", it: "In chiusura" },
-  description: { en: "Open deals closing within some days", it: "Trattative aperte che chiudono entro alcuni giorni" },
-  params: z.object({ days: z.number().int().min(1).max(365).default(60) }),
-  template: "list",
-  actions: [createDeal],
-  data: (p, ctx) => {
-    const until = new Date(Date.now() + p.days * 86_400_000).toISOString().slice(0, 10)
-    return {
-      items: openDeals(ctx)
-        .filter((d) => d.closeDate <= until)
-        .sort((a, b) => a.closeDate.localeCompare(b.closeDate))
-        .map((d) => ({ title: d.name, subtitle: d.closeDate, status: ctx.t(stageLabels[d.stage]), uri: ctx.uri("deal", d.id) })),
-    }
-  },
-})
-
-// ------------------------------------------------------------------ pages
-
-app.registerPage("deals", {
-  kind: "list",
-  title: { en: "Deals", it: "Trattative" },
-  icon: "briefcase",
-  entity: DealEntity,
-  columns: ["name", "company", "stage", "value", "closeDate", "owner"],
-})
-
-app.registerPage("companies", {
-  kind: "list",
-  title: { en: "Companies", it: "Aziende" },
-  icon: "building-2",
-  entity: CompanyEntity,
-  columns: ["name", "city", "industry"],
-})
-
-app.registerPage("contacts", {
-  kind: "list",
-  title: { en: "Contacts", it: "Contatti" },
-  icon: "users",
-  entity: ContactEntity,
-  columns: ["name", "email", "company", "lastCall"],
-})
-
-app.registerPage("deal", {
-  kind: "record",
-  entity: DealEntity,
-  sections: [
-    { title: { en: "Deal", it: "Trattativa" }, fields: ["name", "company", "stage", "value"] },
-    { title: { en: "Planning", it: "Pianificazione" }, fields: ["closeDate", "owner"] },
-  ],
-})
-
-app.registerPage("pipeline", {
-  kind: "dashboard",
-  title: { en: "Pipeline", it: "Pipeline" },
-  icon: "chart-column",
-  params: z.object({ days: z.number().int().min(1).max(365).optional() }),
-  fragments: (p) => [
-    { type: "pipeline_total", params: {}, size: "small" },
-    { type: "deals_by_stage", params: {}, size: "medium" },
-    { type: "closing_soon", params: { days: p.days ?? 60 }, size: "medium" },
-  ],
-})
-
-app.registerPage("forecast", {
-  kind: "custom",
-  title: { en: "Forecast", it: "Previsione" },
-  icon: "calculator",
-  description: { en: "A weighted forecast you can tune (an MCP Apps view)", it: "Una previsione pesata da regolare (una vista MCP Apps)" },
-  permission: canSeeValues,
-  view: { html: () => import("./forecast-view").then((m) => m.forecastHtml) },
-})
-
-// ------------------------------------------------------------------ agent
-
-app.registerAgent("sales_assistant", {
-  title: { en: "Sales assistant", it: "Assistente vendite" },
-  description: { en: "Finds deals, prepares follow-ups, moves deals between stages", it: "Trova trattative, prepara i richiami, sposta le trattative di fase" },
-  instructions:
-    "You help a sales team. Find deals and contacts with search and the list tools; never guess amounts, read them. Propose a stage change or a won deal only when the person asks, and let them confirm. Suggest calling contacts not called in the last followUpDays days.",
-  tools: [DealEntity, ContactEntity, CompanyEntity, setStage, markWon, logCall],
-  tier: "fast",
-  starters: [{ en: "Which deals close this month?", it: "Quali trattative chiudono questo mese?" }],
-})
+export default app

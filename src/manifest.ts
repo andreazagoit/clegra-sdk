@@ -2,13 +2,14 @@ import { z } from "zod"
 
 /**
  * THE MANIFEST (spec §2): the app's definition without its code, as pure
- * JSON. Hosts read it with one fetch (`/.well-known/<name>.json`) or as the
+ * JSON. Hosts read it with one fetch (`/.well-known/app-manifest.json`) or as the
  * MCP resource `mcpw://<name>`. This Zod schema is the source of the
  * published JSON Schema (schema/manifest.schema.json, `npm run schema`).
  */
 
 export const SPEC_VERSION = "1.0"
-export const manifestPath = (name: string) => `/.well-known/${name}.json`
+/** Where every app serves its manifest (working name; the final one is chosen before publishing). */
+export const MANIFEST_PATH = "/.well-known/app-manifest.json"
 export const manifestUri = (name: string) => `mcpw://${name}`
 
 const labelMap = z.record(z.string(), z.string()).describe("A label per locale (BCP 47 → text)")

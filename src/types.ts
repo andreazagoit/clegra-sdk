@@ -59,7 +59,7 @@ export type EntityConfig<S extends z.ZodObject> = {
   view?: ViewSource
 }
 
-/** What `registerEntity` returns: pass it where an entity is wanted. */
+/** An entity, as the SDK knows it once defined. */
 export type EntityHandle<S extends z.ZodObject = z.ZodObject> = {
   readonly kind: "entity"
   readonly name: string
@@ -139,7 +139,7 @@ export type FragmentConfig<P extends z.ZodObject, T extends Template> = {
   size?: "small" | "medium" | "large"
   expose?: Exposure
 } & (
-  | { template: T; data: (params: z.infer<P>, ctx: Context) => Promise<TemplateData[T] | null> | TemplateData[T] | null; view?: never }
+  | { template: T; data: (params: z.infer<P>, ctx: Context) => Promise<TemplateData[T] | null> | TemplateData[T] | null; view?: ViewSource }
   | { view: ViewSource; data: (params: z.infer<P>, ctx: Context) => Promise<Record<string, unknown> | null> | Record<string, unknown> | null; template?: never }
 )
 

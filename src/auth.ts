@@ -44,7 +44,7 @@ export type Caller = {
 }
 
 /** The `mcpw` claim of an access token. */
-export type McpwClaim = {
+export type HostClaim = {
   installation: string
   person?: Person
   permissions?: string[]
@@ -153,7 +153,7 @@ export class TokenVerifier {
     } catch (error) {
       throw new AuthError(error instanceof Error ? error.message : "invalid token")
     }
-    const m = payload.mcpw as McpwClaim | undefined
+    const m = payload.mcpw as HostClaim | undefined
     if (!m || typeof m.installation !== "string" || !m.installation) throw new AuthError("the token has no mcpw.installation")
     return {
       installation: m.installation,
@@ -197,7 +197,7 @@ export async function generateSigningKey(): Promise<SigningKey> {
 }
 
 /** An access token as a host or the dev authority signs it. */
-export async function signAccessToken(key: SigningKey, claims: { iss: string; aud: string | string[]; sub: string; mcpw: McpwClaim; lifetimeSeconds?: number; scope?: string }): Promise<string> {
+export async function signAccessToken(key: SigningKey, claims: { iss: string; aud: string | string[]; sub: string; mcpw: HostClaim; lifetimeSeconds?: number; scope?: string }): Promise<string> {
   const now = Math.floor(Date.now() / 1000)
   return new SignJWT({ mcpw: claims.mcpw, ...(claims.scope ? { scope: claims.scope } : {}) })
     .setProtectedHeader({ alg: "EdDSA", typ: "at+jwt", kid: key.kid })
