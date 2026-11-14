@@ -36,7 +36,7 @@ export default defineApp({
   },
 
   settings: {                        // set per installation by an administrator, sent by the workspace host with every call; read as ctx.settings.<id>
-    followUpDays: { label: "Follow-up (days)", type: "number", default: 7 },   // text | number | boolean. Never secrets: keep those in your server's own configuration
+    follow_up_days: { label: "Follow-up (days)", type: "number", default: 7 },   // text | number | boolean. Never secrets: keep those in your server's own configuration
   },
 
   entities: {

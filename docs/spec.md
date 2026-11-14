@@ -37,7 +37,7 @@ JSON Schema: [`packages/modelapp-spec/schema/modelapp.schema.json`](../../packag
 | `resolveTool`, `searchTool?` | Tools a host uses to resolve URIs and to search |
 | `entities`, `actions`, `pages`, `fragments`, `agents` | §3–§5 |
 | `permissions` | `{ id, label, description?, default }`; ids are `group.verb` |
-| `settings` | `{ id, label, description?, type: text\|number\|boolean, required, default? }`: values an administrator sets per installation; the workspace host sends them with every call (§7). Never secrets: those stay in the app's own configuration |
+| `settings` | `{ id, label, description?, type: text\|number\|boolean, required, default? }` (`id`: `[a-z][a-z0-9_]{1,39}`): values an administrator sets per installation; the workspace host sends them with every call (§7). Never secrets: those stay in the app's own configuration |
 
 **Labels** are always maps per locale (`{ "en": "Deal", "it": "Trattativa" }`);
 a host picks the person's locale, then `locale`, then the first entry.

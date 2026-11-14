@@ -769,7 +769,8 @@
         "type": "object",
         "properties": {
           "id": {
-            "type": "string"
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{1,39}$"
           },
           "label": {
             "type": "object",

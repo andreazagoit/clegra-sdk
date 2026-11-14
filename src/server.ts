@@ -284,7 +284,7 @@ export class AppServer {
 
   /** A setting an administrator fills per installation (spec §2): text, number or boolean, never a secret. */
   registerSetting(id: string, config: SettingConfig): void {
-    if (!/^[a-z][a-zA-Z0-9_]{0,39}$/.test(id)) throw new Error(`setting "${id}": a short identifier`)
+    if (!/^[a-z][a-z0-9_]{1,39}$/.test(id)) throw new Error(`setting "${id}": lowercase letters, digits and _, starting with a letter, 2 to 40 characters`)
     if (!["text", "number", "boolean"].includes(config.type)) throw new Error(`setting "${id}": type is text, number or boolean`)
     if (config.default !== undefined && typeof config.default !== (config.type === "text" ? "string" : config.type)) throw new Error(`setting "${id}": the default must be a ${config.type}`)
     this.#settings.set(id, config)
@@ -556,6 +556,8 @@ export class AppServer {
         template: "record" as const,
         ...this.#recordCard(entity, data, caller),
         data,
+        // The titles of the records it references (field → id → title), as this caller may see them: a host shows those, never the ids.
+        refs: await this.#refs(entity, [data], caller, ctx),
         view: { kind: "record", tool: entity.tools.get.name, fields: this.#visibleFields(entity, caller).map((f) => this.#column(f, caller)), actions: this.#recordActions(entity, caller) },
       }
     }

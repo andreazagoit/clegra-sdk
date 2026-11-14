@@ -119,7 +119,7 @@ export const manifestSchema = z.object({
   fragments: z.array(fragmentSchema),
   agents: z.array(z.object({ name: ident, title: labelMap, description: labelMap, instructions: z.string(), tools: z.array(z.string()), tier: z.enum(["fast", "standard", "strong"]), starters: z.array(labelMap).optional() })),
   permissions: z.array(z.object({ id: z.string(), label: labelMap, description: labelMap.optional(), default: z.boolean() })),
-  settings: z.array(z.object({ id: z.string(), label: labelMap, description: labelMap.optional(), type: z.enum(["text", "number", "boolean"]), required: z.boolean(), default: z.union([z.string(), z.number(), z.boolean()]).optional() })),
+  settings: z.array(z.object({ id: z.string().regex(/^[a-z][a-z0-9_]{1,39}$/), label: labelMap, description: labelMap.optional(), type: z.enum(["text", "number", "boolean"]), required: z.boolean(), default: z.union([z.string(), z.number(), z.boolean()]).optional() })),
 })
 
 export type Manifest = z.infer<typeof manifestSchema>

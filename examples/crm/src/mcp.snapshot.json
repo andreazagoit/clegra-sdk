@@ -2576,7 +2576,7 @@
           "en": "Finds deals, prepares follow-ups, moves deals between stages",
           "it": "Trova trattative, prepara i richiami, sposta le trattative di fase"
         },
-        "instructions": "You help a sales team. Find deals and contacts with search and the list tools; never guess amounts, read them. Propose a stage change or a won deal only when the person asks, and let them confirm. Suggest calling contacts not called in the last followUpDays days.",
+        "instructions": "You help a sales team. Find deals and contacts with search and the list tools; never guess amounts, read them. Propose a stage change or a won deal only when the person asks, and let them confirm. Suggest calling contacts not called in the last follow_up_days days.",
         "tools": [
           "deal_list",
           "deal_get",
@@ -2633,7 +2633,7 @@
     ],
     "settings": [
       {
-        "id": "followUpDays",
+        "id": "follow_up_days",
         "label": {
           "en": "Follow-up after (days)",
           "it": "Richiamare dopo (giorni)"

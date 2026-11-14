@@ -12,7 +12,7 @@ bottom of `app.ts`: `export const app = defineApp({ … })`.
 | Key | In the CRM |
 |---|---|
 | `permissions` | `deals.view`, `deals.edit`, `contacts.edit` (default), `deals.values` (not default: only managers see money) |
-| `settings` | `followUpDays` (number, default 7) |
+| `settings` | `follow_up_days` (number, default 7) |
 | `entities` | `company` (name, city, industry), `contact` (name, email, `ref("company")`, last call, last note — **untrusted**), `deal` (name, company, stage as `status` with labels and tones, value as `amount` in EUR behind `deals.values`, close date, owner as `person`) |
 | `actions` | `mark_won` (on `deal`, confirm always, notifies), `set_stage` (on `deal`, `"optional"`), `log_call` (on `contact`), `create_deal` (global). All four `expose: { plain: true }` |
 | `pages` | `deals`, `companies`, `contacts` (lists), `deal` (record with two sections; the `company` and `contact` record pages are derived), `pipeline` (dashboard, param `days`), `forecast` (a custom view, behind `deals.values`) |
