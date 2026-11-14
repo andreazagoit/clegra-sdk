@@ -678,6 +678,11 @@ export class AppServer {
     return { ui: { resourceUri, visibility }, "ui/resourceUri": resourceUri, "openai/outputTemplate": resourceUri, "openai/widgetAccessible": true }
   }
 
+  /** A tool without a view of its own that views call (a record's actions): callable from a view in MCP Apps hosts (`ui.visibility` with "app") and in ChatGPT (`openai/widgetAccessible`). Without it a host refuses the view's call. */
+  #callable() {
+    return { ui: { visibility: ["model", "app"] }, "openai/widgetAccessible": true }
+  }
+
   #allPages(): PageRecord[] {
     const pages = [...this.#pages.values()]
     for (const e of this.#entities.values()) if (!this.#pages.has(e.name)) pages.push({ name: e.name, config: { kind: "record", entity: e.handle } as PageConfig, derived: true, tool: e.tools.get })
@@ -865,7 +870,7 @@ export class AppServer {
         description: "For hosts: fragment and record URIs resolved for the viewer.",
         inputSchema: z.object({ uris: z.array(z.string()).max(50), want: z.enum(["reference", "fragment", "snapshot"]).optional() }),
         annotations: { ...read },
-        _meta: { ui: { visibility: ["app"] }, "openai/visibility": "private" },
+        _meta: { ui: { visibility: ["app"] }, "openai/visibility": "private", "openai/widgetAccessible": true },
       },
       guard(RESOLVE_TOOL, async (args, mctx) => {
         const ctx = ctxOf(mctx)
@@ -906,6 +911,7 @@ export class AppServer {
           description: `${t(a.config.description) || title}${a.write ? (a.confirm === "always" ? " (a change; the person confirms it first)" : " (a change)") : ""}.`,
           inputSchema: input,
           annotations: { title, readOnlyHint: !a.write, destructiveHint: a.write && a.confirm === "always", idempotentHint: !a.write, openWorldHint: false },
+          _meta: this.#callable(),
         },
         guard(a.tool, (args, mctx) => this.#runAction(a, caller, args, mctx, request, request.received.get(mctx.mcpReq.id as string | number))),
       )

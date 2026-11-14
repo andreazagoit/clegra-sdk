@@ -14,6 +14,7 @@ import { AppError, defineApp, generateSigningKey, manifestJsonSchema, manifestSc
 import { checkApp, formatReport } from "@modelapp/spec"
 
 import { testClient } from "./testing"
+import { viewHtml } from "./view"
 
 /** Requests of these tests come from this machine (dev sign-in answers nobody else). */
 const local = { remoteAddress: "127.0.0.1" }
@@ -596,6 +597,27 @@ describe("enforcement on every surface", () => {
     const full = await checkApp({ url: "http://127.0.0.1:3920", fetch: fetchLocal, token: await app.devToken() })
     assert.equal(full.complete, true)
     assert.match(formatReport(full), /\nConformant\.$/)
+  })
+})
+
+describe("views", () => {
+  test("every tool a view calls is callable from a view: MCP Apps visibility with «app» and ChatGPT's widgetAccessible", async () => {
+    // A host refuses a view's call to a tool without these (found in ChatGPT: a row click and «Mark as won» did nothing).
+    for (const host of ["plain", "workspace"] as const) {
+      const tools = await (await testClient(makeApp(), { permissions: "all", host })).listTools()
+      for (const name of ["note_list", "note_get", "note_close", "ping", "search", "fetch", "open_notes", "open_home", "show_open_count", "modelapp_resolve", ...(host === "workspace" ? ["add"] : [])]) {
+        const meta = tools.find((t) => t.name === name)?._meta as { ui?: { visibility?: string[] }; "openai/widgetAccessible"?: boolean } | undefined
+        assert.ok(meta?.ui?.visibility?.includes("app"), `${name}: _meta.ui.visibility includes "app"`)
+        assert.equal(meta?.["openai/widgetAccessible"], true, `${name}: openai/widgetAccessible`)
+      }
+    }
+  })
+
+  test("the generated view says what went wrong with a call it made, and asks through whichever bridge the host has", () => {
+    const html = viewHtml("Notes")
+    assert.ok(html.includes("The host did not answer") && html.includes("The host refused the call"), "a refused or unanswered call is shown")
+    assert.ok(html.includes("window.openai.callTool") && html.includes('"tools/call"'))
+    assert.ok(html.includes("data-i") && html.includes("dataset.back"), "rows open records, records go back")
   })
 })
 

@@ -49,13 +49,16 @@ const SCRIPT = `
   const root = document.getElementById("root");
   let nextId = 1; const pending = new Map(); let gotResult = false; let locale = navigator.language || "en";
   const post = (m) => window.parent.postMessage(m, "*");
-  const request = (method, params) => new Promise((resolve, reject) => { const id = nextId++; pending.set(id, { resolve, reject }); post({ jsonrpc: "2.0", id, method, params }); });
+  // A host that never answers (it refused the call without saying so) is an error the person sees, not a dead click.
+  const request = (method, params, wait) => new Promise((resolve, reject) => { const id = nextId++; pending.set(id, { resolve, reject }); post({ jsonrpc: "2.0", id, method, params }); if (wait) setTimeout(() => { if (pending.delete(id)) reject(new Error("The host did not answer (" + method + (params && params.name ? " " + params.name : "") + ").")); }, wait); });
   const notify = (method, params) => post({ jsonrpc: "2.0", method, params });
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
   const callTool = async (name, args) => {
-    if (window.openai && typeof window.openai.callTool === "function") return window.openai.callTool(name, args);
-    return request("tools/call", { name, arguments: args });
+    if (window.openai && typeof window.openai.callTool === "function") { const r = await window.openai.callTool(name, args); if (r === undefined || r === null) throw new Error("The host refused the call (" + name + ")."); return r; }
+    return request("tools/call", { name, arguments: args }, 30000);
   };
+  // Whatever goes wrong with a call the view made is said where the person is looking.
+  const fail = (e) => { const text = String((e && e.message) || e || "Failed"); const box = root.querySelector(".box"); if (box) say(box, text, true); else { root.innerHTML = '<div class="box err">' + esc(text) + "</div>"; resize(); } };
   let refs = {};
   const fmt = (v, col) => {
     if (col && col.ref && refs[col.name] && refs[col.name][v]) return esc(refs[col.name][v]);
@@ -77,7 +80,7 @@ const SCRIPT = `
     const props = (action.input && action.input.properties) || {};
     const keys = Object.keys(props).filter((k) => k !== "id");
     const run = async (args) => {
-      try { const r = await callTool(action.tool, Object.assign({}, record ? { id: record.id } : {}, args)); const e = errorOf(r); if (e) return say(container, e, true); const s = resultOf(r); say(container, s.message || "Done."); if (lastCall && (s.record || !record)) { await reload(); const box = root.querySelector(".box"); if (box) say(box, s.message || "Done."); } }
+      try { const r = await callTool(action.tool, Object.assign({}, record ? { id: record.id } : {}, args)); const e = errorOf(r); if (e) return say(container, e, true); const s = resultOf(r); say(container, s.message || "Done."); if (lastCall && (s.record || !record)) { try { await reload(); } catch (e) { return fail(e); } const box = root.querySelector(".box"); if (box) say(box, s.message || "Done."); } }
       catch (e) { say(container, String(e && e.message || e), true); }
     };
     if (!keys.length) return run({});
@@ -100,13 +103,18 @@ const SCRIPT = `
   let lastCall = null; let last = null;
   // Where «back» returns: the lists and searches a record was opened from, each with the call that draws it again.
   const trail = [];
-  const reload = async () => { if (!lastCall) return; const r = await callTool(lastCall.name, lastCall.args); render(resultOf(r)); };
-  const open = async (name, args) => { if (last) trail.push({ s: last, call: lastCall }); lastCall = { name, args }; const r = await callTool(name, args); const e = errorOf(r); if (e) { trail.pop(); const box = root.querySelector(".box"); if (box) say(box, e, true); return; } render(resultOf(r)); };
+  const reload = async () => { if (!lastCall) return; const r = await callTool(lastCall.name, lastCall.args); const e = errorOf(r); if (e) throw new Error(e); render(resultOf(r)); };
+  const open = async (name, args) => {
+    const from = { s: last, call: lastCall };
+    try { const r = await callTool(name, args); const e = errorOf(r); if (e) return fail(e); const s = resultOf(r); if (!s || !s.view) return fail("The host gave no result for " + name + "."); if (from.s) trail.push(from); lastCall = { name, args }; render(s); }
+    catch (e) { fail(e); }
+  };
   const backBar = () => {
     if (!trail.length) return;
     const prev = trail[trail.length - 1];
     const b = document.createElement("button"); b.className = "back"; b.textContent = "‹ " + ((prev.s.view && prev.s.view.title) || "");
     b.onclick = async () => { trail.pop(); lastCall = prev.call; if (prev.call) { try { await reload(); return; } catch {} } render(prev.s); };
+    b.dataset.back = "1";
     root.appendChild(b);
   };
 
@@ -148,7 +156,7 @@ const SCRIPT = `
         "</tbody></table>" + ((s.rows || []).length ? "" : '<p class="muted">—</p>');
       if (v.tool && !lastCall) lastCall = { name: v.tool, args: v.args || {} };
       box.querySelectorAll("tr.link").forEach((tr) => tr.onclick = () => open(v.getTool, { id: s.rows[Number(tr.dataset.i)].id }));
-      if (s.next && v.tool) { const more = document.createElement("button"); more.textContent = "…"; more.style.marginTop = "8px"; more.onclick = async () => { const r = await callTool(v.tool, Object.assign({}, v.args || {}, { cursor: s.next })); render(resultOf(r)); }; box.appendChild(more); }
+      if (s.next && v.tool) { const more = document.createElement("button"); more.textContent = "…"; more.style.marginTop = "8px"; more.onclick = async () => { try { const r = await callTool(v.tool, Object.assign({}, v.args || {}, { cursor: s.next })); const e = errorOf(r); if (e) return fail(e); render(resultOf(r)); } catch (e) { fail(e); } }; box.appendChild(more); }
       root.appendChild(box);
     } else if (v.kind === "record") {
       if (v.tool && s.record && s.record.id !== undefined) lastCall = { name: v.tool, args: { id: s.record.id } };
@@ -175,7 +183,7 @@ const SCRIPT = `
     if (m.method === "ui/notifications/tool-result") { const s = resultOf(m.params); if ((s && s.view) || !BOOT) { trail.length = 0; lastCall = null; render(s); } return; }
     if (m.method === "ui/notifications/tool-input") { if (m.params && m.params.arguments && lastCall === null && BOOT === null) lastCall = null; return; }
     // A new language: numbers and dates are drawn again; labels come from the app, so the data are asked again when the view knows how.
-    if (m.method === "ui/notifications/host-context-changed") { const before = locale; applyContext(m.params); if (locale !== before && last) { if (lastCall) reload().catch(() => render(last)); else render(last); } return; }
+    if (m.method === "ui/notifications/host-context-changed") { const before = locale; applyContext(m.params); if (locale !== before && last) { const shown = last; if (lastCall) reload().catch(() => render(shown)); else render(shown); } return; }
     if (m.method === "ui/resource-teardown" && m.id !== undefined) post({ jsonrpc: "2.0", id: m.id, result: {} });
   });
   const boot = async () => {
