@@ -285,7 +285,7 @@ export const app = defineApp({
       template: "stat",
       data: (_p, ctx) => {
         const open = openDeals(ctx)
-        return { label: ctx.t({ en: `${open.length} open deals`, it: `${open.length} trattative aperte` }), value: open.reduce((s, d) => s + d.value, 0), format: "money", currency: "EUR" }
+        return { label: ctx.t(open.length === 1 ? { en: "1 open deal", it: "1 trattativa aperta" } : { en: `${open.length} open deals`, it: `${open.length} trattative aperte` }), value: open.reduce((s, d) => s + d.value, 0), format: "money", currency: "EUR" }
       },
     },
     deals_by_stage: {
