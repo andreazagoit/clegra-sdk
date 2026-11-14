@@ -1101,7 +1101,8 @@ export class AppServer {
     if (url.pathname === "/health") return json({ ok: true, name: this.name, version: this.options.version })
     if (url.pathname === "/.well-known/oauth-protected-resource" || url.pathname === "/.well-known/oauth-protected-resource/mcp") {
       const auth = this.options.auth ?? {}
-      const servers = auth.authorizationServers ?? [...(auth.dev ? [origin] : []), ...(auth.issuers ?? []).map((i) => i.issuer)]
+      // Where a client signs a person in. With dev sign-in on it is this server alone: trusted issuers that are hosts sign their own tokens, a client has nothing to ask them.
+      const servers = auth.authorizationServers ?? (auth.dev ? [origin] : (auth.issuers ?? []).map((i) => i.issuer))
       return json({ resource, authorization_servers: servers, bearer_methods_supported: ["header"], scopes_supported: [OAUTH_SCOPE], resource_name: localize(this.options.title, this.locale, this.locale) })
     }
     if (this.#dev) {
