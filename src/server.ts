@@ -6,7 +6,7 @@ import { z } from "zod"
 
 import { AuthError, DevAuthority, isLoopback, TokenVerifier, type AuthOptions, type Caller, type Person } from "./auth"
 import { MANIFEST_PATH, manifestUri, SPEC_VERSION, type Manifest, type ManifestField } from "./manifest"
-import { labelMap, localize, type Label } from "./labels"
+import { isLabel, labelMap, localize, type Label } from "./labels"
 import { fieldsOf, jsonSchemaOf, plainSchema, type FieldInfo } from "./meaning"
 import { MemoryStore, type IdempotencyStore } from "./store"
 import type {
@@ -372,7 +372,11 @@ export class AppServer {
   }
 
   #actionInfo(a: ActionRecord, caller: Caller) {
-    return { tool: a.tool, title: this.#t(caller, a.config.title), confirm: a.confirm, input: plainSchema(jsonSchemaOf(a.input, "input")) }
+    // The form's labels in the caller's language (plainSchema keeps only bare-string labels).
+    const raw = jsonSchemaOf(a.input, "input") as { properties?: Record<string, Record<string, unknown>> }
+    const input = plainSchema(raw) as { properties?: Record<string, Record<string, unknown>> }
+    for (const [k, p] of Object.entries(raw.properties ?? {})) if (isLabel(p.label) && input.properties?.[k]) input.properties[k]!.title = this.#t(caller, p.label)
+    return { tool: a.tool, title: this.#t(caller, a.config.title), confirm: a.confirm, input }
   }
 
   #recordActions(entity: EntityRecord, caller: Caller) {
@@ -388,7 +392,8 @@ export class AppServer {
       const copy = { ...row }
       for (const k of marked)
         if (typeof copy[k] === "string") {
-          copy[k] = `<untrusted>${copy[k] as string}</untrusted>`
+          // The value can't close (or open) the wrapper itself.
+          copy[k] = `<untrusted>${(copy[k] as string).replace(/<(\/?)\s*untrusted\s*>/gi, "&lt;$1untrusted&gt;")}</untrusted>`
           pointers.push(`${base}/${i}/${k}`)
         }
       return copy
@@ -493,7 +498,7 @@ export class AppServer {
         template: "record" as const,
         ...this.#recordCard(entity, data, caller),
         data,
-        view: { kind: "record", fields: this.#visibleFields(entity, caller).map((f) => this.#column(f, caller)), actions: this.#recordActions(entity, caller) },
+        view: { kind: "record", tool: entity.tools.get.name, fields: this.#visibleFields(entity, caller).map((f) => this.#column(f, caller)), actions: this.#recordActions(entity, caller) },
       }
     }
     const f = this.#fragments.get(instance.type)
@@ -526,7 +531,8 @@ export class AppServer {
       record = row as Record<string, unknown>
     }
     const callArgs = a.entity ? { id, ...(parsed.data as object) } : (parsed.data as Record<string, unknown>)
-    const key = a.write && ctx.call ? `${caller.installation}:${a.tool}:${ctx.call}` : null
+    // Per caller: a stored answer is only ever given back to who made the call.
+    const key = a.write && ctx.call ? `${caller.installation}:${caller.issuer}:${caller.subject}:${a.tool}:${ctx.call}` : null
     const hash = sortedJson(callArgs)
     if (key) {
       const stored = await this.#store.get(key)
@@ -702,7 +708,7 @@ export class AppServer {
           const uri = this.uri(e.name, String(record.id))
           return {
             content: text(JSON.stringify({ uri, ...marked.text[0] })),
-            structuredContent: { entity: e.name, uri, record, refs: await this.#refs(e, [record], caller, ctx), view: { kind: "record", title: label, fields: this.#visibleFields(e, caller).map((f) => this.#column(f, caller)), actions: this.#recordActions(e, caller) } },
+            structuredContent: { entity: e.name, uri, record, refs: await this.#refs(e, [record], caller, ctx), view: { kind: "record", title: label, tool: e.tools.get.name, fields: this.#visibleFields(e, caller).map((f) => this.#column(f, caller)), actions: this.#recordActions(e, caller) } },
             ...(marked.pointers.length ? { _meta: { [META_KEY]: { untrusted: marked.pointers.map((p) => p.replace("/record/0", "/record")) } } } : {}),
           }
         }),
@@ -752,7 +758,7 @@ export class AppServer {
           const marked = entity ? this.#untrusted(entity, [record], "/record").text[0] : record
           return {
             content: text(JSON.stringify({ id: r.uri, title: "title" in r ? r.title : "", text: JSON.stringify(marked), url: r.uri, metadata: { type: parsed.type } })),
-            structuredContent: entity ? { entity: entity.name, uri: r.uri, record, view: r.template === "record" ? { ...("view" in r ? r.view : {}), title: t(entity.config.label) } : undefined } : { ...r, view: { kind: "fragment", title: "title" in r ? r.title : "" } },
+            structuredContent: entity ? { entity: entity.name, uri: r.uri, record, refs: await this.#refs(entity, [record], caller, ctx), view: r.template === "record" ? { ...("view" in r ? r.view : {}), title: t(entity.config.label) } : undefined } : { ...r, view: { kind: "fragment", title: "title" in r ? r.title : "" } },
           }
         }),
       )
@@ -891,6 +897,13 @@ export class AppServer {
       if (p && !this.#permissions.has(p)) throw new Error(`${where}: permission "${p}" is not registered`)
       return p ? { permission: p } : {}
     }
+    // An action's input for hosts that draw its form: the plain JSON Schema, each property with its `label` map.
+    const labelled = (schema: z.ZodObject): Record<string, unknown> => {
+      const raw = jsonSchemaOf(schema, "input") as { properties?: Record<string, Record<string, unknown>> }
+      const plain = plainSchema(raw) as { properties?: Record<string, Record<string, unknown>> }
+      for (const [k, p] of Object.entries(raw.properties ?? {})) if (isLabel(p.label) && plain.properties?.[k]) plain.properties[k]!.label = L(p.label)
+      return plain as Record<string, unknown>
+    }
     const entities = [...this.#entities.values()].map((e) => {
       for (const f of e.fields) {
         if (f.ref && !this.#entities.has(f.ref)) throw new Error(`entity "${e.name}", field "${f.name}": ref "${f.ref}" is not an entity`)
@@ -933,7 +946,7 @@ export class AppServer {
       title: L(a.config.title)!,
       ...(a.config.description ? { description: L(a.config.description) } : {}),
       ...(a.config.icon ? { icon: a.config.icon } : {}),
-      input: plainSchema(jsonSchemaOf(a.input, "input")) as Record<string, unknown>,
+      input: labelled(a.input),
       readOnly: !a.write,
       confirm: a.confirm,
       ...perm(a.config.permission, `action "${a.name}"`),
@@ -1095,7 +1108,11 @@ export class AppServer {
     const origin = this.#origin(request)
     const resource = this.options.auth?.resource ?? `${origin}/mcp`
     const json = (body: unknown, status = 200, headers: Record<string, string> = {}) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", ...CORS, ...headers } })
-    if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS })
+    // Preflight: the headers the browser asks for are allowed as asked (MCP 2026-07-28 clients send mcp-method, mcp-name, Mcp-Param-*; no cookies are ever used).
+    if (request.method === "OPTIONS") {
+      const asked = request.headers.get("access-control-request-headers")
+      return new Response(null, { status: 204, headers: { ...CORS, ...(asked && /^[\w\-, ]{1,2000}$/.test(asked) ? { "access-control-allow-headers": asked } : {}), "access-control-max-age": "600", vary: "access-control-request-headers" } })
+    }
     if (url.pathname === MANIFEST_PATH) return json(this.manifest(), 200, { "cache-control": "public, max-age=30" })
     if (url.pathname === "/" && request.method === "GET" && (request.headers.get("accept") ?? "").includes("application/json")) return json({ name: this.name, manifest: MANIFEST_PATH, mcp: "/mcp" })
     if (url.pathname === "/health") return json({ ok: true, name: this.name, version: this.options.version })

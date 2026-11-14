@@ -30,6 +30,9 @@ tr.link{cursor:pointer}tr.link:hover td{background:var(--bg2)}td.num{text-align:
 .badge{display:inline-block;padding:1px 8px;border-radius:999px;font-size:12px;background:var(--bg2)}
 .t-success{background:#d9f5df;color:#11622a}.t-danger{background:#fde0e0;color:#8a1414}.t-warning{background:#fff1cc;color:#7a4d00}.t-info{background:#dcebff;color:#0b4a99}
 @media (prefers-color-scheme:dark){.t-success{background:#123d20;color:#9be3ae}.t-danger{background:#4a1616;color:#ffb3b3}.t-warning{background:#4a3a10;color:#ffd98a}.t-info{background:#14304f;color:#a9cfff}}
+html[data-theme=dark]{color-scheme:dark}html[data-theme=light]{color-scheme:light}
+html[data-theme=dark] .t-success{background:#123d20;color:#9be3ae}html[data-theme=dark] .t-danger{background:#4a1616;color:#ffb3b3}html[data-theme=dark] .t-warning{background:#4a3a10;color:#ffd98a}html[data-theme=dark] .t-info{background:#14304f;color:#a9cfff}
+html[data-theme=light] .t-success{background:#d9f5df;color:#11622a}html[data-theme=light] .t-danger{background:#fde0e0;color:#8a1414}html[data-theme=light] .t-warning{background:#fff1cc;color:#7a4d00}html[data-theme=light] .t-info{background:#dcebff;color:#0b4a99}
 dl{display:grid;grid-template-columns:minmax(90px,max-content) 1fr;gap:6px 14px;margin:8px 0}dt{color:var(--fg2)}dd{margin:0}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px}
 .stat{font-size:26px;font-weight:600;font-variant-numeric:tabular-nums}
@@ -65,7 +68,7 @@ const SCRIPT = `
     if (typeof v === "object") return esc(JSON.stringify(v));
     return esc(v);
   };
-  const resize = () => notify("ui/notifications/size-changed", { width: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight });
+  const resize = () => notify("ui/notifications/size-changed", { width: document.documentElement.scrollWidth, height: Math.ceil(document.body.getBoundingClientRect().height) });
   const say = (el, text, error) => { let m = el.querySelector(":scope > .msg"); if (!m) { m = document.createElement("div"); m.className = "msg"; el.appendChild(m); } m.className = "msg" + (error ? " err" : ""); m.textContent = text; resize(); };
   const resultOf = (r) => (r && r.structuredContent) || (r && r.result && r.result.structuredContent) || r || {};
   const errorOf = (r) => { const s = resultOf(r); return (r && r.isError) ? ((s.error && s.error.message) || (r.content && r.content[0] && r.content[0].text) || "Failed") : null; };
@@ -74,7 +77,7 @@ const SCRIPT = `
     const props = (action.input && action.input.properties) || {};
     const keys = Object.keys(props).filter((k) => k !== "id");
     const run = async (args) => {
-      try { const r = await callTool(action.tool, Object.assign({}, record ? { id: record.id } : {}, args)); const e = errorOf(r); if (e) return say(container, e, true); const s = resultOf(r); say(container, s.message || "Done."); if (record && s.record) reload(); }
+      try { const r = await callTool(action.tool, Object.assign({}, record ? { id: record.id } : {}, args)); const e = errorOf(r); if (e) return say(container, e, true); const s = resultOf(r); say(container, s.message || "Done."); if (lastCall && (s.record || !record)) { await reload(); const box = root.querySelector(".box"); if (box) say(box, s.message || "Done."); } }
       catch (e) { say(container, String(e && e.message || e), true); }
     };
     if (!keys.length) return run({});
@@ -82,8 +85,10 @@ const SCRIPT = `
     f.innerHTML = keys.map((k) => { const p = props[k]; const label = esc(p.title || k);
       if (Array.isArray(p.enum)) return "<label>" + label + '<br><select name="' + esc(k) + '">' + p.enum.map((v) => "<option>" + esc(v) + "</option>").join("") + "</select></label>";
       if (p.type === "boolean") return '<label><input type="checkbox" name="' + esc(k) + '"> ' + label + "</label>";
-      return "<label>" + label + '<br><input name="' + esc(k) + '" type="' + (p.type === "number" || p.type === "integer" ? "number" : p.format === "date" ? "date" : "text") + '"></label>'; }).join("") + '<div class="row"><button class="primary" type="submit">' + esc(action.title) + "</button></div>";
-    f.onsubmit = (e) => { e.preventDefault(); const args = {}; for (const k of keys) { const el = f.elements[k]; const p = props[k]; if (!el) continue; if (p.type === "boolean") args[k] = el.checked; else if (el.value !== "") args[k] = (p.type === "number" || p.type === "integer") ? Number(el.value) : el.value; } f.remove(); run(args); };
+      return "<label>" + label + '<br><input name="' + esc(k) + '" type="' + (p.type === "number" || p.type === "integer" ? "number" : p.format === "date" ? "date" : "text") + '"></label>'; }).join("") + '<div class="row"><button class="primary" type="button">' + esc(action.title) + "</button></div>";
+    // A click, not a form submission: views run in a sandbox without allow-forms.
+    f.onsubmit = (e) => e.preventDefault();
+    f.querySelector("button.primary").onclick = () => { const args = {}; for (const k of keys) { const el = f.elements[k]; const p = props[k]; if (!el) continue; if (p.type === "boolean") args[k] = el.checked; else if (el.value !== "") args[k] = (p.type === "number" || p.type === "integer") ? Number(el.value) : el.value; } f.remove(); run(args); };
     container.appendChild(f); resize();
   }
   function actionsBar(el, actions, record) {
@@ -135,6 +140,7 @@ const SCRIPT = `
       if (s.next && v.tool) { const more = document.createElement("button"); more.textContent = "…"; more.style.marginTop = "8px"; more.onclick = async () => { const r = await callTool(v.tool, Object.assign({}, v.args || {}, { cursor: s.next })); render(resultOf(r)); }; box.appendChild(more); }
       root.appendChild(box);
     } else if (v.kind === "record") {
+      if (v.tool && s.record && s.record.id !== undefined) lastCall = { name: v.tool, args: { id: s.record.id } };
       root.appendChild(recordBox(v, s.record));
     } else if (v.kind === "fragment") {
       root.appendChild(fragmentBox(Object.assign({ title: v.title }, s)));
@@ -150,6 +156,7 @@ const SCRIPT = `
   }
   const applyContext = (ctx) => { if (!ctx) return; if (ctx.theme) document.documentElement.dataset.theme = ctx.theme; if (ctx.locale) locale = ctx.locale; const vars = ctx.styles && ctx.styles.variables; if (vars) for (const [k, v] of Object.entries(vars)) if (v) document.documentElement.style.setProperty(k, v); };
   window.addEventListener("message", (e) => {
+    if (e.source !== window.parent) return;
     const m = e.data; if (!m || m.jsonrpc !== "2.0") return;
     if (m.id !== undefined && pending.has(m.id) && !m.method) { const p = pending.get(m.id); pending.delete(m.id); return m.error ? p.reject(new Error(m.error.message || "error")) : p.resolve(m.result); }
     if (m.method === "ui/notifications/tool-result") { const s = resultOf(m.params); if (s && s.view) render(s); else if (!BOOT) render(s); return; }

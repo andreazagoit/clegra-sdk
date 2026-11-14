@@ -135,8 +135,11 @@ export class TokenVerifier {
   }
 
   #keysFor(iss: string | undefined): KeySet | CryptoKey | null {
+    // A configured issuer always keeps its own keys: the dev authority's names come from request headers and must never shadow one.
+    const configured = iss ? this.#issuers.get(iss) : undefined
+    if (configured) return configured
     if (this.#dev && iss && this.#dev.issues(iss)) return this.#dev.publicKey
-    return (iss && this.#issuers.get(iss)) || null
+    return null
   }
 
   /** The caller an access token names. Throws AuthError with the reason. */
@@ -151,7 +154,7 @@ export class TokenVerifier {
     if (!keys) throw new AuthError(`untrusted issuer ${iss ?? "(none)"}`)
     let payload: JWTPayload
     try {
-      ;({ payload } = await jwtVerify(token, keys as Parameters<typeof jwtVerify>[1], { audience: this.#audiences(), clockTolerance: 30 }))
+      ;({ payload } = await jwtVerify(token, keys as Parameters<typeof jwtVerify>[1], { audience: this.#audiences(), clockTolerance: 30, requiredClaims: ["exp", "sub"] }))
     } catch (error) {
       throw new AuthError(error instanceof Error ? error.message : "invalid token")
     }

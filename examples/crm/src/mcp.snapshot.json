@@ -1724,7 +1724,11 @@
           "properties": {
             "note": {
               "type": "string",
-              "maxLength": 500
+              "maxLength": 500,
+              "label": {
+                "en": "Note",
+                "it": "Nota"
+              }
             }
           }
         },
@@ -1757,7 +1761,11 @@
                 "qualified",
                 "proposal",
                 "lost"
-              ]
+              ],
+              "label": {
+                "en": "Stage",
+                "it": "Fase"
+              }
             }
           },
           "required": [
@@ -1790,7 +1798,11 @@
             "note": {
               "type": "string",
               "minLength": 1,
-              "maxLength": 500
+              "maxLength": 500,
+              "label": {
+                "en": "Note",
+                "it": "Nota"
+              }
             }
           },
           "required": [
@@ -1822,19 +1834,35 @@
             "name": {
               "type": "string",
               "minLength": 2,
-              "maxLength": 120
+              "maxLength": 120,
+              "label": {
+                "en": "Name",
+                "it": "Nome"
+              }
             },
             "company": {
-              "type": "string"
+              "type": "string",
+              "label": {
+                "en": "Company",
+                "it": "Azienda"
+              }
             },
             "value": {
               "type": "number",
-              "minimum": 0
+              "minimum": 0,
+              "label": {
+                "en": "Value (EUR)",
+                "it": "Valore (EUR)"
+              }
             },
             "closeDate": {
               "type": "string",
               "format": "date",
-              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$",
+              "label": {
+                "en": "Close date",
+                "it": "Chiusura prevista"
+              }
             }
           },
           "required": [

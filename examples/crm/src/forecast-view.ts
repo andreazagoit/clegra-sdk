@@ -26,7 +26,11 @@ h2{margin:0 0 12px;font-size:18px}.row{display:grid;grid-template-columns:110px 
     const input = row.querySelector("input"); input.oninput = () => { P[s] = Number(input.value); row.lastChild.textContent = input.value + "%"; draw(); };
     sliders.appendChild(row);
   }
-  req("ui/initialize", { protocolVersion: "2026-01-26", appInfo: { name: "crm-forecast", version: "1.0.0" }, appCapabilities: {} }).then(async () => {
+  // The host's theme, not the system's: CanvasText follows color-scheme.
+  const themed = (ctx) => { if (ctx && (ctx.theme === "dark" || ctx.theme === "light")) document.documentElement.style.colorScheme = ctx.theme; };
+  addEventListener("message", (e) => { if (e.data && e.data.method === "ui/notifications/host-context-changed") themed(e.data.params); });
+  req("ui/initialize", { protocolVersion: "2026-01-26", appInfo: { name: "crm-forecast", version: "1.0.0" }, appCapabilities: {} }).then(async (init) => {
+    themed(init && init.hostContext);
     post({ jsonrpc: "2.0", method: "ui/notifications/initialized", params: {} });
     const r = await req("tools/call", { name: "deal_list", arguments: { stage: { in: ["lead", "qualified", "proposal"] }, limit: 100 } });
     deals = (r && r.structuredContent && r.structuredContent.rows) || [];
