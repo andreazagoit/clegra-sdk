@@ -311,7 +311,8 @@ export const app = defineApp({
           items: openDeals(ctx)
             .filter((d) => d.closeDate <= until)
             .sort((a, b) => a.closeDate.localeCompare(b.closeDate))
-            .map((d) => ({ title: d.name, subtitle: d.closeDate, status: ctx.t(stageLabels[d.stage]), uri: ctx.uri("deal", d.id) })),
+            // The date as people read it, in the caller's language (a template's texts are shown as they are).
+            .map((d) => ({ title: d.name, subtitle: new Intl.DateTimeFormat(ctx.locale, { dateStyle: "medium" }).format(new Date(`${d.closeDate}T12:00:00`)), status: ctx.t(stageLabels[d.stage]), uri: ctx.uri("deal", d.id) })),
         }
       },
     },
