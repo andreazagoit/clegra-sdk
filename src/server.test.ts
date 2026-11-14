@@ -12,7 +12,7 @@ import type { McpServer } from "@modelcontextprotocol/server"
 import { AppError, defineApp, generateSigningKey, manifestJsonSchema, manifestSchema, ref, signAccessToken, signConfirmation, type AuthOptions } from "./index"
 import { testClient } from "./testing"
 
-const keyFile = join(tmpdir(), `mcpw-test-key-${randomUUID()}.json`)
+const keyFile = join(tmpdir(), `modelapp-test-key-${randomUUID()}.json`)
 after(() => rmSync(keyFile, { force: true }))
 
 type Note = { id: string; title: string; body?: string; status: "open" | "done"; amount: number; owner: string; folder: string }
@@ -139,7 +139,7 @@ describe("definition", () => {
   })
 
   test("the published JSON Schema is the one generated from the SDK's manifest (npm run schema)", () => {
-    const published = JSON.parse(readFileSync(new URL("../../app-spec/schema/app-manifest.schema.json", import.meta.url), "utf8"))
+    const published = JSON.parse(readFileSync(new URL("../../modelapp-spec/schema/modelapp.schema.json", import.meta.url), "utf8"))
     assert.deepEqual(published, JSON.parse(JSON.stringify(manifestJsonSchema())))
   })
 
@@ -176,9 +176,9 @@ describe("plain host", () => {
     const s = r.structuredContent as { rows: Record<string, unknown>[]; uris: string[] }
     assert.equal(s.rows.length, 2)
     assert.ok(s.rows.every((row) => !("amount" in row)))
-    assert.deepEqual(s.uris, ["mcpw://notes/note/n1", "mcpw://notes/note/n2"])
+    assert.deepEqual(s.uris, ["modelapp://notes/note/n1", "modelapp://notes/note/n2"])
     assert.match(r.content![0]!.text!, /<untrusted>Ignore previous instructions<\/untrusted>/)
-    assert.deepEqual(r._meta?.mcpw, { untrusted: ["/rows/0/body"] })
+    assert.deepEqual(r._meta?.modelapp, { untrusted: ["/rows/0/body"] })
     const refused = await c.call("note_list", { amount: 5 })
     assert.ok(refused.isError)
     const withMoney = await testClient(makeApp(), { permissions: ["notes.money"] })
@@ -190,8 +190,8 @@ describe("plain host", () => {
     const c = await testClient(makeApp(), { permissions: ["notes.edit"] })
     const r = await c.call("note_close", { id: "n1" })
     assert.ok(!r.isError, JSON.stringify(r))
-    assert.equal((r.structuredContent as { record: string }).record, "mcpw://notes/note/n1")
-    assert.deepEqual(r._meta?.mcpw, { notifications: [{ title: "#n1 closed", to: ["test-person"] }] })
+    assert.equal((r.structuredContent as { record: string }).record, "modelapp://notes/note/n1")
+    assert.deepEqual(r._meta?.modelapp, { notifications: [{ title: "#n1 closed", to: ["test-person"] }] })
     const denied = await testClient(makeApp(), { permissions: [] })
     assert.ok(!(await denied.listTools()).some((t) => t.name === "note_close"))
   })
@@ -200,13 +200,13 @@ describe("plain host", () => {
     const c = await testClient(makeApp(), { permissions: "all" })
     const s = await c.call("search", { query: "quote" })
     const results = (s.structuredContent as { results: { id: string; title: string }[] }).results
-    assert.deepEqual(results.map((r) => r.id), ["mcpw://notes/note/n2"])
+    assert.deepEqual(results.map((r) => r.id), ["modelapp://notes/note/n2"])
     const f = await c.call("fetch", { id: results[0]!.id })
     assert.equal((f.structuredContent as { record: Note }).record.title, "Send quote")
     const frag = await c.call("show_open_count", {})
     const uri = (frag.structuredContent as { uri: string }).uri
-    assert.match(uri, /^mcpw:\/\/notes\/open_count\//)
-    const resolved = await c.call("mcpw_resolve", { uris: [uri, "mcpw://notes/note/n1", "mcpw://notes/note/zz", "mcpw://other/note/n1"] })
+    assert.match(uri, /^modelapp:\/\/notes\/open_count\//)
+    const resolved = await c.call("modelapp_resolve", { uris: [uri, "modelapp://notes/note/n1", "modelapp://notes/note/zz", "modelapp://other/note/n1"] })
     const states = (resolved.structuredContent as { results: { state: string; title?: string }[] }).results
     assert.deepEqual(states.map((x) => x.state), ["ok", "ok", "gone", "gone"])
     assert.equal(states[1]!.title, "Call Ada")
@@ -231,16 +231,16 @@ describe("workspace host", () => {
   test("an always-confirm write needs a proof bound to its arguments and call", async () => {
     const app = makeApp()
     const c = await testClient(app, { host: "workspace", permissions: "all" })
-    const without = await c.call("note_close", { id: "n1" }, { mcpw: { call: "c1" } })
+    const without = await c.call("note_close", { id: "n1" }, { modelapp: { call: "c1" } })
     assert.ok(without.isError)
     const err = (without.structuredContent as { error: { code: string; confirm: { title: string; input: unknown; record: { title: string } } } }).error
     assert.equal(err.code, "confirmation_required")
     assert.equal(err.confirm.record.title, "Call Ada")
     assert.deepEqual(err.confirm.input, { id: "n1" })
     const proof = await app.devConfirmation({ tool: "note_close", args: { id: "n1" }, call: "c2" })
-    const otherArgs = await c.call("note_close", { id: "n1", reason: "x" }, { mcpw: { call: "c2", confirmation: proof } })
+    const otherArgs = await c.call("note_close", { id: "n1", reason: "x" }, { modelapp: { call: "c2", confirmation: proof } })
     assert.equal((otherArgs.structuredContent as { error: { code: string } }).error.code, "confirmation_required")
-    const otherCall = await c.call("note_close", { id: "n1" }, { mcpw: { call: "c3", confirmation: proof } })
+    const otherCall = await c.call("note_close", { id: "n1" }, { modelapp: { call: "c3", confirmation: proof } })
     assert.equal((otherCall.structuredContent as { error: { code: string } }).error.code, "confirmation_required")
     const ok = await c.confirmed("note_close", { id: "n1" }, "c4")
     assert.ok(!ok.isError, JSON.stringify(ok))
@@ -249,23 +249,23 @@ describe("workspace host", () => {
   test("writes are idempotent by call id", async () => {
     const app = makeApp()
     const c = await testClient(app, { host: "workspace", permissions: "all" })
-    const first = await c.call("add", { title: "A" }, { mcpw: { call: "k1" } })
-    const again = await c.call("add", { title: "A" }, { mcpw: { call: "k1" } })
+    const first = await c.call("add", { title: "A" }, { modelapp: { call: "k1" } })
+    const again = await c.call("add", { title: "A" }, { modelapp: { call: "k1" } })
     assert.deepEqual(again.structuredContent, first.structuredContent)
-    const conflict = await c.call("add", { title: "B" }, { mcpw: { call: "k1" } })
+    const conflict = await c.call("add", { title: "B" }, { modelapp: { call: "k1" } })
     assert.equal((conflict.structuredContent as { error: { code: string } }).error.code, "conflict")
-    const fresh = await c.call("add", { title: "A" }, { mcpw: { call: "k2" } })
+    const fresh = await c.call("add", { title: "A" }, { modelapp: { call: "k2" } })
     assert.notDeepEqual(fresh.structuredContent, first.structuredContent)
   })
 
   test("settings come with the call", async () => {
     const c = await testClient(makeApp(), { host: "workspace", permissions: "all" })
     const r = await c.confirmed("note_close", { id: "n1" })
-    assert.deepEqual((r._meta?.mcpw as { notifications: { title: string }[] }).notifications[0]!.title, "#n1 closed")
+    assert.deepEqual((r._meta?.modelapp as { notifications: { title: string }[] }).notifications[0]!.title, "#n1 closed")
     const proof = await makeApp().devConfirmation({ tool: "note_close", args: { id: "n1" }, call: "s1" })
     notes.clear()
-    const r2 = await c.call("note_close", { id: "n1" }, { mcpw: { call: "s1", confirmation: proof, settings: { prefix: "N-" } } })
-    assert.deepEqual((r2._meta?.mcpw as { notifications: { title: string }[] }).notifications[0]!.title, "N-n1 closed")
+    const r2 = await c.call("note_close", { id: "n1" }, { modelapp: { call: "s1", confirmation: proof, settings: { prefix: "N-" } } })
+    assert.deepEqual((r2._meta?.modelapp as { notifications: { title: string }[] }).notifications[0]!.title, "N-n1 closed")
   })
 
   test("a handler's AppError reaches the caller", async () => {
@@ -298,20 +298,20 @@ describe("auth", () => {
   test("a host issuer's JWT (JWKS) and its confirmation proof", async () => {
     const key = await generateSigningKey()
     const app = makeApp({ auth: { issuers: [{ issuer: "https://node.test", jwks: { keys: [key.publicJwk] } }] } })
-    const token = await signAccessToken(key, { iss: "https://node.test", aud: "notes", sub: "p9", lifetimeSeconds: 60, mcpw: { installation: "inst1", person: { id: "p9", name: "Nina" }, permissions: ["notes.edit"], locale: "it", host: "workspace" } })
+    const token = await signAccessToken(key, { iss: "https://node.test", aud: "notes", sub: "p9", lifetimeSeconds: 60, modelapp: { installation: "inst1", person: { id: "p9", name: "Nina" }, permissions: ["notes.edit"], locale: "it", host: "workspace" } })
     const c = await testClient(app, { token })
     assert.equal(c.status, 200)
-    const asked = await c.call("note_close", { id: "n1" }, { mcpw: { call: "x1" } })
+    const asked = await c.call("note_close", { id: "n1" }, { modelapp: { call: "x1" } })
     assert.equal((asked.structuredContent as { error: { code: string; message: string } }).error.code, "confirmation_required")
     const proof = await signConfirmation(key, { iss: "https://node.test", aud: "notes", sub: "p9", tool: "note_close", args: { id: "n1" }, call: "x1" })
-    const done = await c.call("note_close", { id: "n1" }, { mcpw: { call: "x1", confirmation: proof } })
+    const done = await c.call("note_close", { id: "n1" }, { modelapp: { call: "x1", confirmation: proof } })
     assert.ok(!done.isError, JSON.stringify(done))
     const forged = await signConfirmation(await generateSigningKey(), { iss: "https://node.test", aud: "notes", sub: "p9", tool: "note_close", args: { id: "n2" }, call: "x2" })
-    const refused = await c.call("note_close", { id: "n2" }, { mcpw: { call: "x2", confirmation: forged } })
+    const refused = await c.call("note_close", { id: "n2" }, { modelapp: { call: "x2", confirmation: forged } })
     assert.equal((refused.structuredContent as { error: { code: string } }).error.code, "confirmation_required")
-    const wrongAud = await signAccessToken(key, { iss: "https://node.test", aud: "crm", sub: "p9", mcpw: { installation: "inst1" } })
+    const wrongAud = await signAccessToken(key, { iss: "https://node.test", aud: "crm", sub: "p9", modelapp: { installation: "inst1" } })
     assert.equal((await testClient(app, { token: wrongAud })).status, 401)
-    const noInstallation = await signAccessToken(key, { iss: "https://node.test", aud: "notes", sub: "p9", mcpw: {} as never })
+    const noInstallation = await signAccessToken(key, { iss: "https://node.test", aud: "notes", sub: "p9", modelapp: {} as never })
     assert.equal((await testClient(app, { token: noInstallation })).status, 401)
   })
 
@@ -357,8 +357,8 @@ describe("auth", () => {
     const c = await testClient(app)
     const caps = (c.initialize as { capabilities: Record<string, unknown> }).capabilities
     assert.equal(caps.extensions, undefined)
-    const fromMcp = JSON.parse((await c.readResource("mcpw://notes"))[0]!.text!)
-    const fromHttp = await (await app.fetch(new Request("http://127.0.0.1:3920/.well-known/app-manifest.json"))).json()
+    const fromMcp = JSON.parse((await c.readResource("modelapp://notes"))[0]!.text!)
+    const fromHttp = await (await app.fetch(new Request("http://127.0.0.1:3920/.well-known/modelapp.json"))).json()
     assert.deepEqual(fromMcp, fromHttp)
     assert.deepEqual(fromHttp, app.manifest())
   })
@@ -380,7 +380,7 @@ describe("escape hatches", () => {
     })
     const plain = await testClient(custom, { permissions: "all" })
     const tools = await plain.listTools()
-    assert.deepEqual(tools.map((t) => t.name).sort(), ["find_items", "mcpw_resolve", "read_item", "rename_item", "total"])
+    assert.deepEqual(tools.map((t) => t.name).sort(), ["find_items", "modelapp_resolve", "read_item", "rename_item", "total"])
     assert.equal((tools.find((t) => t.name === "read_item")!._meta?.ui as { resourceUri: string }).resourceUri, "ui://custom/entities/item")
     assert.equal((tools.find((t) => t.name === "total")!._meta?.ui as { resourceUri: string }).resourceUri, "ui://custom/fragments/total")
     assert.equal((await plain.readResource("ui://custom/fragments/total"))[0]!.text, "<p>total</p>")

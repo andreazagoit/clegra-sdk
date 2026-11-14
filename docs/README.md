@@ -1,7 +1,7 @@
-# Apps that are also MCP servers
+# Model App Protocol (MAP)
 
-> Draft 1.0 (2026-11-14). **Working name**: the final name is chosen before
-> publishing; `mcpw` and `@mcpw/server` are working tokens.
+> Draft 1.0 (2026-11-14). The Model App Protocol (MAP) is for **apps that are also MCP servers**.
+> The protocol's names (the technical name `modelapp`, the manifest path, the URI scheme, the `_meta` key, the token claim) are defined in one file, [`packages/modelapp-spec/src/protocol.ts`](../../packages/modelapp-spec/src/protocol.ts).
 
 You describe an app once, as **one typed object**: entities, actions, pages,
 fragments, agents, permissions, settings. From it you get
@@ -20,11 +20,11 @@ export default defineApp({ name, title, version, locale, auth, permissions, sett
 | [spec.md](spec.md) | The specification (normative, short) |
 | [quickstart.md](quickstart.md) | A first app: write, run in the Inspector and ChatGPT, test |
 | [ai-guide.md](ai-guide.md) ([llms.txt](llms.txt)) | The single-file reference for coding agents |
-| [examples/crm.md](examples/crm.md) | The reference app; code in [`examples/mcp-workspaces/crm`](../../examples/mcp-workspaces/crm) |
-| [`packages/app-spec`](../../packages/app-spec) | The manifest's JSON Schema and the conformance checks, independent of the SDK |
+| [examples/crm.md](examples/crm.md) | The reference app; code in [`examples/modelapp/crm`](../../examples/modelapp/crm) |
+| [`packages/modelapp-spec`](../../packages/modelapp-spec) | The manifest's JSON Schema and the conformance checks, independent of the SDK |
 | [future/](future/README.md) | Earlier, larger drafts: non-normative, not part of 1.0 |
 
-**Status.** SDK: [`packages/mcp-workspaces`](../../packages/mcp-workspaces)
-(`@mcpw/server`, private for now), with unit tests, a snapshot of the CRM's
-generated MCP output and the conformance checks. `npm run mcpw:test`,
-`npm run mcpw:crm`, `npm run mcpw:conformance -- <url>`.
+**Status.** SDK: [`packages/modelapp`](../../packages/modelapp)
+(`@modelapp/server`, private for now), with unit tests, a snapshot of the CRM's
+generated MCP output and the conformance checks. `npm run modelapp:test`,
+`npm run modelapp:crm`, `npm run modelapp:check -- <url>`.

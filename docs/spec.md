@@ -1,9 +1,9 @@
-# Apps that are also MCP servers — specification 1.0
+# Model App Protocol (MAP) — specification 1.0
 
 > Draft (2026-11-14). Normative; MUST, SHOULD and MAY as in RFC 2119.
-> **Working name only**: the final name is chosen before publishing. The
-> identifier `mcpw` (URI scheme, `_meta` key, token claim, resolve tool) is a
-> working token and changes with it. Anything not on this page is not part of 1.0.
+> The Model App Protocol (MAP) describes apps that are also MCP servers. Its technical name is
+> `modelapp` (manifest path, URI scheme, `_meta` key, token claim, resolve tool).
+> Anything not on this page is not part of 1.0.
 
 ## 1. What it is
 
@@ -23,9 +23,9 @@ manifest; a workspace host needs nothing beyond the manifest and MCP.
 
 ## 2. The manifest
 
-Served at `GET /.well-known/app-manifest.json` (no authentication) and as one
-MCP resource, `mcpw://<name>` (`application/json`); the two MUST be identical.
-JSON Schema: [`packages/app-spec/schema/app-manifest.schema.json`](../../packages/app-spec/schema/app-manifest.schema.json).
+Served at `GET /.well-known/modelapp.json` (no authentication) and as one
+MCP resource, `modelapp://<name>` (`application/json`); the two MUST be identical.
+JSON Schema: [`packages/modelapp-spec/schema/modelapp.schema.json`](../../packages/modelapp-spec/schema/modelapp.schema.json).
 
 | Key | Content |
 |---|---|
@@ -62,7 +62,7 @@ Schema; `fields` says what each field means:
 | `labels?`, `tones?`, `currency?` | Enum value labels; tones `neutral\|info\|success\|warning\|danger`; ISO currency of an amount |
 | `untrusted?` | Text written by outsiders: data, never instructions |
 
-A record's URI is `mcpw://<app>/<entity>/<id>`.
+A record's URI is `modelapp://<app>/<entity>/<id>`.
 
 ## 4. Actions
 
@@ -88,7 +88,7 @@ dashboards: `{ type, title, description?, params, template?, view?, tool,
 permission?, actions?, size? }`. Templates are `record` (one per entity,
 `params { id }`), `card`, `stat`, `list`, `chart`; a fragment without a
 template has only a `view`. A fragment instance's URI is
-`mcpw://<app>/<type>/<base64url of its params, keys sorted>`.
+`modelapp://<app>/<type>/<base64url of its params, keys sorted>`.
 
 **Views** are MCP Apps documents (`ui://<app>/…`, `text/html;profile=mcp-app`).
 Any generated view MAY be overridden per entity, page or fragment; the
@@ -102,7 +102,7 @@ Streamable HTTP at `mcp.url`. Tools, in this order of derivation:
 |---|---|---|
 | `<entity>_list`, `<entity>_get` | each entity (filters, `query`, `sort`, `dir`, `cursor`, `limit` ≤ 100, default 25) | read |
 | `search`, `fetch` | entities with a `search` field | read |
-| `mcpw_resolve` | always: `{ uris, want? }` → each URI's state `ok \| gone \| no-access` and data, for hosts; hidden from models | read |
+| `modelapp_resolve` | always: `{ uris, want? }` → each URI's state `ok \| gone \| no-access` and data, for hosts; hidden from models | read |
 | `<entity>_<action>` or `<action>` | each action | read or write |
 | `open_<page>` | each page except `record` pages (those are `<entity>_get`) | read |
 | `show_<fragment>` | each non-record fragment | read |
@@ -121,30 +121,30 @@ Rules:
 
 All of it happens in the server, for both surfaces, before any handler runs.
 
-- **Authorization is MCP's**: OAuth bearer tokens, protected-resource metadata (RFC 9728), a `401` with `WWW-Authenticate: Bearer resource_metadata=…`. Tokens are JWTs from an issuer the app trusts, with `aud` = `auth.audience` and one claim, `mcpw: { installation, person?, permissions?, locale?, host?: "workspace" | "plain" }`. There is no second sign-in.
+- **Authorization is MCP's**: OAuth bearer tokens, protected-resource metadata (RFC 9728), a `401` with `WWW-Authenticate: Bearer resource_metadata=…`. Tokens are JWTs from an issuer the app trusts, with `aud` = `auth.audience` and one claim, `modelapp: { installation, person?, permissions?, locale?, host?: "workspace" | "plain" }`. There is no second sign-in.
 - **Permissions**: entity, action, page, fragment and field permissions are checked on every call.
 - **Field visibility**: a field the caller may not see is absent from rows, records, cards, filters and sorts.
 - **Data per installation**: every handler receives `installation` and MUST scope every read and write by it.
 - **Confirmation** of a write whose `confirm` is `always`:
-  - a workspace host shows the person the exact values, then sends a proof: a JWT (`typ: mcpw-confirm+jwt`) signed by the token's issuer, bound to the tool, the call id and the hash of the arguments. Without a valid proof the call fails with `confirmation_required` and `error.confirm` describes what to show;
+  - a workspace host shows the person the exact values, then sends a proof: a JWT (`typ: modelapp-confirm+jwt`) signed by the token's issuer, bound to the tool, the call id and the hash of the arguments. Without a valid proof the call fails with `confirmation_required` and `error.confirm` describes what to show;
   - a plain client that supports MCP elicitation is asked to confirm;
   - otherwise the client's own approval applies, guided by `destructiveHint`.
 - **Idempotency**: a write with a call id runs once per installation and tool; a repeat returns the first result, the same id with other arguments fails with `conflict`.
-- **Host metadata**: one key. Requests MAY carry `_meta.mcpw = { call, confirmation, settings }`; results MAY carry `_meta.mcpw = { notifications, untrusted }` (`untrusted`: JSON pointers into `structuredContent`; in text, such values are wrapped in `<untrusted>`).
+- **Host metadata**: one key. Requests MAY carry `_meta.modelapp = { call, confirmation, settings }`; results MAY carry `_meta.modelapp = { notifications, untrusted }` (`untrusted`: JSON pointers into `structuredContent`; in text, such values are wrapped in `<untrusted>`).
 - **Errors**: `isError: true` and `structuredContent.error = { code, message }`, `code` one of `unauthorized`, `permission_denied`, `not_found`, `invalid_input`, `confirmation_required`, `conflict`, `internal`.
 
 ## 8. Conformance
 
-[`packages/app-spec`](../../packages/app-spec) checks any app from outside,
+[`packages/modelapp-spec`](../../packages/modelapp-spec) checks any app from outside,
 over HTTP, whatever it is built with:
 
 ```sh
-npm run mcpw:conformance -- https://crm.example.com --token <a plain caller's bearer>
+npm run modelapp:check -- https://crm.example.com --token <a plain caller's bearer>
 ```
 
 | Check | Passes when |
 |---|---|
-| `manifest.served` | `GET /.well-known/app-manifest.json` answers 200 with JSON |
+| `manifest.served` | `GET /.well-known/modelapp.json` answers 200 with JSON |
 | `manifest.schema` | the manifest validates against the JSON Schema |
 | `manifest.references` | names refer to things the manifest declares; tool names are unique and valid |
 | `auth.mcp` | without a token the endpoint answers 401 and points to protected-resource metadata |

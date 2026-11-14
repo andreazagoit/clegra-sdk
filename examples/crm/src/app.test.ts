@@ -2,10 +2,10 @@ import assert from "node:assert/strict"
 import { existsSync, readFileSync, writeFileSync } from "node:fs"
 import { beforeEach, test } from "node:test"
 
-import { testClient } from "@mcpw/server/testing"
-import { checkApp, formatReport } from "@mcpw/spec"
+import { testClient } from "@modelapp/server/testing"
+import { checkApp, formatReport } from "@modelapp/spec"
 
-process.env.MCPW_DEV_CODE ??= "TEST"
+process.env.MODELAPP_DEV_CODE ??= "TEST"
 const { app, resetData } = await import("./app")
 
 beforeEach(() => resetData())
@@ -29,7 +29,7 @@ test("a sales rep doesn't see deal values; a manager does", async () => {
 
 test("marking a deal won from a workspace host needs the confirmation", async () => {
   const c = await testClient(app, { person: "ada", permissions: "all", host: "workspace" })
-  const asked = await c.call("deal_mark_won", { id: "d1" }, { mcpw: { call: "w1" } })
+  const asked = await c.call("deal_mark_won", { id: "d1" }, { modelapp: { call: "w1" } })
   assert.equal((asked.structuredContent as { error: { code: string } }).error.code, "confirmation_required")
   const done = await c.confirmed("deal_mark_won", { id: "d1" }, "w1")
   assert.ok(!done.isError, JSON.stringify(done))

@@ -1,5 +1,5 @@
 {
-  "name": "mcpw-example-crm",
+  "name": "modelapp-example-crm",
   "version": "1.0.0",
   "private": true,
   "type": "module",
@@ -11,12 +11,12 @@
     "typecheck": "tsc --noEmit -p ."
   },
   "dependencies": {
-    "@mcpw/server": "file:../../../packages/mcp-workspaces",
+    "@modelapp/server": "file:../../../packages/modelapp",
     "zod": "^4.0.0"
   },
   "devDependencies": {
     "tsx": "^4.23.15",
     "typescript": "^5",
-    "@mcpw/spec": "file:../../../packages/app-spec"
+    "@modelapp/spec": "file:../../../packages/modelapp-spec"
   }
 }

@@ -1,13 +1,13 @@
 # Quickstart
 
-> Working name; the SDK is `@mcpw/server` (private for now, in
-> [`packages/mcp-workspaces`](../../packages/mcp-workspaces)).
+> Model App Protocol (MAP): an app that is also an MCP server. The SDK is `@modelapp/server` (private for now, in
+> [`packages/modelapp`](../../packages/modelapp)).
 
 ## 1. One file, one object
 
 ```ts
 // app.ts
-import { AppError, defineApp } from "@mcpw/server"
+import { AppError, defineApp } from "@modelapp/server"
 import { z } from "zod"
 
 type Note = { id: string; title: string; status: "open" | "done" }
@@ -83,7 +83,7 @@ export default defineApp({
 ```ts
 // main.ts
 import app from "./app"
-await app.listen({ port: 3920 })   // MCP at /mcp, manifest at /.well-known/app-manifest.json
+await app.listen({ port: 3920 })   // MCP at /mcp, manifest at /.well-known/modelapp.json
 ```
 
 `npx tsx main.ts` prints the dev sign-in code. A wrong name anywhere (a
@@ -104,7 +104,7 @@ permission, an entity, an action) fails here, at start, not at the first call.
 ## 3. Test it
 
 ```ts
-import { testClient } from "@mcpw/server/testing"
+import { testClient } from "@modelapp/server/testing"
 import app from "./app"
 
 const plain = await testClient(app, { permissions: "all" })           // as ChatGPT would call
@@ -116,7 +116,7 @@ await host.confirmed("note_close", { id: "n1" })                      // call id
 Then the conformance checks ([spec §8](spec.md#8-conformance)):
 
 ```sh
-npm run mcpw:conformance -- http://127.0.0.1:3920 --token <bearer>
+npm run modelapp:check -- http://127.0.0.1:3920 --token <bearer>
 ```
 
 ## 4. Three rules, three escape hatches

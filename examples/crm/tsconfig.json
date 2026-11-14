@@ -9,7 +9,7 @@
     "noUncheckedIndexedAccess": true,
     "skipLibCheck": true,
     "noEmit": true,
-    "paths": { "@mcpw/server": ["../../../packages/mcp-workspaces/src/index.ts"], "@mcpw/server/testing": ["../../../packages/mcp-workspaces/src/testing.ts"] }
+    "paths": { "@modelapp/server": ["../../../packages/modelapp/src/index.ts"], "@modelapp/server/testing": ["../../../packages/modelapp/src/testing.ts"] }
   },
   "include": ["src/**/*.ts"]
 }

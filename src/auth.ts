@@ -15,19 +15,21 @@ import {
   type JWTPayload,
 } from "jose"
 
+import { CONFIRMATION_TYPE, OAUTH_SCOPE, PROTOCOL_ID, TOKEN_CLAIM } from "@modelapp/spec/protocol"
+
 /**
  * AUTH (spec §9, §10): access tokens are JWTs from a trusted issuer (the
  * workspace host, or the app's own authorization server), verified with the
- * issuer's JWKS; the `mcpw` claim says who is calling for which
+ * issuer's JWKS; the `modelapp` claim says who is calling for which
  * installation. A workspace host proves a person's confirmation with a
- * second JWT (`mcpw-confirm+jwt`) bound to the call and its exact arguments.
+ * second JWT (`modelapp-confirm+jwt`) bound to the call and its exact arguments.
  *
  * Dev mode: the SDK is its own authorization server with a local key
  * (DevAuthority below), on a loopback address only.
  */
 
-export const CONFIRMATION_TYPE = "mcpw-confirm+jwt"
-export const DEV_ISSUER = "mcpw-dev"
+export { CONFIRMATION_TYPE }
+export const DEV_ISSUER = `${PROTOCOL_ID}-dev`
 
 export type Person = { id: string; name: string }
 
@@ -43,7 +45,7 @@ export type Caller = {
   subject: string
 }
 
-/** The `mcpw` claim of an access token. */
+/** The `modelapp` claim of an access token. */
 export type HostClaim = {
   installation: string
   person?: Person
@@ -82,7 +84,7 @@ export type DevOptions = {
   people?: (Person & { permissions?: string[] | "all" })[]
   /** The installation dev tokens are for (default `dev`). */
   installation?: string
-  /** Where the dev key is kept so tokens survive a restart (default `.mcpw-dev-key.json` in the working directory). */
+  /** Where the dev key is kept so tokens survive a restart (default `.modelapp-dev-key.json` in the working directory). */
   keyFile?: string
   /** The one-time code the sign-in page asks for (default: random, printed on start). */
   code?: string
@@ -153,8 +155,8 @@ export class TokenVerifier {
     } catch (error) {
       throw new AuthError(error instanceof Error ? error.message : "invalid token")
     }
-    const m = payload.mcpw as HostClaim | undefined
-    if (!m || typeof m.installation !== "string" || !m.installation) throw new AuthError("the token has no mcpw.installation")
+    const m = payload[TOKEN_CLAIM] as HostClaim | undefined
+    if (!m || typeof m.installation !== "string" || !m.installation) throw new AuthError(`the token has no ${TOKEN_CLAIM}.installation`)
     return {
       installation: m.installation,
       person: m.person && typeof m.person.id === "string" ? { id: m.person.id, name: String(m.person.name ?? "") } : null,
@@ -197,9 +199,9 @@ export async function generateSigningKey(): Promise<SigningKey> {
 }
 
 /** An access token as a host or the dev authority signs it. */
-export async function signAccessToken(key: SigningKey, claims: { iss: string; aud: string | string[]; sub: string; mcpw: HostClaim; lifetimeSeconds?: number; scope?: string }): Promise<string> {
+export async function signAccessToken(key: SigningKey, claims: { iss: string; aud: string | string[]; sub: string; modelapp: HostClaim; lifetimeSeconds?: number; scope?: string }): Promise<string> {
   const now = Math.floor(Date.now() / 1000)
-  return new SignJWT({ mcpw: claims.mcpw, ...(claims.scope ? { scope: claims.scope } : {}) })
+  return new SignJWT({ [TOKEN_CLAIM]: claims.modelapp, ...(claims.scope ? { scope: claims.scope } : {}) })
     .setProtectedHeader({ alg: "EdDSA", typ: "at+jwt", kid: key.kid })
     .setIssuer(claims.iss)
     .setAudience(claims.aud)
@@ -256,7 +258,7 @@ export class DevAuthority {
   }
 
   async start(): Promise<void> {
-    const file = this.options.keyFile ?? ".mcpw-dev-key.json"
+    const file = this.options.keyFile ?? `.${PROTOCOL_ID}-dev-key.json`
     if (existsSync(file)) {
       const jwk = JSON.parse(readFileSync(file, "utf8")) as JWK
       const privateKey = (await importJWK(jwk, "EdDSA")) as CryptoKey
@@ -295,7 +297,7 @@ export class DevAuthority {
       iss,
       aud: input.audience,
       sub: person.id,
-      mcpw: { installation: input.installation ?? this.installation, person: { id: person.id, name: person.name }, permissions, ...(input.locale ? { locale: input.locale } : {}), host: input.host ?? "plain" },
+      [TOKEN_CLAIM]: { installation: input.installation ?? this.installation, person: { id: person.id, name: person.name }, permissions, ...(input.locale ? { locale: input.locale } : {}), host: input.host ?? "plain" },
     })
   }
 
@@ -316,7 +318,7 @@ export class DevAuthority {
         grant_types_supported: ["authorization_code", "refresh_token"],
         code_challenge_methods_supported: ["S256"],
         token_endpoint_auth_methods_supported: ["none"],
-        scopes_supported: ["mcpw"],
+        scopes_supported: [OAUTH_SCOPE],
       })
     }
     if (path === "/.well-known/jwks.json") return json({ keys: [this.key.publicJwk] })
@@ -352,7 +354,7 @@ export class DevAuthority {
     const code = await new SignJWT({ k: "code", person: person.id, challenge: p("code_challenge"), redirect: p("redirect_uri"), client: p("client_id") })
       .setProtectedHeader({ alg: "EdDSA", kid: this.key.kid })
       .setIssuer(origin)
-      .setAudience("mcpw-dev-code")
+      .setAudience(`${PROTOCOL_ID}-dev-code`)
       .setIssuedAt()
       .setExpirationTime("5m")
       .sign(this.key.privateKey)
@@ -370,7 +372,7 @@ export class DevAuthority {
     if (form.get("grant_type") === "authorization_code") {
       let claims: JWTPayload
       try {
-        ;({ payload: claims } = await jwtVerify(form.get("code") ?? "", this.publicKey, { audience: "mcpw-dev-code" }))
+        ;({ payload: claims } = await jwtVerify(form.get("code") ?? "", this.publicKey, { audience: `${PROTOCOL_ID}-dev-code` }))
       } catch {
         return fail("invalid_grant", "unknown or expired code")
       }
@@ -380,7 +382,7 @@ export class DevAuthority {
       person = String(claims.person)
     } else if (form.get("grant_type") === "refresh_token") {
       try {
-        const { payload } = await jwtVerify(form.get("refresh_token") ?? "", this.publicKey, { audience: "mcpw-dev-refresh" })
+        const { payload } = await jwtVerify(form.get("refresh_token") ?? "", this.publicKey, { audience: `${PROTOCOL_ID}-dev-refresh` })
         person = String(payload.person)
       } catch {
         return fail("invalid_grant", "unknown or expired refresh token")
@@ -390,7 +392,7 @@ export class DevAuthority {
     if (!who) return fail("invalid_grant", "unknown person")
     this.#origins.add(origin)
     const access = await this.token({ person: who.id, audience: resource, issuer: origin })
-    const refresh = await new SignJWT({ person: who.id }).setProtectedHeader({ alg: "EdDSA", kid: this.key.kid }).setIssuer(origin).setAudience("mcpw-dev-refresh").setIssuedAt().setExpirationTime("30d").sign(this.key.privateKey)
-    return json({ access_token: access, token_type: "Bearer", expires_in: 3600, refresh_token: refresh, scope: "mcpw" })
+    const refresh = await new SignJWT({ person: who.id }).setProtectedHeader({ alg: "EdDSA", kid: this.key.kid }).setIssuer(origin).setAudience(`${PROTOCOL_ID}-dev-refresh`).setIssuedAt().setExpirationTime("30d").sign(this.key.privateKey)
+    return json({ access_token: access, token_type: "Bearer", expires_in: 3600, refresh_token: refresh, scope: OAUTH_SCOPE })
   }
 }

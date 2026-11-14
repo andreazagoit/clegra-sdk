@@ -1,0 +1,25 @@
+{
+  "name": "@modelapp/spec",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Model App Protocol (MAP): the protocol's names, the manifest's JSON Schema and the conformance checks (CLI: modelapp check <url>). Independent of any SDK: it talks to a server over HTTP.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "exports": {
+    ".": "./src/conformance.ts",
+    "./protocol": "./src/protocol.ts",
+    "./schema": "./schema/modelapp.schema.json"
+  },
+  "bin": {
+    "modelapp": "./src/cli.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "ajv": "^8.20.0"
+  }
+}

@@ -1,16 +1,16 @@
+import { MANIFEST_PATH, PROTOCOL_NAME, PROTOCOL_SHORT_NAME, SCHEMA_ID, SPEC_VERSION, uriPrefix } from "@modelapp/spec/protocol"
 import { z } from "zod"
 
 /**
  * THE MANIFEST (spec §2): the app's definition without its code, as pure
- * JSON. Hosts read it with one fetch (`/.well-known/app-manifest.json`) or as the
- * MCP resource `mcpw://<name>`. This Zod schema is the source of the
+ * JSON. Hosts read it with one fetch (`/.well-known/modelapp.json`) or as the
+ * MCP resource `modelapp://<name>`. This Zod schema is the source of the
  * published JSON Schema (schema/manifest.schema.json, `npm run schema`).
  */
 
-export const SPEC_VERSION = "1.0"
-/** Where every app serves its manifest (working name; the final one is chosen before publishing). */
-export const MANIFEST_PATH = "/.well-known/app-manifest.json"
-export const manifestUri = (name: string) => `mcpw://${name}`
+export { MANIFEST_PATH, SPEC_VERSION }
+/** The manifest as an MCP resource. */
+export const manifestUri = (name: string) => uriPrefix(name)
 
 const labelMap = z.record(z.string(), z.string()).describe("A label per locale (BCP 47 → text)")
 const jsonSchema = z.record(z.string(), z.unknown()).describe("A JSON Schema (draft 2020-12)")
@@ -125,5 +125,5 @@ export type ManifestFragment = z.infer<typeof fragmentSchema>
 
 /** The published JSON Schema of the manifest. */
 export function manifestJsonSchema(): Record<string, unknown> {
-  return { $id: "https://example.invalid/app-manifest/1.0.json", title: "App manifest 1.0 (working name)", ...z.toJSONSchema(manifestSchema, { target: "draft-2020-12" }) }
+  return { $id: SCHEMA_ID, title: `${PROTOCOL_NAME} (${PROTOCOL_SHORT_NAME}) manifest ${SPEC_VERSION}`, ...z.toJSONSchema(manifestSchema, { target: "draft-2020-12" }) }
 }

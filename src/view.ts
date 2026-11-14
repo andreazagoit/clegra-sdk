@@ -12,6 +12,8 @@
  * with its permissions and confirmations.
  */
 
+import { PROTOCOL_ID } from "@modelapp/spec/protocol"
+
 export const MCP_APP_MIME_TYPE = "text/html;profile=mcp-app"
 export const MCP_APPS_PROTOCOL_VERSION = "2026-01-26"
 
@@ -160,7 +162,7 @@ const SCRIPT = `
   };
   if (window.openai && window.openai.toolOutput) { render(window.openai.toolOutput); }
   window.addEventListener("openai:set_globals", () => { if (window.openai && window.openai.toolOutput) render(window.openai.toolOutput); });
-  request("ui/initialize", { protocolVersion: "${MCP_APPS_PROTOCOL_VERSION}", appInfo: { name: "mcpw-view", version: "1.0.0" }, appCapabilities: {} })
+  request("ui/initialize", { protocolVersion: "${MCP_APPS_PROTOCOL_VERSION}", appInfo: { name: "${PROTOCOL_ID}-view", version: "1.0.0" }, appCapabilities: {} })
     .then((r) => { applyContext(r && r.hostContext); notify("ui/notifications/initialized", {}); setTimeout(boot, 250); resize(); })
     .catch(() => setTimeout(boot, 0));
   new ResizeObserver(resize).observe(document.body);
@@ -176,5 +178,5 @@ export function viewHtml(title: string, boot: { tool: string; args?: Record<stri
 /** A custom page whose content is the developer's own site: an iframe in the view, the site's origin allowed as a frame. */
 export function urlPageHtml(title: string, url: string): string {
   const safe = url.replace(/"/g, "&quot;")
-  return `<!doctype html><html><head><meta charset="utf-8"><title>${title.replace(/[<&]/g, "")}</title><style>html,body{margin:0;height:100%}iframe{border:0;width:100%;height:100vh;display:block}</style></head><body><iframe src="${safe}" sandbox="allow-scripts allow-forms allow-same-origin allow-popups" referrerpolicy="no-referrer" title="${title.replace(/"/g, "")}"></iframe><script>window.parent.postMessage({jsonrpc:"2.0",id:1,method:"ui/initialize",params:{protocolVersion:"${MCP_APPS_PROTOCOL_VERSION}",appInfo:{name:"mcpw-url-page",version:"1.0.0"},appCapabilities:{}}},"*");addEventListener("message",e=>{if(e.data&&e.data.id===1){window.parent.postMessage({jsonrpc:"2.0",method:"ui/notifications/initialized",params:{}},"*");window.parent.postMessage({jsonrpc:"2.0",method:"ui/notifications/size-changed",params:{height:720}},"*")}})</script></body></html>`
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${title.replace(/[<&]/g, "")}</title><style>html,body{margin:0;height:100%}iframe{border:0;width:100%;height:100vh;display:block}</style></head><body><iframe src="${safe}" sandbox="allow-scripts allow-forms allow-same-origin allow-popups" referrerpolicy="no-referrer" title="${title.replace(/"/g, "")}"></iframe><script>window.parent.postMessage({jsonrpc:"2.0",id:1,method:"ui/initialize",params:{protocolVersion:"${MCP_APPS_PROTOCOL_VERSION}",appInfo:{name:"modelapp-url-page",version:"1.0.0"},appCapabilities:{}}},"*");addEventListener("message",e=>{if(e.data&&e.data.id===1){window.parent.postMessage({jsonrpc:"2.0",method:"ui/notifications/initialized",params:{}},"*");window.parent.postMessage({jsonrpc:"2.0",method:"ui/notifications/size-changed",params:{height:720}},"*")}})</script></body></html>`
 }

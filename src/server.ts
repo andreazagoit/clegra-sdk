@@ -1,6 +1,7 @@
 import { createServer as createHttpServer, type IncomingMessage } from "node:http"
 
 import { createMcpHandler, inputRequired, inputResponse, McpServer, type CallToolResult, type Icon, type ServerContext } from "@modelcontextprotocol/server"
+import { META_KEY, OAUTH_SCOPE, PROTOCOL_ID, RESOLVE_TOOL, URI_SCHEME, uriPrefix } from "@modelapp/spec/protocol"
 import { z } from "zod"
 
 import { AuthError, DevAuthority, isLoopback, TokenVerifier, type AuthOptions, type Caller, type Person } from "./auth"
@@ -31,7 +32,7 @@ import type {
 import { MCP_APP_MIME_TYPE, urlPageHtml, viewHtml } from "./view"
 
 /**
- * MCP WORKSPACES SERVER, v1 (docs/mcp-workspaces/spec.md): an MCP server
+ * MCP WORKSPACES SERVER, v1 (docs/map/spec.md): an MCP server
  * (official SDK, Streamable HTTP, stateless) whose declarations — entities,
  * actions, pages, fragments, agents, permissions, settings — become plain MCP
  * tools and MCP Apps views for any host, and a manifest hosts read to mount
@@ -63,7 +64,7 @@ export type ServerOptions = {
 }
 
 /** The one `_meta` key of the host protocol (spec §5): `{ call, confirmation, settings }` on requests, `{ notifications, untrusted }` on results. */
-export const META_KEY = "mcpw"
+export { META_KEY }
 type HostMeta = { call?: unknown; confirmation?: unknown; settings?: unknown }
 const hostMeta = (meta: Record<string, unknown> | undefined): HostMeta => {
   const m = meta?.[META_KEY]
@@ -94,7 +95,7 @@ const NAME = /^[a-z][a-z0-9-]{1,39}$/
 const IDENT = /^[a-z][a-z0-9_]{0,39}$/
 const PERMISSION = /^[a-z][a-z0-9_-]{0,39}\.[a-z][a-z0-9_-]{0,39}$/
 const RESERVED_PARAMS = new Set(["query", "sort", "dir", "cursor", "limit", "id"])
-const RESERVED_TOOLS = new Set(["search", "fetch", "mcpw_resolve"])
+const RESERVED_TOOLS = new Set(["search", "fetch", RESOLVE_TOOL])
 
 const b64url = (s: string) => Buffer.from(s, "utf8").toString("base64url")
 const unb64url = (s: string) => Buffer.from(s, "base64url").toString("utf8")
@@ -140,7 +141,7 @@ export class AppServer {
   #devReady: Promise<void> | null = null
   readonly #handler = createMcpHandler((ctx) => this.createMcpServer((ctx.authInfo?.extra as { caller?: Caller } | undefined)?.caller ?? null, ctx.era), {
     legacy: "stateless",
-    onerror: (e) => console.error("[mcpw]", e.message),
+    onerror: (e) => console.error(`[${PROTOCOL_ID}]`, e.message),
   })
 
   constructor(options: ServerOptions) {
@@ -264,9 +265,9 @@ export class AppServer {
 
   // ------------------------------------------------------------ URIs
 
-  /** `mcpw://<app>/<type>/<key>` (spec §4, §7). */
+  /** `modelapp://<app>/<type>/<key>` (spec §4, §7). */
   uri(type: string | EntityHandle, key: string): string {
-    return `mcpw://${this.name}/${typeof type === "string" ? type : type.name}/${encodeURIComponent(key)}`
+    return `${uriPrefix(this.name)}/${typeof type === "string" ? type : type.name}/${encodeURIComponent(key)}`
   }
 
   /** A fragment instance's URI: the record id for record cards, base64url of the sorted params' JSON otherwise. */
@@ -277,7 +278,7 @@ export class AppServer {
 
   /** A URI of this app read back: its type and key, or null. */
   parseUri(uri: string): { type: string; key: string; params: Record<string, unknown> } | null {
-    const m = /^mcpw:\/\/([^/]+)\/([^/?#]+)\/([^/?#]+)$/.exec(uri)
+    const m = new RegExp(`^${URI_SCHEME}://([^/]+)/([^/?#]+)/([^/?#]+)$`).exec(uri)
     if (!m || m[1] !== this.name) return null
     const type = m[2]!
     let key: string
@@ -555,10 +556,10 @@ export class AppServer {
       out = await a.handler(parsed.data as never, ctx, record as never)
     } catch (error) {
       if (error instanceof AppError) return failure(error.code, error.message, error.details)
-      console.error(`[mcpw] ${a.tool}`, error)
+      console.error(`[${PROTOCOL_ID}] ${a.tool}`, error)
       return failure("internal", "The action failed.")
     }
-    const recordUri = out?.record ? (out.record.startsWith("mcpw://") ? out.record : a.entity ? this.uri(a.entity.name, out.record) : out.record) : undefined
+    const recordUri = out?.record ? (out.record.startsWith(`${URI_SCHEME}://`) ? out.record : a.entity ? this.uri(a.entity.name, out.record) : out.record) : undefined
     const message = out?.message ?? "Done."
     const result: CallToolResult = {
       content: text(message),
@@ -649,7 +650,7 @@ export class AppServer {
         return await fn(args ?? {}, ctx)
       } catch (error) {
         if (error instanceof AppError) return failure(error.code, error.message, error.details)
-        console.error(`[mcpw] ${name}`, error)
+        console.error(`[${PROTOCOL_ID}] ${name}`, error)
         return failure("internal", "The call failed.")
       }
     }
@@ -759,7 +760,7 @@ export class AppServer {
 
     // The resolver hosts use for cards (hidden from models).
     reg(
-      "mcpw_resolve",
+      RESOLVE_TOOL,
       {
         title: "Resolve",
         description: "For hosts: fragment and record URIs resolved for the viewer.",
@@ -767,7 +768,7 @@ export class AppServer {
         annotations: { ...read },
         _meta: { ui: { visibility: ["app"] }, "openai/visibility": "private" },
       },
-      guard("mcpw_resolve", async (args, mctx) => {
+      guard(RESOLVE_TOOL, async (args, mctx) => {
         const ctx = ctxOf(mctx)
         const results = []
         for (const uri of args.uris as string[]) {
@@ -1001,7 +1002,7 @@ export class AppServer {
       mcp: { url: "/mcp" },
       auth: { audience: auth.resource ?? this.name, authorizationServers: auth.authorizationServers ?? (auth.issuers ?? []).map((i) => i.issuer) },
       view: this.#viewUri(),
-      resolveTool: "mcpw_resolve",
+      resolveTool: RESOLVE_TOOL,
       ...([...this.#entities.values()].some((e) => e.fields.some((f) => f.search)) ? { searchTool: "search" } : {}),
       entities,
       actions,
@@ -1101,7 +1102,7 @@ export class AppServer {
     if (url.pathname === "/.well-known/oauth-protected-resource" || url.pathname === "/.well-known/oauth-protected-resource/mcp") {
       const auth = this.options.auth ?? {}
       const servers = auth.authorizationServers ?? [...(auth.dev ? [origin] : []), ...(auth.issuers ?? []).map((i) => i.issuer)]
-      return json({ resource, authorization_servers: servers, bearer_methods_supported: ["header"], scopes_supported: ["mcpw"], resource_name: localize(this.options.title, this.locale, this.locale) })
+      return json({ resource, authorization_servers: servers, bearer_methods_supported: ["header"], scopes_supported: [OAUTH_SCOPE], resource_name: localize(this.options.title, this.locale, this.locale) })
     }
     if (this.#dev) {
       const dev = await this.#devStarted()
@@ -1138,7 +1139,7 @@ export class AppServer {
         }
         res.end()
       } catch (error) {
-        console.error("[mcpw http]", error)
+        console.error(`[${PROTOCOL_ID} http]`, error)
         if (!res.headersSent) res.writeHead(500).end()
         else res.end()
       } finally {

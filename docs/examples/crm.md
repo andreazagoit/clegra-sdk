@@ -1,6 +1,6 @@
 # The reference app: a CRM
 
-> Non-normative. Runnable code: [`examples/mcp-workspaces/crm`](../../../examples/mcp-workspaces/crm)
+> Non-normative. Runnable code: [`examples/modelapp/crm`](../../../examples/modelapp/crm)
 > (`src/app.ts`, tests in `src/app.test.ts`). Invented data.
 
 A small sales team's CRM: **companies**, **contacts** and **deals**, in
@@ -86,15 +86,15 @@ reads deals through the host with `tools/call` and has no network access.
 ## Run and check it
 
 ```sh
-npm run mcpw:crm                      # http://127.0.0.1:3920 — MCP at /mcp, manifest at /.well-known/app-manifest.json
-MCPW_DEV_CODE=CRM2026 npm run mcpw:crm   # a fixed dev sign-in code instead of a random one
-npm run mcpw:test                     # SDK tests + the CRM's tests
-npm run mcpw:conformance -- http://127.0.0.1:3920 --token <bearer>
+npm run modelapp:crm                      # http://127.0.0.1:3920 — MCP at /mcp, manifest at /.well-known/modelapp.json
+MODELAPP_DEV_CODE=CRM2026 npm run modelapp:crm   # a fixed dev sign-in code instead of a random one
+npm run modelapp:test                     # SDK tests + the CRM's tests
+npm run modelapp:check -- http://127.0.0.1:3920 --token <bearer>
 ```
 
 Dev sign-in offers two invented people: Ada (manager, every permission) and
-Bruno (sales rep, no `deals.values`). `MCPW_ISSUERS="<issuer>|<jwks url>"`
-adds a trusted workspace host; `MCPW_DEV=0` turns the dev sign-in off.
+Bruno (sales rep, no `deals.values`). `MODELAPP_ISSUERS="<issuer>|<jwks url>"`
+adds a trusted workspace host; `MODELAPP_DEV=0` turns the dev sign-in off.
 
 `src/mcp.snapshot.json` is what MCP clients see (tools, annotations, views,
 manifest). A change to it is a change for every client, so it is reviewed as

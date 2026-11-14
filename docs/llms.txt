@@ -1,6 +1,6 @@
-# Apps that are also MCP servers (working name)
+# Model App Protocol (MAP)
 
-> One typed object — `defineApp({ entities, actions, pages, fragments, agents, … })` from `@mcpw/server` — becomes a JSON manifest (for hosts that draw the app natively) and a plain, conformant MCP server with tools, annotations and MCP Apps views (for ChatGPT, Claude and any MCP client). No MCP extension required.
+> Apps that are also MCP servers. One typed object — `defineApp({ entities, actions, pages, fragments, agents, … })` from `@modelapp/server` — becomes a JSON manifest (for hosts that draw the app natively) and a plain, conformant MCP server with tools, annotations and MCP Apps views (for ChatGPT, Claude and any MCP client). No MCP extension required.
 
 ## Start here
 
@@ -10,5 +10,5 @@
 
 - [Specification](spec.md): the manifest, the generated MCP server, enforcement, conformance (normative, short)
 - [Quickstart](quickstart.md): a first app, run in the MCP Inspector and ChatGPT, tested
-- [CRM example](examples/crm.md): the reference app; code in `examples/mcp-workspaces/crm/src/app.ts`
-- JSON Schema of the manifest: `packages/app-spec/schema/app-manifest.schema.json`
+- [CRM example](examples/crm.md): the reference app; code in `examples/modelapp/crm/src/app.ts`
+- JSON Schema of the manifest: `packages/modelapp-spec/schema/modelapp.schema.json`

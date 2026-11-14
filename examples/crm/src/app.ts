@@ -1,15 +1,15 @@
-// The reference app (docs/mcp-workspaces/examples/crm.md): a small CRM with
+// The reference app (docs/map/examples/crm.md): a small CRM with
 // companies, contacts and deals, in memory, one copy of the data per
 // installation. Invented data only. The whole app is the one object at the
 // bottom: `export default defineApp({ … })`.
-import { AppError, defineApp, ref, type AuthOptions, type Context, type Query } from "@mcpw/server"
+import { AppError, defineApp, ref, type AuthOptions, type Context, type Query } from "@modelapp/server"
 import { z } from "zod"
 
 // ------------------------------------------------------------------ who may call
 
 /** How the server accepts callers: dev sign-in locally, plus the issuers given by the environment (a Clegra node). */
 export function authFromEnv(env: NodeJS.ProcessEnv = process.env): AuthOptions {
-  const issuers = (env.MCPW_ISSUERS ?? "")
+  const issuers = (env.MODELAPP_ISSUERS ?? "")
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean)
@@ -19,8 +19,8 @@ export function authFromEnv(env: NodeJS.ProcessEnv = process.env): AuthOptions {
     })
   return {
     issuers,
-    ...(env.MCPW_RESOURCE ? { resource: env.MCPW_RESOURCE } : {}),
-    ...(env.MCPW_DEV !== "0"
+    ...(env.MODELAPP_RESOURCE ? { resource: env.MODELAPP_RESOURCE } : {}),
+    ...(env.MODELAPP_DEV !== "0"
       ? {
           dev: {
             people: [
@@ -28,7 +28,7 @@ export function authFromEnv(env: NodeJS.ProcessEnv = process.env): AuthOptions {
               { id: "bruno", name: "Bruno Neri (sales rep)", permissions: ["deals.view", "deals.edit", "contacts.edit"] },
             ],
             installation: "demo",
-            ...(env.MCPW_DEV_CODE ? { code: env.MCPW_DEV_CODE } : {}),
+            ...(env.MODELAPP_DEV_CODE ? { code: env.MODELAPP_DEV_CODE } : {}),
           },
         }
       : {}),

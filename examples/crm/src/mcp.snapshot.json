@@ -528,7 +528,7 @@
       }
     },
     {
-      "name": "mcpw_resolve",
+      "name": "modelapp_resolve",
       "title": "Resolve",
       "description": "For hosts: fragment and record URIs resolved for the viewer.",
       "annotations": {
@@ -1231,7 +1231,7 @@
   ],
   "resources": [
     {
-      "uri": "mcpw://crm",
+      "uri": "modelapp://crm",
       "mimeType": "application/json"
     },
     {
@@ -1268,7 +1268,7 @@
       "authorizationServers": []
     },
     "view": "ui://crm/view",
-    "resolveTool": "mcpw_resolve",
+    "resolveTool": "modelapp_resolve",
     "searchTool": "search",
     "entities": [
       {

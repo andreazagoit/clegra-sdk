@@ -1,9 +1,9 @@
 {
-  "name": "@mcpw/server",
+  "name": "@modelapp/server",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "SDK for apps that are also MCP servers (working name): one typed object \u2014 defineApp({ entities, actions, pages, fragments, agents, \u2026 }) \u2014 becomes a JSON manifest for workspace hosts and a plain, conformant MCP server (tools, annotations, MCP Apps views) for ChatGPT, Claude and any MCP client. Spec: docs/mcp-workspaces/spec.md.",
+  "description": "Model App Protocol (MAP) SDK: one typed object — defineApp({ entities, actions, pages, fragments, agents, … }) — becomes a JSON manifest for workspace hosts and a plain, conformant MCP server (tools, annotations, MCP Apps views) for ChatGPT, Claude and any MCP client. Spec: docs/map/spec.md.",
   "license": "MIT",
   "engines": {
     "node": ">=20"
@@ -20,7 +20,8 @@
   },
   "dependencies": {
     "@modelcontextprotocol/server": "^2.4.0",
-    "jose": "^6.2.13"
+    "jose": "^6.2.13",
+    "@modelapp/spec": "*"
   },
   "peerDependencies": {
     "zod": "^4.0.0"

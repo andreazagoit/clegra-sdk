@@ -1,12 +1,12 @@
-# AI guide: building an app that is also an MCP server
+# AI guide: building a Model App Protocol (MAP) app
 
 > For coding agents. This one file is enough to write a correct app.
-> Working name; SDK `@mcpw/server`; normative text in [spec.md](spec.md).
+> A MAP app is an app that is also an MCP server. SDK `@modelapp/server`; normative text in [spec.md](spec.md).
 
 ## The model
 
 You write **one object** and `export default defineApp({ … })`. The SDK turns
-it into (a) a JSON manifest at `/.well-known/app-manifest.json` that workspace
+it into (a) a JSON manifest at `/.well-known/modelapp.json` that workspace
 hosts draw natively and (b) a plain MCP server at `/mcp` with tools and MCP
 Apps views for ChatGPT, Claude and any MCP client. Permissions, field
 visibility, confirmations and idempotency are enforced by the SDK before your
@@ -15,7 +15,7 @@ handlers run. There is no other authoring API.
 ## The whole shape
 
 ```ts
-import { AppError, defineApp, ref } from "@mcpw/server"
+import { AppError, defineApp, ref } from "@modelapp/server"
 import { z } from "zod"
 
 export default defineApp({
@@ -138,7 +138,7 @@ What `defineApp` returns: `manifest()`, `fetch(request)` (Fetch API handler),
 
 `<entity>_list`, `<entity>_get`, `search` and `fetch` (when a field has
 `search: true`), `<entity>_<action>` / `<action>`, `open_<page>` (not for
-record pages), `show_<fragment>`, `mcpw_resolve` (for hosts). Reads have
+record pages), `show_<fragment>`, `modelapp_resolve` (for hosts). Reads have
 `readOnlyHint: true`; writes `destructiveHint: true` when `confirm` is always.
 
 ## Rules
@@ -170,11 +170,11 @@ record pages), `show_<fragment>`, `mcpw_resolve` (for hosts). Reads have
 ## Check your work
 
 ```ts
-import { testClient } from "@mcpw/server/testing"
+import { testClient } from "@modelapp/server/testing"
 const c = await testClient(app, { permissions: ["deals.edit"] })      // or "all"; host: "workspace"; person; installation; locale
 await c.listTools(); await c.call("deal_list", {}); await c.readResource("ui://crm/view")
 await (await testClient(app, { host: "workspace", permissions: "all" })).confirmed("deal_mark_won", { id: "d1" })
 ```
 
-`npm run mcpw:conformance -- <url> --token <bearer>` must end with `Conformant.`
-A complete, tested app to copy from: [`examples/mcp-workspaces/crm/src/app.ts`](../../examples/mcp-workspaces/crm/src/app.ts).
+`npm run modelapp:check -- <url> --token <bearer>` must end with `Conformant.`
+A complete, tested app to copy from: [`examples/modelapp/crm/src/app.ts`](../../examples/modelapp/crm/src/app.ts).
