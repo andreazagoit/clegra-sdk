@@ -63,19 +63,31 @@ const SCRIPT = `
   const fail = (e) => { const text = String((e && e.message) || e || "Failed"); const box = root.querySelector(".box"); if (box) say(box, text, true); else { root.innerHTML = '<div class="box err">' + esc(text) + "</div>"; resize(); } };
   // The view's own few words (what the app's labels don't cover), in the host's language when the view has it.
   const STR = {
-    en: { required: "Required", tooShort: "At least {n} characters", tooLong: "At most {n} characters", min: "At least {n}", max: "At most {n}", date: "Enter a date", number: "Enter a number", search: "Search…", choose: "Choose…", none: "No results", done: "Done.", noAccess: "No access", notAvailable: "Not available", sortBy: "Sort by {n}", unknownPerson: "Unknown person" },
-    it: { required: "Obbligatorio", tooShort: "Almeno {n} caratteri", tooLong: "Al massimo {n} caratteri", min: "Almeno {n}", max: "Al massimo {n}", date: "Inserisci una data", number: "Inserisci un numero", search: "Cerca…", choose: "Scegli…", none: "Nessun risultato", done: "Fatto.", noAccess: "Nessun accesso", notAvailable: "Non disponibile", sortBy: "Ordina per {n}", unknownPerson: "Persona sconosciuta" },
-    es: { required: "Obligatorio", tooShort: "Al menos {n} caracteres", tooLong: "Como máximo {n} caracteres", min: "Al menos {n}", max: "Como máximo {n}", date: "Introduce una fecha", number: "Introduce un número", search: "Buscar…", choose: "Elige…", none: "Sin resultados", done: "Hecho.", noAccess: "Sin acceso", notAvailable: "No disponible", sortBy: "Ordenar por {n}", unknownPerson: "Persona desconocida" },
-    fr: { required: "Obligatoire", tooShort: "Au moins {n} caractères", tooLong: "Au plus {n} caractères", min: "Au moins {n}", max: "Au plus {n}", date: "Saisissez une date", number: "Saisissez un nombre", search: "Rechercher…", choose: "Choisir…", none: "Aucun résultat", done: "Fait.", noAccess: "Pas d'accès", notAvailable: "Non disponible", sortBy: "Trier par {n}", unknownPerson: "Personne inconnue" },
-    de: { required: "Erforderlich", tooShort: "Mindestens {n} Zeichen", tooLong: "Höchstens {n} Zeichen", min: "Mindestens {n}", max: "Höchstens {n}", date: "Datum eingeben", number: "Zahl eingeben", search: "Suchen…", choose: "Auswählen…", none: "Keine Ergebnisse", done: "Erledigt.", noAccess: "Kein Zugriff", notAvailable: "Nicht verfügbar", sortBy: "Sortieren nach {n}", unknownPerson: "Unbekannte Person" },
+    en: { required: "Required", tooShort: "At least {n} characters", tooLong: "At most {n} characters", min: "At least {n}", max: "At most {n}", date: "Enter a date", number: "Enter a number", search: "Search…", choose: "Choose…", none: "No results", done: "Done.", noAccess: "No access", notAvailable: "Not available", sortBy: "Sort by {n}", unknownPerson: "Unknown person", refGone: "Deleted", refUnreachable: "App not answering", refUnknownApp: "App not in this workspace", recordUri: "A record URI: modelapp://app/entity/id" },
+    it: { required: "Obbligatorio", tooShort: "Almeno {n} caratteri", tooLong: "Al massimo {n} caratteri", min: "Almeno {n}", max: "Al massimo {n}", date: "Inserisci una data", number: "Inserisci un numero", search: "Cerca…", choose: "Scegli…", none: "Nessun risultato", done: "Fatto.", noAccess: "Nessun accesso", notAvailable: "Non disponibile", sortBy: "Ordina per {n}", unknownPerson: "Persona sconosciuta", refGone: "Eliminato", refUnreachable: "L'app non risponde", refUnknownApp: "App non presente in questo spazio", recordUri: "L'URI di un record: modelapp://app/entità/id" },
+    es: { required: "Obligatorio", tooShort: "Al menos {n} caracteres", tooLong: "Como máximo {n} caracteres", min: "Al menos {n}", max: "Como máximo {n}", date: "Introduce una fecha", number: "Introduce un número", search: "Buscar…", choose: "Elige…", none: "Sin resultados", done: "Hecho.", noAccess: "Sin acceso", notAvailable: "No disponible", sortBy: "Ordenar por {n}", unknownPerson: "Persona desconocida", refGone: "Eliminado", refUnreachable: "La app no responde", refUnknownApp: "App que no está en este espacio", recordUri: "La URI de un registro: modelapp://app/entidad/id" },
+    fr: { required: "Obligatoire", tooShort: "Au moins {n} caractères", tooLong: "Au plus {n} caractères", min: "Au moins {n}", max: "Au plus {n}", date: "Saisissez une date", number: "Saisissez un nombre", search: "Rechercher…", choose: "Choisir…", none: "Aucun résultat", done: "Fait.", noAccess: "Pas d'accès", notAvailable: "Non disponible", sortBy: "Trier par {n}", unknownPerson: "Personne inconnue", refGone: "Supprimé", refUnreachable: "L'app ne répond pas", refUnknownApp: "App absente de cet espace", recordUri: "L'URI d'un enregistrement : modelapp://app/entité/id" },
+    de: { required: "Erforderlich", tooShort: "Mindestens {n} Zeichen", tooLong: "Höchstens {n} Zeichen", min: "Mindestens {n}", max: "Höchstens {n}", date: "Datum eingeben", number: "Zahl eingeben", search: "Suchen…", choose: "Auswählen…", none: "Keine Ergebnisse", done: "Erledigt.", noAccess: "Kein Zugriff", notAvailable: "Nicht verfügbar", sortBy: "Sortieren nach {n}", unknownPerson: "Unbekannte Person", refGone: "Gelöscht", refUnreachable: "App antwortet nicht", refUnknownApp: "App nicht in diesem Arbeitsbereich", recordUri: "Die URI eines Datensatzes: modelapp://app/entität/id" },
   };
   const tr = (k, n) => String((STR[String(locale).split("-")[0].toLowerCase()] || STR.en)[k] || STR.en[k]).replace("{n}", n === undefined ? "" : n);
   // The app's labels in the reader's language (hostContext.locale): each call sends its labels' other locales (_meta.${PROTOCOL_ID}.l10n); English when the app lacks the reader's.
   let l10n = {};
   const L = (s) => { if (typeof s !== "string") return s; const lang = String(locale).split("-")[0].toLowerCase(); const d = l10n[locale] || l10n[lang] || l10n.en; const out = d && d[s]; return typeof out === "string" ? out : s; };
-  const learn = (r) => { const m = r && ((r._meta && r._meta["${META_KEY}"]) || (r.result && r.result._meta && r.result._meta["${META_KEY}"])); const add = m && m.l10n; if (!add || typeof add !== "object") return; for (const [k, d] of Object.entries(add)) if (d && typeof d === "object") l10n[k] = Object.assign(l10n[k] || {}, d); };
+  // Records of other apps, as the workspace host resolved them for this viewer (_meta.${META_KEY}.resolved: uri → { state, title? }, spec §3.2).
+  let resolved = {};
+  const learn = (r) => { const m = r && ((r._meta && r._meta["${META_KEY}"]) || (r.result && r.result._meta && r.result._meta["${META_KEY}"])); if (m && m.resolved && typeof m.resolved === "object") resolved = Object.assign({}, resolved, m.resolved); const add = m && m.l10n; if (!add || typeof add !== "object") return; for (const [k, d] of Object.entries(add)) if (d && typeof d === "object") l10n[k] = Object.assign(l10n[k] || {}, d); };
   let refs = {};
+  const STATE_WORD = { "no-access": "noAccess", gone: "refGone", unreachable: "refUnreachable", "unknown-app": "refUnknownApp" };
+  // A record of another app: its title or its state as the host says it; without the host's word, the app and entity the URI names, never a title.
+  const crossRef = (v) => {
+    const r = resolved[v];
+    if (r && r.state === "ok" && typeof r.title === "string") return esc(r.title);
+    if (r && STATE_WORD[r.state]) return '<span class="muted" title="' + esc(v) + '">' + esc(tr(STATE_WORD[r.state])) + "</span>";
+    const m = /^${PROTOCOL_ID}:\\/\\/([^/]+)\\/([^/]+)\\//.exec(String(v));
+    return '<span class="muted" title="' + esc(v) + '">' + esc(m ? m[1] + " · " + m[2] : v) + "</span>";
+  };
   const fmt = (v, col) => {
+    if (col && col.ref && typeof col.ref === "object" && col.ref.kind && typeof v === "string" && v) return crossRef(v);
     if (col && col.ref && refs[col.name] && refs[col.name][v]) return esc(refs[col.name][v]);
     // A person by name; one the app can't name is an unknown person, never the bare id.
     if (col && col.role === "person" && !col.ref && refs[col.name] && v !== null && v !== undefined && v !== "") return refs[col.name][v] ? esc(refs[col.name][v]) : '<span class="muted">' + esc(tr("unknownPerson")) + "</span>";
@@ -123,6 +135,8 @@ const SCRIPT = `
       if (Array.isArray(p.enum)) return "<label>" + label + "<br><select" + attrs + ">" + (must ? "" : '<option value="">—</option>') + p.enum.map((v) => '<option value="' + esc(v) + '">' + esc(L((p.labels && p.labels[v]) || v)) + "</option>").join("") + "</select></label>" + err;
       if (p.type === "boolean") return '<label><input type="checkbox" name="' + esc(k) + '"> ' + esc(L(p.title) || k) + "</label>";
       const num = p.type === "number" || p.type === "integer";
+      // A record of another app: its URI (a workspace host offers its own picker over every app of the kind).
+      if (p.ref && p.ref.kind) return "<label>" + label + "<br><input" + attrs + ' type="text" placeholder="${PROTOCOL_ID}://…" spellcheck="false"></label>' + err;
       return "<label>" + label + "<br><input" + attrs + ' type="' + (num ? "number" : p.format === "date" ? "date" : "text") + '"' + (num && p.type === "number" ? ' step="any"' : "") + (typeof p.minimum === "number" ? ' min="' + p.minimum + '"' : "") + (typeof p.maximum === "number" ? ' max="' + p.maximum + '"' : "") + (typeof p.maxLength === "number" ? ' maxlength="' + p.maxLength + '"' : "") + "></label>" + err; }).join("") + '<div class="row"><button class="primary" type="button">' + esc(L(action.title)) + "</button></div>";
     // The latest ask per field wins: an earlier, slower answer (the first full list) never replaces what was searched after it.
     const asked = {};
@@ -136,6 +150,7 @@ const SCRIPT = `
       if (v === "") return required.has(k) ? tr("required") : null;
       if (p.type === "number" || p.type === "integer") { const n = Number(v); if (!Number.isFinite(n) || (p.type === "integer" && !Number.isInteger(n))) return tr("number"); if (typeof p.minimum === "number" && n < p.minimum) return tr("min", fmt(p.minimum)); if (typeof p.maximum === "number" && n > p.maximum) return tr("max", fmt(p.maximum)); return null; }
       if (p.format === "date" && !/^\\d{4}-\\d{2}-\\d{2}$/.test(v)) return tr("date");
+      if (p.ref && p.ref.kind && typeof p.pattern === "string" && !new RegExp(p.pattern).test(v)) return tr("recordUri");
       if (typeof p.minLength === "number" && v.length < p.minLength) return tr("tooShort", p.minLength);
       if (typeof p.maxLength === "number" && v.length > p.maxLength) return tr("tooLong", p.maxLength);
       return null; };

@@ -5,7 +5,7 @@ import type { INDUSTRIES, STAGES } from "@/db/schema"
 export type OwnerKey = "alice" | "ben" | "emma"
 
 export type DemoData = {
-  companies: { id: string; name: string; city: string; industry: (typeof INDUSTRIES)[number]; vatId?: string; website?: string }[]
+  companies: { id: string; name: string; city: string; industry: (typeof INDUSTRIES)[number]; vatId?: string; website?: string; erpCustomer?: string }[]
   contacts: { id: string; name: string; email: string; company: string; lastCall?: string; lastNote?: string }[]
   deals: { id: string; name: string; company: string; stage: (typeof STAGES)[number]; value: number; closeDate: string; owner: OwnerKey }[]
 }
@@ -13,9 +13,9 @@ export type DemoData = {
 /** The main organization's pipeline; also every new workspace-host installation's starting copy. */
 export const SALES_TEAM_DATA: DemoData = {
   companies: [
-    // VAT numbers are invented (GB000…): no real company has them.
-    { id: "co1", name: "Hartley Engineering", city: "Manchester", industry: "manufacturing", vatId: "GB000000001", website: "https://hartley-engineering.example" },
-    { id: "co2", name: "Greenfield Retail", city: "London", industry: "retail", vatId: "GB000000002", website: "https://greenfield-retail.example" },
+    // VAT numbers are invented (GB000…): no real company has them. `erpCustomer` points into an invented ERP app.
+    { id: "co1", name: "Hartley Engineering", city: "Manchester", industry: "manufacturing", vatId: "GB000000001", website: "https://hartley-engineering.example", erpCustomer: "modelapp://erp/customer/1001" },
+    { id: "co2", name: "Greenfield Retail", city: "London", industry: "retail", vatId: "GB000000002", website: "https://greenfield-retail.example", erpCustomer: "modelapp://erp/customer/1002" },
     { id: "co3", name: "Lane Studio", city: "Bristol", industry: "services", website: "https://lane-studio.example" },
     { id: "co4", name: "Pixel Lab", city: "Cambridge", industry: "software", vatId: "GB000000004", website: "https://pixellab.example" },
   ],

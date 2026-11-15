@@ -26,7 +26,9 @@ export const fieldSchema = z.object({
   role: z.enum(["title", "subtitle", "status", "amount", "date", "person"]).optional(),
   label: labelMap,
   as: z.string().optional().describe("The property of the entity's kind this field holds (spec §3.1)"),
-  ref: z.string().optional().describe("The entity whose record id this field holds"),
+  ref: z
+    .union([z.string().describe("An entity of this app: the field holds one of its record ids"), z.object({ kind: z.string() }).describe("A kind: the field holds the URI of a record of that kind, in any app (spec §3.2)")])
+    .optional(),
   permission: z.string().optional().describe("Only callers with this permission see the field"),
   filter: z.boolean().optional(),
   sort: z.boolean().optional(),

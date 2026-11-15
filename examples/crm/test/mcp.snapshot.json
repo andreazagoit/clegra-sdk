@@ -3,7 +3,7 @@
     {
       "name": "company_list",
       "title": "Companies",
-      "description": "A customer or prospect company. Lists companies with filters, sort and paging (pass `cursor` from the previous result's `next`). Kind: organization.",
+      "description": "A customer or prospect company. Lists companies with filters, sort and paging (pass `cursor` from the previous result's `next`). A record of another app appears as { uri, kind }: the app the URI names opens it with its fetch tool. Kind: organization.",
       "annotations": {
         "title": "Companies",
         "readOnlyHint": true,
@@ -162,7 +162,7 @@
     {
       "name": "company_get",
       "title": "Company",
-      "description": "One company by id, with the actions available on it. Kind: organization.",
+      "description": "One company by id, with the actions available on it. A record of another app appears as { uri, kind }: the app the URI names opens it with its fetch tool. Kind: organization.",
       "annotations": {
         "title": "Company",
         "readOnlyHint": true,
@@ -712,6 +712,37 @@
         "required": [
           "id",
           "note"
+        ]
+      }
+    },
+    {
+      "name": "company_link_erp_customer",
+      "title": "Link to the ERP customer",
+      "description": "Records which customer of another app (the ERP) this company is (a change). An input that takes a record of another app takes its URI (modelapp://<app>/<entity>/<id>), as that app's search or lists give it.",
+      "annotations": {
+        "title": "Link to the ERP customer",
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false
+      },
+      "ui": null,
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The company's id"
+          },
+          "customer": {
+            "type": "string",
+            "pattern": "^modelapp:\\/\\/[a-z][a-z0-9-]{1,39}\\/[a-z][a-z0-9_]{0,39}\\/[^/?#\\s]+$",
+            "title": "ERP customer"
+          }
+        },
+        "required": [
+          "id",
+          "customer"
         ]
       }
     },
@@ -1408,6 +1439,10 @@
             },
             "website": {
               "type": "string"
+            },
+            "erpCustomer": {
+              "type": "string",
+              "pattern": "^modelapp:\\/\\/[a-z][a-z0-9-]{1,39}\\/[a-z][a-z0-9_]{0,39}\\/[^/?#\\s]+$"
             }
           },
           "required": [
@@ -1505,6 +1540,18 @@
               "it": "Sito web"
             },
             "as": "url"
+          },
+          {
+            "name": "erpCustomer",
+            "type": "string",
+            "required": false,
+            "label": {
+              "en": "ERP customer",
+              "it": "Cliente nel gestionale"
+            },
+            "ref": {
+              "kind": "organization"
+            }
           }
         ],
         "tools": {
@@ -1966,6 +2013,45 @@
         "readOnly": false,
         "confirm": "always",
         "permission": "contacts.edit"
+      },
+      {
+        "name": "link_erp_customer",
+        "tool": {
+          "name": "company_link_erp_customer",
+          "plain": true
+        },
+        "entity": "company",
+        "title": {
+          "en": "Link to the ERP customer",
+          "it": "Collega al cliente del gestionale"
+        },
+        "description": {
+          "en": "Records which customer of another app (the ERP) this company is",
+          "it": "Registra quale cliente di un'altra app (il gestionale) è questa azienda"
+        },
+        "icon": "link",
+        "input": {
+          "type": "object",
+          "properties": {
+            "customer": {
+              "type": "string",
+              "pattern": "^modelapp:\\/\\/[a-z][a-z0-9-]{1,39}\\/[a-z][a-z0-9_]{0,39}\\/[^/?#\\s]+$",
+              "label": {
+                "en": "ERP customer",
+                "it": "Cliente nel gestionale"
+              },
+              "ref": {
+                "kind": "organization"
+              }
+            }
+          },
+          "required": [
+            "customer"
+          ]
+        },
+        "readOnly": false,
+        "confirm": "optional",
+        "permission": "deals.edit"
       },
       {
         "name": "create_deal",

@@ -304,8 +304,25 @@
                   "type": "string"
                 },
                 "ref": {
-                  "description": "The entity whose record id this field holds",
-                  "type": "string"
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "description": "An entity of this app: the field holds one of its record ids"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind"
+                      ],
+                      "additionalProperties": false,
+                      "description": "A kind: the field holds the URI of a record of that kind, in any app (spec §3.2)"
+                    }
+                  ]
                 },
                 "permission": {
                   "description": "Only callers with this permission see the field",

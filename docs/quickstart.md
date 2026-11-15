@@ -241,6 +241,21 @@ list: async (q, ctx) => {
 },
 ```
 
+## Kinds, when other apps hold the same things
+
+If your entities are people, companies, events, tasks, documents, products or orders, say so: `kind: "person"` on
+the entity and `.meta({ as: "email", filter: true })` on the field that holds it. Hosts then show one picker, one
+search and one «People» page over every app that has people, and find the same person in another app by the exact
+email. Your `list` receives a key filter normalised (`q.filters.email` lower-cased): compare it exactly.
+
+```ts
+if (typeof q.filters.email === "string") where.push(`lower(email) = $${params.push(q.filters.email)}`)
+```
+
+A field that points at a record of *another* app is `ref.kind("organization")`: it holds the URI and nothing else.
+Skip kinds for your own domain records (deals, tickets), and when a workspace will have one app per kind they add
+nothing. Details: [AI guide](ai-guide.md#kinds-the-same-kind-of-thing-across-apps-optional), [spec §3.1](spec.md#31-kinds).
+
 ## Three rules, three escape hatches
 
 - `input` (actions) and `params` (fragments) are always given: `z.object({})` for none.

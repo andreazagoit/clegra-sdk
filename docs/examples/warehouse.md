@@ -23,6 +23,10 @@ What it shows:
   `confirm: "always"`. The person confirms in the host, and a plain client that can elicit is asked by the server.
   A second confirmation of the same order is a `conflict`. `register_movement` and `create_order` are
   `confirm: "optional"`.
+- **Kinds.** `product` is kind `product` (SKU as `sku`, sale price as `price`, and a GTIN as `gtin`: a key, filtered
+  exactly in SQL; the demo GTINs are in the restricted-circulation range 20–29, so no real product has them).
+  `order` is kind `order` (number, date, customer and total as `orderNumber`, `orderDate`, `customer`,
+  `totalPrice`). Stock movements have no kind: they are the warehouse's own.
 - **An embedded page.** The page `stock` is `url: "/embed/stock"`: a real page of the app, the stock board, framed by
   hosts at the app's public origin.
 - **Its own `resolve`.** better-auth is the authorization server. The app verifies better-auth's access tokens

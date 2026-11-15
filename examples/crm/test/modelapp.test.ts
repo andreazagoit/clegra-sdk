@@ -143,6 +143,18 @@ test("contacts are people, companies organizations: found by email and VAT numbe
   assert.deepEqual(manifest.entities.map((e) => [e.name, e.kind ?? null]), [["company", "organization"], ["contact", "person"], ["deal", null]])
 })
 
+test("a company points at its ERP customer by URI only: { uri, kind } for models, no title, any record URI accepted", async () => {
+  const c = await testClient(app, { person: "alice", permissions: "all", installation: "cross" })
+  const got = await c.call("company_get", { id: "co1" })
+  assert.deepEqual(JSON.parse(got.content![0]!.text!).erpCustomer, { uri: "modelapp://erp/customer/1001", kind: "organization" })
+  assert.ok(!("erpCustomer" in (got.structuredContent as { refs: Record<string, unknown> }).refs))
+  const linked = await c.call("company_link_erp_customer", { id: "co3", customer: "modelapp://erp/customer/2077" })
+  assert.ok(!linked.isError, JSON.stringify(linked))
+  assert.equal(((await c.call("company_get", { id: "co3" })).structuredContent as { record: { erpCustomer?: string } }).record.erpCustomer, "modelapp://erp/customer/2077")
+  const refused = await c.call("company_link_erp_customer", { id: "co3", customer: "Lane Studio Ltd" })
+  assert.equal((refused.structuredContent as { error: { code: string } }).error.code, "invalid_input")
+})
+
 test("deal owners reach hosts and models by name, never as person ids", async () => {
   const c = await testClient(app, { person: "ben", permissions: "all", installation: "names" })
   const r = await c.call("deal_list", {})

@@ -220,7 +220,7 @@ describe("plain host", () => {
     assert.match(uri, /^modelapp:\/\/notes\/open_count\//)
     const resolved = await c.call("modelapp_resolve", { uris: [uri, "modelapp://notes/note/n1", "modelapp://notes/note/zz", "modelapp://other/note/n1"] })
     const states = (resolved.structuredContent as { results: { state: string; title?: string }[] }).results
-    assert.deepEqual(states.map((x) => x.state), ["ok", "ok", "gone", "gone"])
+    assert.deepEqual(states.map((x) => x.state), ["ok", "ok", "gone", "not_found"], "another app's URI is not_found")
     assert.equal(states[1]!.title, "Call Ada")
     const home = await c.call("open_home", {})
     assert.equal((home.structuredContent as { fragments: unknown[] }).fragments.length, 2)

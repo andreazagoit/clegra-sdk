@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs"
 
 import { Ajv2020 } from "ajv/dist/2020.js"
 
-import { entityKindProblems, keyOf, kindDefinitionProblems, kindNameProblem, kindOfRecord, kindSentence, kindsOf, normaliseKey, propertyOf, valueProblem, type EntityKind, type KindDef, type KindField } from "./kinds"
+import { entityKindProblems, keyOf, RECORD_URI, kindDefinitionProblems, kindNameProblem, kindOfRecord, kindSentence, kindsOf, normaliseKey, propertyOf, valueProblem, type EntityKind, type KindDef, type KindField } from "./kinds"
 import { MANIFEST_PATH, META_KEY, PROTOCOL_ID, URI_SCHEME } from "./protocol"
 
 /**
@@ -33,7 +33,7 @@ export type Options = {
 
 type Tool = { name: string; title?: string; description?: string; inputSchema?: Record<string, unknown>; annotations?: Record<string, unknown>; _meta?: Record<string, unknown> }
 type ToolRef = { name: string; plain: boolean }
-type ManifestField = { name: string; type: string; required: boolean; enum?: string[]; ref?: string; permission?: string; role?: string; sort?: boolean; filter?: boolean; search?: boolean; as?: string; currency?: string }
+type ManifestField = { name: string; type: string; required: boolean; enum?: string[]; ref?: string | { kind: string }; permission?: string; role?: string; sort?: boolean; filter?: boolean; search?: boolean; as?: string; currency?: string }
 type Manifest = {
   specVersion: string
   name: string
@@ -43,7 +43,7 @@ type Manifest = {
   searchTool?: string
   kinds?: Record<string, KindDef>
   entities: { name: string; kind?: EntityKind; permission?: string; schema: { properties?: Record<string, { items?: { type?: unknown } }> }; fields: ManifestField[]; tools: { list: ToolRef; get: ToolRef }; searchable: boolean }[]
-  actions: { name: string; entity?: string; readOnly: boolean; confirm: string; permission?: string; tool: ToolRef }[]
+  actions: { name: string; entity?: string; input: { properties?: Record<string, { ref?: unknown }> }; readOnly: boolean; confirm: string; permission?: string; tool: ToolRef }[]
   pages: { name: string; kind: string; entity?: string; columns?: string[]; permission?: string; tool: ToolRef; view?: string; url?: string }[]
   fragments: { type: string; entity?: string; template?: string; view?: string; permission?: string; tool: ToolRef; actions?: string[] }[]
   agents: { name: string; tools: string[] }[]
@@ -115,7 +115,8 @@ export async function checkApp(options: Options): Promise<Report> {
     if (e.fields.filter((f) => f.role === "title").length !== 1) problems.push(`entity ${e.name}: exactly one field has role title`)
     for (const f of e.fields) {
       perm(f.permission, `${e.name}.${f.name}`)
-      if (f.ref && !entities.has(f.ref)) problems.push(`${e.name}.${f.name}: unknown entity ${f.ref}`)
+      if (typeof f.ref === "string" && !entities.has(f.ref)) problems.push(`${e.name}.${f.name}: unknown entity ${f.ref}`)
+      else if (f.ref !== undefined && typeof f.ref !== "string" && typeof (f.ref as { kind?: unknown })?.kind !== "string") problems.push(`${e.name}.${f.name}: ref is an entity or { kind }`)
     }
   }
   for (const a of manifest.actions) {
@@ -158,7 +159,11 @@ export async function checkApp(options: Options): Promise<Report> {
 
   // 2b. Kinds (spec §3.1): neutral for an app that declares none.
   const kinded = manifest.entities.filter((e) => e.kind !== undefined || e.fields.some((f) => f.as !== undefined))
-  const noKinds = !kinded.length && !Object.keys(manifest.kinds ?? {}).length
+  /** Cross-app references (spec §3.2): fields and action inputs with `ref: { kind }`. */
+  const kindOfRef = (r: unknown) => (r && typeof r === "object" && typeof (r as { kind?: unknown }).kind === "string" ? (r as { kind: string }).kind : undefined)
+  const crossFields = manifest.entities.flatMap((e) => e.fields.filter((f) => kindOfRef(f.ref) !== undefined).map((f) => ({ e, f, kind: kindOfRef(f.ref)! })))
+  const crossInputs = manifest.actions.flatMap((a) => Object.entries(a.input?.properties ?? {}).filter(([, p]) => kindOfRef(p?.ref) !== undefined).map(([k, p]) => ({ a, k, kind: kindOfRef(p.ref)! })))
+  const noKinds = !kinded.length && !Object.keys(manifest.kinds ?? {}).length && !crossFields.length && !crossInputs.length
   if (noKinds) {
     skip("kinds.known", "every kind is one of this specification's or a well-formed namespaced kind", "the app declares no kinds")
     skip("kinds.properties", "every `as` is a property of the entity's kind with a matching type; single-valued ones appear once; required ones exist", "the app declares no kinds")
@@ -168,6 +173,8 @@ export async function checkApp(options: Options): Promise<Report> {
       const p = kindNameProblem(k)
       if (p) known.push(`entity ${e.name}: ${p}`)
     }
+    for (const { e, f, kind } of crossFields) if (kindNameProblem(kind)) known.push(`${e.name}.${f.name}: ref: ${kindNameProblem(kind)}`)
+    for (const { a, k, kind } of crossInputs) if (kindNameProblem(kind)) known.push(`action ${a.name}, input ${k}: ref: ${kindNameProblem(kind)}`)
     check("kinds.known", "every kind is one of this specification's or a well-formed namespaced kind", [...new Set(known)])
     const props: string[] = kindDefinitionProblems(manifest.kinds).filter((p) => !p.includes("not a namespaced kind"))
     for (const e of manifest.entities) props.push(...entityKindProblems(`entity ${e.name}`, e.kind, e.fields.map((f) => kindField(f, e.schema)), manifest.kinds, { names: false }))
@@ -397,6 +404,43 @@ export async function checkApp(options: Options): Promise<Report> {
     if (!uri.startsWith("ui://")) viewProblems.push(`${uri}: not a ui:// URI`)
     else if (contents[0]?.mimeType !== MCP_APP_MIME_TYPE || !contents[0]?.text) viewProblems.push(`${uri}: not served as ${MCP_APP_MIME_TYPE}`)
   }
+  // 4d. References across apps (spec §3.2): URIs, as { uri, kind } in text, never a title beside them.
+  if (!crossFields.length && !crossInputs.length) skip("refs.cross", "a reference to another app's record holds a record URI, reads as { uri, kind }, and has no refs title", "no field or input refers to records of other apps")
+  else {
+    const p: string[] = []
+    for (const { e, f, kind } of crossFields) {
+      if (!byName.has(e.tools.list.name)) continue
+      const r = await call(e.tools.list.name, { limit: 25 })
+      if (r.error) {
+        p.push(`${e.tools.list.name}: ${r.error}`)
+        continue
+      }
+      const refs = (r.result?.structuredContent as { refs?: Record<string, unknown> } | undefined)?.refs
+      if (refs && Object.hasOwn(refs, f.name)) p.push(`${e.tools.list.name}: sends refs titles for ${f.name}, a record of another app (the host resolves it for each viewer)`)
+      for (const row of (r.data?.rows ?? []) as Record<string, unknown>[]) {
+        const v = row[f.name]
+        if (v === undefined || v === null) continue
+        const ok = v && typeof v === "object" && !Array.isArray(v) && Object.keys(v).sort().join() === "kind,uri" && (v as { kind: unknown }).kind === kind && typeof (v as { uri: unknown }).uri === "string" && RECORD_URI.test((v as { uri: string }).uri)
+        if (!ok) p.push(`${String(row.uri)} ${f.name}: ${JSON.stringify(v)} is not { uri: <a record URI>, kind: "${kind}" }`)
+      }
+    }
+    for (const { a, k } of crossInputs) {
+      const t = byName.get(a.tool.name)
+      const prop = (t?.inputSchema?.properties as Record<string, { type?: unknown }> | undefined)?.[k]
+      if (t && prop && prop.type !== "string") p.push(`${t.name}: input ${k} holds a record URI, a string`)
+    }
+    check("refs.cross", "a reference to another app's record holds a record URI, reads as { uri, kind }, and has no refs title", p)
+  }
+
+  // 4e. The resolver answers only for its own app (spec §6).
+  {
+    const other = manifest.name === "conformance-other" ? "conformance-another" : "conformance-other"
+    const foreign = `${URI_SCHEME}://${other}/record/1`
+    const r = await rpc("tools/call", { name: manifest.resolveTool, arguments: { uris: [foreign] } }, token)
+    const results = ((r.result?.structuredContent as { results?: { uri?: string; state?: string }[] } | undefined)?.results ?? []) as { uri?: string; state?: string }[]
+    check("resolve.foreign", "the resolver answers not_found for another app's URI", r.error ? r.error.message : r.result?.isError ? "the resolver failed" : results[0]?.state === "not_found" ? null : `state ${String(results[0]?.state)} for ${foreign}`)
+  }
+
   check("mcp.views", "every view a tool names is served as an MCP Apps document", viewProblems)
 
   // 6. The manifest is also one MCP resource, identical to the file.

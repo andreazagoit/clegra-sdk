@@ -1,5 +1,6 @@
 import { z } from "zod"
 
+import { kindNameProblem, RECORD_URI } from "../spec/src/kinds"
 import { isLabel, type Label } from "./labels"
 
 /**
@@ -20,7 +21,8 @@ export type FieldMeta = {
   label?: Label
   /** The property of the entity's kind this field holds (spec §3.1): `email`, `vatID`, `startDate`… */
   as?: string
-  ref?: string
+  /** An entity of this app (the field holds a record id), or `{ kind }`: the URI of a record of that kind in any app (spec §3.2). */
+  ref?: string | { kind: string }
   permission?: string
   filter?: boolean
   sort?: boolean
@@ -45,9 +47,31 @@ export type FieldInfo = {
 
 const META_KEYS = ["role", "label", "as", "ref", "permission", "filter", "sort", "search", "labels", "tones", "currency", "untrusted"] as const
 
-/** A string field holding the id of another entity's record of this app: `ref("company")`. */
-export function ref(entity: string) {
-  return z.string().meta({ ref: entity })
+/**
+ * A string field holding the id of another entity's record of this app: `ref("company")`.
+ * `ref.kind("organization")`: the URI of a record of that kind in ANY app (spec §3.2), as a field or an action
+ * input. The app stores the URI and nothing else of the record; any syntactically valid record URI is accepted
+ * (checked), and the app never calls the other app: hosts resolve it, for each viewer.
+ */
+export const ref = Object.assign(
+  function ref(entity: string) {
+    return z.string().meta({ ref: entity })
+  },
+  {
+    kind(kind: string) {
+      const problem = kindNameProblem(kind)
+      if (problem) throw new Error(`ref.kind: ${problem}`)
+      return z.string().regex(RECORD_URI, { error: "a record URI: modelapp://<app>/<entity>/<id>" }).meta({ ref: { kind } })
+    },
+  },
+)
+
+/** The entity of this app a field (or an input) holds record ids of. */
+export const localRef = (meta: { ref?: unknown }): string | undefined => (typeof meta.ref === "string" ? meta.ref : undefined)
+/** The kind a cross-app reference holds a record URI of (spec §3.2). */
+export function kindRef(meta: { ref?: unknown }): string | undefined {
+  const r = meta.ref
+  return r && typeof r === "object" && !Array.isArray(r) && typeof (r as { kind?: unknown }).kind === "string" ? (r as { kind: string }).kind : undefined
 }
 
 /** JSON Schema of a Zod schema, without `$schema` (the shape tools and the card carry). */
@@ -98,6 +122,9 @@ export function fieldsOf(entity: string, schema: z.ZodObject): FieldInfo[] {
     if (meta.label !== undefined && !isLabel(meta.label)) throw new Error(`${where}: label must be a string or a map of strings per locale`)
     if (meta.tones) for (const [v, t] of Object.entries(meta.tones)) if (!TONES.includes(t)) throw new Error(`${where}: tone of "${v}" must be one of ${TONES.join(", ")}`)
     if (meta.permission !== undefined && typeof meta.permission !== "string") throw new Error(`${where}: permission must be a permission id`)
+    if (meta.ref !== undefined && !localRef(meta) && !kindRef(meta)) throw new Error(`${where}: ref is an entity name or { kind }`)
+    const crossKind = kindRef(meta)
+    if (crossKind !== undefined && kindNameProblem(crossKind)) throw new Error(`${where}: ref: ${kindNameProblem(crossKind)}`)
     const enumValues = Array.isArray(merged.enum) ? (merged.enum as unknown[]).map(String) : undefined
     const plain = plainSchema(prop) as Record<string, unknown>
     fields.push({ name, type: typeOf(merged), required: required.has(name), ...(enumValues ? { enum: enumValues } : {}), schema: plain, ...meta })

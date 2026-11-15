@@ -34,8 +34,8 @@ verified caller, the permissions, the confirmations and the MCP surface.
 |---|---|
 | `permissions` | `deals.view`, `deals.edit`, `contacts.edit` (members), `deals.values` (owners and admins only: money) — the same list the pages use (`lib/permissions.ts`) |
 | `settings` | `follow_up_days` (number, default 7) |
-| `entities` | `company`, `contact` (`ref("company")`, last call, last note — **untrusted**), `deal` (stage as `status`, value as `amount` behind `deals.values`, owner as `person`) |
-| `actions` | `mark_won` (confirm always, notifies), `set_stage` (`"optional"`), `log_call`, `create_deal`. All `expose: { plain: true }` |
+| `entities` | `company` (kind `organization`: VAT number as `vatID`, a key filter compared upper-cased without spaces; website as `url`; `erpCustomer`, a `ref.kind("organization")` URI to the same company in another app), `contact` (kind `person`: email as `email`, a key filter compared lower-cased; `ref("company")` as `worksFor`; last call, last note — **untrusted**), `deal` (no kind: the CRM's own; stage as `status`, value as `amount` behind `deals.values`, owner as `person`) |
+| `actions` | `mark_won` (confirm always, notifies), `set_stage` (`"optional"`), `log_call`, `link_erp_customer` (takes a record URI of kind `organization`, stores it, never calls the other app), `create_deal`. All `expose: { plain: true }` |
 | `pages` | `deals`, `companies`, `contacts`, `deal` (record), `pipeline` (dashboard), `forecast` (custom MCP Apps view), `board` (`url: "/embed/pipeline"`: a real page of the app, framed by hosts) |
 | `fragments` | `pipeline_total` (stat), `deals_by_stage` (chart), `closing_soon` (list) |
 | `agents` | `sales_assistant` |

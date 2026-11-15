@@ -16,7 +16,7 @@ export type Stage = (typeof STAGES)[number]
 export type Industry = (typeof INDUSTRIES)[number]
 export const OPEN_STAGES = ["lead", "qualified", "proposal"] as const satisfies readonly Stage[]
 
-export type Company = { id: string; name: string; city: string; industry: Industry; vatId?: string; website?: string }
+export type Company = { id: string; name: string; city: string; industry: Industry; vatId?: string; website?: string; erpCustomer?: string }
 export type Contact = { id: string; name: string; email: string; company: string; lastCall?: string; lastNote?: string }
 export type Deal = { id: string; name: string; company: string; stage: Stage; value: number; closeDate: string; owner: string; wonNote?: string }
 export type Call = { id: string; contact: string; person: string; note?: string; calledOn: string }
@@ -103,11 +103,11 @@ const page = <Row>(rows: Row[], total: number, offset: number, limit: number): L
 
 // ------------------------------------------------------------------ companies
 
-const companyFields = { id: companies.id, name: companies.name, city: companies.city, industry: companies.industry, vatId: companies.vatId, website: companies.website }
+const companyFields = { id: companies.id, name: companies.name, city: companies.city, industry: companies.industry, vatId: companies.vatId, website: companies.website, erpCustomer: companies.erpCustomer }
 // A VAT number is matched upper-cased and without spaces, whatever was typed in.
 const companySpec: ListSpec = { orgId: companies.orgId, id: companies.id, order: companies.createdAt, fields: companyFields, keys: { vatId: sql`upper(replace(${companies.vatId}, ' ', ''))` } }
-type CompanyRow = { id: string; name: string; city: string; industry: Industry; vatId: string | null; website: string | null }
-const toCompany = ({ vatId, website, ...rest }: CompanyRow): Company => ({ ...rest, ...(vatId ? { vatId } : {}), ...(website ? { website } : {}) })
+type CompanyRow = { id: string; name: string; city: string; industry: Industry; vatId: string | null; website: string | null; erpCustomer: string | null }
+const toCompany = ({ vatId, website, erpCustomer, ...rest }: CompanyRow): Company => ({ ...rest, ...(vatId ? { vatId } : {}), ...(website ? { website } : {}), ...(erpCustomer ? { erpCustomer } : {}) })
 
 export async function listCompanies(orgId: string, q: ListQuery): Promise<ListPage<Company>> {
   const { where, order, offset, limit } = listParts(companySpec, orgId, q)
@@ -121,6 +121,16 @@ export async function listCompanies(orgId: string, q: ListQuery): Promise<ListPa
 export async function getCompany(orgId: string, id: string): Promise<Company | null> {
   const [row] = await db().select(companyFields).from(companies).where(and(eq(companies.orgId, orgId), eq(companies.id, id)))
   return row ? toCompany(row) : null
+}
+
+/**
+ * Links a company to its record in another app (a MAP record URI, e.g. `modelapp://erp/customer/1001`), or unlinks it
+ * (null). Only the URI is kept: the other app's data stay there, read live by whoever may see them.
+ */
+export async function setErpCustomer(orgId: string, id: string, uri: string | null): Promise<Company> {
+  const [row] = await db().update(companies).set({ erpCustomer: uri }).where(and(eq(companies.orgId, orgId), eq(companies.id, id))).returning(companyFields)
+  if (!row) throw new CrmError("not_found", `No company ${id}`)
+  return toCompany(row)
 }
 
 /** Company names by id, for showing references. */

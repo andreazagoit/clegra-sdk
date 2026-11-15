@@ -60,7 +60,7 @@ JSON Schema; `fields` says what each field means:
 | `name`, `type`, `required`, `enum?`, `label` | The basics. Every entity has a required string `id` |
 | `role?` | `title` (exactly one per entity), `subtitle`, `status`, `amount`, `date`, `person`; at most one field per role |
 | `as?` | The property of the entity's kind this field holds (§3.1) |
-| `ref?` | The field holds the id of a record of that entity |
+| `ref?` | An entity name: the field holds the id of a record of that entity. Or `{ kind }`: the field holds the URI of a record of that kind, in any app (§3.2) |
 | `filter?`, `sort?`, `search?` | Usable as a list filter, a sort key, in text search (below) |
 | `permission?` | Only callers with it ever receive the field |
 | `labels?`, `tones?`, `currency?` | Enum value labels; tones `neutral\|info\|success\|warning\|danger`; ISO currency of an amount |
@@ -169,6 +169,28 @@ Kinds pay off when several apps of one workspace hold the same kind of thing
 records (a deal, a ticket, a quote line) have no kind; none is invented for
 them.
 
+### 3.2 References across apps
+
+A field with `ref: { kind }` holds a record URI, `modelapp://<app>/<entity>/<id>`
+(`<app>` the name the app has in the workspace, §9): a record of that kind in
+any app, this one included. Syntactically valid means: `<app>` matches
+`[a-z][a-z0-9-]{1,39}`, `<entity>` `[a-z][a-z0-9_]{0,39}`, and `<id>` is one
+or more characters without `/`, `?`, `#` or white space (an id that has them
+is percent-encoded). The app stores the URI and nothing else of the
+record (a title would be a copy that outlives permissions). It MUST accept any
+syntactically valid record URI, MUST NOT call the other app, and sends no
+`refs` entry for the field: the host resolves it for each viewer (§9). In a
+result's text the field is `{ "uri": …, "kind": … }`, and the descriptions of
+the entity's tools say, in a fixed sentence before the kind's, that the app
+the URI names opens it with its `fetch` tool. An action input property MAY
+carry the same `ref` (§4); its tool's description says it takes the URI.
+
+A workspace host that relays a result to the app's view MAY add
+`_meta.modelapp.resolved`: `{ <uri>: { state, title? } }`, `state` being
+`ok` (with the title) or one of the states of §9 rule 3. The generated view shows the title for `ok` and the state
+otherwise; without it (a plain host) it shows the app and entity the URI
+names, never a title.
+
 ## 4. Actions
 
 `{ name, entity?, title, description?, icon?, input, readOnly, confirm,
@@ -180,7 +202,10 @@ is `{ ok: true, message, record?, data? }`.
 `input` is a JSON Schema (`required`, `minLength`, `minimum`, `format: date`,
 `enum` and the like are what a form checks). Its properties MAY carry, beside
 `label`: `ref` (the entity whose record id the property holds: a form draws
-a picker over that entity's list, showing titles, never a box for an id),
+a picker over that entity's list, showing titles, never a box for an id; or
+`{ kind }`: the property holds a record URI of that kind in any app, §3.2,
+and a workspace host draws its picker over every app of the workspace with
+that kind),
 `currency` (a number is money) and `labels` (an enum's values by label map).
 A host uses the same keys to show a value before a confirmation: a record by
 its title, a date, a number and money in the person's locale. Tool schemas
@@ -236,7 +261,7 @@ Streamable HTTP at `mcp.url`. Tools, in this order of derivation:
 |---|---|---|
 | `<entity>_list`, `<entity>_get` | each entity (filters, `query`, `sort`, `dir`, `cursor`, `limit` ≤ 100, default 25) | read |
 | `search`, `fetch` | entities with a `search` field; `search` takes an optional `kind` (an enum of the searchable entities' kinds) and each result carries `kind` when its entity has one; `fetch` carries it in `metadata` | read |
-| `modelapp_resolve` | always: `{ uris, want? }` → each URI's state `ok \| gone \| no-access` and data, for hosts; hidden from models | read |
+| `modelapp_resolve` | always: `{ uris, want? }` → each URI's state `ok \| gone \| no-access \| not_found` and data, for hosts; hidden from models. `not_found`: a URI that is not this app's (a host MUST send an app only its own URIs); `gone`: this app's record or type that doesn't exist | read |
 | `<entity>_<action>` or `<action>` | each action | read or write |
 | `open_<page>` | each page except `record` pages (those are `<entity>_get`) | read |
 | `show_<fragment>` | each non-record fragment | read |
@@ -513,9 +538,55 @@ npx modelapp check https://crm.example.com --token <a plain caller's bearer>
 | `kinds.keys` | listing with a key value taken from a returned record, in another letter case where case doesn't count, returns that record and only records holding that value |
 | `kinds.values` | sampled records: `email`, `vatID`, `gtin`, dates, `address` and numbers have the stated form |
 | `kinds.tools` | entity tools carry the kind in the description and in `_meta.modelapp`; `search` offers `kind`, keeps to it, and names each result's kind |
+| `refs.cross` | a `ref: { kind }` field's values are record URIs; its text form is `{ uri, kind }`; no `refs` title is sent for it; such an action input is a string |
+| `resolve.foreign` | the resolver answers `not_found` for another app's URI |
 
 The `kinds.*` checks are skipped, not failed, for an app that declares no
-kinds (and `kinds.keys` when no listed record holds a key value to try).
+kinds (and `kinds.keys` when no listed record holds a key value to try);
+`refs.cross` for an app without references to other apps.
 
 An app is conformant when every check passes with a token. Without a token
 only the public checks run: the report says «Incomplete», never «Conformant».
+
+## 9. Workspace hosts: across apps
+
+What a workspace host does when it draws several apps together. None of it
+needs anything from an app beyond §2–§7.
+
+1. **Names.** An app is the connection an administrator installed (its
+   address, public or local); there is no global app id. A host MUST NOT hold
+   two apps with the same `name` in one workspace: when an app's `name` is
+   taken, the administrator gives it another name there at install time, and
+   the host uses that name in the workspace's record URIs and translates them
+   to and from the app's own `name` in every call. Record URIs are therefore
+   scoped to the workspace and resolved by its host. (A public registry that
+   lists apps may give them globally unique, publisher-verified names; that is
+   a listing, outside this protocol.)
+2. **Caller.** Every call a host makes to list, search, match or resolve
+   across apps MUST be made for the viewer, with the viewer's token for that
+   app. A host MUST NOT show a person data obtained with another caller's
+   token, and MUST NOT keep a copy of records beyond the response it is drawing.
+3. **Resolving.** For a cross-app reference the host calls the owning app's
+   resolver and shows the title, or one of `no-access`, `gone`, `unreachable`
+   (a timeout or an error), `unknown-app` (no app of that name in the
+   workspace), each distinguishable to the person. It MUST NOT show a title
+   from an earlier response in place of a failed one.
+4. **Fan-out.** A federated list calls every source in parallel with a time
+   limit per source. The result MUST name every source with its state (`ok`,
+   `timeout`, `error`, `no-access`, `not-linked`) and MUST be marked partial
+   unless all are `ok`. A total is shown only when every source gave one. A
+   host MUST NOT substitute other data for a failed source.
+5. **Order.** A merged order across sources is allowed only by a property
+   every included source declares sortable; otherwise results are grouped by
+   source in each source's own order.
+6. **Matching.** Two records are *matched* only when they have the same kind
+   and an equal normalised key (§3.1 rule 5), found by the key's exact filter.
+   A host MUST NOT match on names or any non-key value, MUST NOT store matches,
+   MUST NOT present matched records as one record, and MUST show each one's
+   source.
+7. **Links.** A host MAY store a person's statement that two records are, or
+   are not, the same thing: the two URIs, who, when — no field values. A link
+   belongs to the workspace (anyone may benefit from it) and is shown only to a
+   viewer for whom both URIs resolve `ok`.
+8. **Models.** What a host gives a model from these calls keeps `untrusted`
+   marks (§7) and names the source of every record.

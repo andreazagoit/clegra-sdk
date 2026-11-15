@@ -102,6 +102,13 @@ Dev sign-in (`auth.dev`) answers loopback callers only. A Next route handler can
 `x-forwarded-for` is whatever the client sent. So `toNextHandlers` refuses an app with `auth.dev`. Locally,
 use init's bearer (`MODELAPP_LOCAL_TOKEN`) or your own sign-in, or run the app with `listen` from `modelapp/node`.
 
+## Kinds and references across apps
+
+`kind: "person"` on an entity and `.meta({ as: "email", filter: true })` on a field say what the record is in the
+words every app shares (spec §3.1; the vocabulary is `spec/kinds.json`, written with `npm run schema`). Key filters
+(`email`, `vatID`, `gtin`, `uid`) reach `list` normalised and must be matched exactly. `ref.kind("organization")`
+holds the URI of a record in any app (spec §3.2). Both are optional: apps without them are unchanged.
+
 ## Tests
 
 ```sh

@@ -22,6 +22,7 @@ import {
   personNames,
   pipelineByStage,
   provisionWorkspace,
+  setErpCustomer,
   setStage,
   STAGES,
 } from "@/lib/crm"
@@ -50,6 +51,9 @@ const companySchema = z.object({
   // What other apps can find the company by (kind organization): its VAT number, an exact filter, and its website.
   vatId: z.string().optional().meta({ as: "vatID", label: { en: "VAT number", it: "Partita IVA" }, filter: true }),
   website: z.string().optional().meta({ as: "url", label: { en: "Website", it: "Sito web" } }),
+  // The same company in another app (an ERP's customer): a record URI of kind organization. The CRM keeps the URI
+  // only; hosts show the ERP's live title to people who may see it there.
+  erpCustomer: ref.kind("organization").optional().meta({ label: { en: "ERP customer", it: "Cliente nel gestionale" } }),
 })
 
 const contactSchema = z.object({
@@ -204,6 +208,20 @@ export function createCrmApp({ auth, store = new SqlStore((text, params) => data
         run: async (input, ctx, contact) => {
           await logCall(await tenant(ctx), contact.id, { personId: ctx.person?.id ?? "unknown", note: input.note }).catch((e) => refused(e, ctx))
           return { message: ctx.t({ en: `Call with ${contact.name} logged.`, it: `Chiamata con ${contact.name} registrata.` }), record: contact.id }
+        },
+      },
+      link_erp_customer: {
+        on: "company",
+        title: { en: "Link to the ERP customer", it: "Collega al cliente del gestionale" },
+        description: { en: "Records which customer of another app (the ERP) this company is", it: "Registra quale cliente di un'altra app (il gestionale) è questa azienda" },
+        icon: "link",
+        input: z.object({ customer: ref.kind("organization").meta({ label: { en: "ERP customer", it: "Cliente nel gestionale" } }) }),
+        confirm: "optional",
+        permission: "deals.edit",
+        expose: { plain: true },
+        run: async (input, ctx, company) => {
+          await setErpCustomer(await tenant(ctx), company.id, input.customer).catch((e) => refused(e, ctx))
+          return { message: ctx.t({ en: `${company.name} linked to ${input.customer}.`, it: `${company.name} collegata a ${input.customer}.` }), record: company.id }
         },
       },
       create_deal: {

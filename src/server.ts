@@ -1,14 +1,14 @@
 import { AsyncLocalStorage } from "node:async_hooks"
 
 import { createMcpHandler, inputRequired, inputResponse, McpServer, type CallToolResult, type Icon, type ServerContext } from "@modelcontextprotocol/server"
-import { entityKindProblems, keyOf, kindDefinitionProblems, kindOfRecord, kindSentence, kindsOf, normaliseKey, type KindDef, type KindField, type Normalisation } from "../spec/src/kinds"
+import { entityKindProblems, keyOf, kindNameProblem, kindDefinitionProblems, kindOfRecord, kindSentence, kindsOf, normaliseKey, type KindDef, type KindField, type Normalisation } from "../spec/src/kinds"
 import { META_KEY, OAUTH_SCOPE, PROTOCOL_ID, RESOLVE_TOOL, URI_SCHEME, uriPrefix } from "../spec/src/protocol"
 import { z } from "zod"
 
 import { AuthError, canonicalJson, DEV_ISSUER, DevAuthority, INSTALLATION, isLoopback, signConfirmation, tenantOf, TokenVerifier, type AuthOptions, type Caller, type Person, type RequestTrust } from "./auth"
 import { MANIFEST_PATH, manifestUri, SPEC_VERSION, type Manifest, type ManifestField } from "./manifest"
 import { isLabel, labelMap, localize, type Label } from "./labels"
-import { fieldsOf, jsonSchemaOf, plainSchema, type FieldInfo } from "./meaning"
+import { fieldsOf, jsonSchemaOf, kindRef, localRef, plainSchema, type FieldInfo } from "./meaning"
 import { MemoryStore, type IdempotencyStore } from "./store"
 import type {
   ActionConfig,
@@ -122,6 +122,10 @@ const IDENT = /^[a-z][a-z0-9_]{0,39}$/
 const PERMISSION = /^[a-z][a-z0-9_-]{0,39}\.[a-z][a-z0-9_-]{0,39}$/
 const RESERVED_PARAMS = new Set(["query", "sort", "dir", "cursor", "limit", "id"])
 const RESERVED_TOOLS = new Set(["search", "fetch", RESOLVE_TOOL])
+
+/** The fixed hint on the tools of an entity with cross-app references (spec §3.2): how a model opens such a record. */
+export const CROSS_INPUT_HINT = "An input that takes a record of another app takes its URI (modelapp://<app>/<entity>/<id>), as that app's search or lists give it."
+export const CROSS_APP_HINT = "A record of another app appears as { uri, kind }: the app the URI names opens it with its fetch tool."
 
 /** JSON Schema formats of key properties (spec §6: a key filter carries `format` where JSON Schema has one). */
 const KEY_FORMATS: Record<string, string> = { email: "email" }
@@ -539,6 +543,9 @@ export class AppServer {
         const title = this.#visibleFields(target, caller).find((f) => f.role === "title")
         shown.ref = { entity: target.name, tool: target.tools.list.name, title: title?.name ?? "id", search: this.#visibleFields(target, caller).some((f) => f.search) }
       }
+      // A record of any app (spec §3.2): the host's picker gives the URI; the generated view takes it as text.
+      const kind = kindRef(p)
+      if (kind) shown.ref = { kind }
     }
     return { tool: a.tool, title: this.#t(caller, a.config.title), confirm: a.confirm, input }
   }
@@ -704,7 +711,9 @@ export class AppServer {
     const out: Record<string, Record<string, string>> = {}
     await Promise.all(
       this.#visibleFields(entity, caller).map(async (f) => {
-        const target = f.ref ? this.#entities.get(f.ref) : undefined
+        // Same-app references only: a record of another app is the host's to name, for each viewer (spec §3.2).
+        const local = localRef(f)
+        const target = local ? this.#entities.get(local) : undefined
         if (!target || !this.#canSee(target, caller)) return
         const ids = [...new Set(rows.map((r) => r[f.name]).filter((v): v is string => typeof v === "string"))].slice(0, 50)
         const titles: Record<string, string> = {}
@@ -723,7 +732,7 @@ export class AppServer {
     for (const f of entity.fields) {
       if (!out[f.name]) continue
       ordered[f.name] = out[f.name]!
-      if (pointers && f.ref && this.#untrustedTitle(this.#entities.get(f.ref)!)) for (const id of Object.keys(ordered[f.name]!)) pointers.push(`/refs/${pointerKey(f.name)}/${pointerKey(id)}`)
+      if (pointers && localRef(f) && this.#untrustedTitle(this.#entities.get(localRef(f)!)!)) for (const id of Object.keys(ordered[f.name]!)) pointers.push(`/refs/${pointerKey(f.name)}/${pointerKey(id)}`)
     }
     return ordered
   }
@@ -776,10 +785,16 @@ export class AppServer {
     const out = { ...row }
     for (const f of entity.fields) {
       const id = out[f.name]
+      // A record of another app: its URI and kind, never a title (the app has none, and keeps none: spec §3.2).
+      const kind = kindRef(f)
+      if (kind) {
+        if (typeof id === "string") out[f.name] = { uri: id, kind }
+        continue
+      }
       const title = typeof id === "string" ? refs[f.name]?.[id] : undefined
       if (title === undefined) continue
       // A person by name; a referenced record by its title (an outsider's title wrapped).
-      if (f.ref) out[f.name] = { id, title: this.#untrustedTitle(this.#entities.get(f.ref)!) ? untrustedText(title) : title }
+      if (localRef(f)) out[f.name] = { id, title: this.#untrustedTitle(this.#entities.get(localRef(f)!)!) ? untrustedText(title) : title }
       else if (f.role === "person") out[f.name] = { id, name: title }
     }
     return out
@@ -1049,7 +1064,8 @@ export class AppServer {
       const plural = t(e.config.plural ?? e.config.label)
       const columns = () => this.#visibleFields(e, caller).filter((f) => f.name !== "id" && (f.role || f.filter)).slice(0, 6).map((f) => this.#column(f, caller))
       // What the entity is, for every client: the kind's fixed sentence ends both descriptions; hosts read `_meta.modelapp` (spec §6).
-      const kindText = e.config.kind !== undefined ? ` ${kindSentence(e.config.kind)}` : ""
+      // The kind's sentence is always last (spec §6 rule 8); the cross-app hint (spec §3.2) before it.
+      const kindText = `${e.fields.some((f) => kindRef(f)) ? ` ${CROSS_APP_HINT}` : ""}${e.config.kind !== undefined ? ` ${kindSentence(e.config.kind)}` : ""}`
       const entityMeta = { [META_KEY]: { entity: e.name, ...(e.config.kind !== undefined ? { kind: e.config.kind } : {}) } }
       reg(
         e.tools.list.name,
@@ -1200,7 +1216,8 @@ export class AppServer {
         for (const [i, uri] of uris.entries()) {
           const found = resolved[i]
           if (!found) {
-            results.push({ uri, state: "gone" })
+            // Another app's URI is not this app's to answer (spec §6): not_found, never a guess. This app's unknown type or record: gone.
+            results.push({ uri, state: uri.startsWith(`${uriPrefix(this.name)}/`) ? "gone" : "not_found" })
             continue
           }
           const { parsed, r } = found
@@ -1225,11 +1242,12 @@ export class AppServer {
       if (!this.#mayUse(a, caller)) continue
       const title = t(a.config.title)
       const input = a.entity ? z.object({ id: z.string().describe(`The ${t(a.entity.config.label).toLowerCase()}'s id`), ...a.input.shape }) : a.input
+      const crossInput = Object.values(((jsonSchemaOf(a.input, "input") as { properties?: Record<string, Record<string, unknown>> }).properties ?? {})).some((p) => kindRef(p))
       reg(
         a.tool,
         {
           title,
-          description: `${t(a.config.description) || title}${a.write ? (a.confirm === "always" ? " (a change; the person confirms it first)" : " (a change)") : ""}.`,
+          description: `${t(a.config.description) || title}${a.write ? (a.confirm === "always" ? " (a change; the person confirms it first)" : " (a change)") : ""}.${crossInput ? ` ${CROSS_INPUT_HINT}` : ""}`,
           inputSchema: listedOnly(input, t),
           annotations: { title, readOnlyHint: !a.write, destructiveHint: a.write && a.confirm === "always", idempotentHint: !a.write, openWorldHint: false },
           _meta: this.#callable(),
@@ -1343,6 +1361,11 @@ export class AppServer {
           if (!this.#entities.has(p.ref)) throw new Error(`an action's input "${k}": ref "${p.ref}" is not an entity`)
           shown.ref = p.ref
         }
+        const kind = kindRef(p)
+        if (kind !== undefined) {
+          if (kindNameProblem(kind)) throw new Error(`an action's input "${k}": ref: ${kindNameProblem(kind)}`)
+          shown.ref = { kind }
+        }
         if (typeof p.currency === "string") shown.currency = p.currency
         if (p.labels && typeof p.labels === "object") shown.labels = Object.fromEntries(Object.entries(p.labels as Record<string, Label>).filter(([, l]) => isLabel(l)).map(([v, l]) => [v, L(l)!]))
       }
@@ -1350,7 +1373,7 @@ export class AppServer {
     }
     const entities = [...this.#entities.values()].map((e) => {
       for (const f of e.fields) {
-        if (f.ref && !this.#entities.has(f.ref)) throw new Error(`entity "${e.name}", field "${f.name}": ref "${f.ref}" is not an entity`)
+        if (localRef(f) && !this.#entities.has(localRef(f)!)) throw new Error(`entity "${e.name}", field "${f.name}": ref "${f.ref}" is not an entity`)
         perm(f.permission, `entity "${e.name}", field "${f.name}"`)
       }
       const fields: ManifestField[] = e.fields.map((f) => ({

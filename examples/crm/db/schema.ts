@@ -26,6 +26,8 @@ export const companies = pgTable(
     // The company's VAT number (country prefix and number, no spaces) and website: what other apps can match it by.
     vatId: text("vat_id"),
     website: text("website"),
+    // The same company's record in another app of the workspace (e.g. the ERP's customer): its MAP record URI, nothing else of it.
+    erpCustomer: text("erp_customer"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => [primaryKey({ columns: [t.orgId, t.id] }), index("companies_org_name_idx").on(t.orgId, t.name)],

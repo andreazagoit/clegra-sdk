@@ -194,12 +194,54 @@ What `defineApp` returns: `manifest()`, `fetch(request)` (Fetch API handler),
 `start()`, `devToken()`, `devConfirmation()`, `uri()`. On Node alone:
 `listen(app, { port, host })` from `modelapp/node`.
 
+## Kinds: the same kind of thing across apps (optional)
+
+Say what an entity is only when other apps may hold the same thing: people, companies, events, tasks,
+documents, products, orders. Leave your own records (deals, tickets, quote lines) without a kind.
+
+```ts
+contact: {
+  label: "Contact",
+  kind: "person",                 // person | organization | event | task | document | product | order | "com.example.thing"
+  schema: z.object({
+    id: z.string(),
+    name: z.string().meta({ role: "title", search: true }),          // the title is the kind's name: no `as`
+    email: z.string().meta({ as: "email", filter: true }),           // a KEY of person: needs filter: true
+    phone: z.string().optional().meta({ as: "telephone" }),
+    company: ref("company").meta({ as: "worksFor", filter: true }),
+    erpAccount: ref.kind("organization").optional(),                 // a record of ANY app: its URI, modelapp://erp/customer/42
+    lastNote: z.string().optional(),                                 // your own field: no `as`
+  }),
+  get, list,
+},
+customer: { kind: { by: "type", map: { company: "organization", private: "person" } }, … },   // one kind per record: `type` a required enum
+```
+
+- Properties (schema.org names, verbatim): person `givenName familyName email† telephone† jobTitle worksFor address
+  image`; organization `legalName email† telephone† url address vatID taxID`; event `startDate`(required) `endDate
+  location attendee† organizer uid`; task `due startDate completed assignee`; document `url encodingFormat author
+  contentSize`; product `sku gtin brand price`; order `orderNumber orderDate customer totalPrice`. † many: an array
+  field, or several fields. Any entity may mark `url`, `dateCreated`, `dateModified`. Full list: `packages/modelapp/spec/kinds.json`.
+- Types: dates are RFC 3339 strings; `price`/`totalPrice` need `currency` on the field; `vatID` is `GB123456789`
+  (prefix, no spaces); `gtin` 8/12/13/14 digits; `address` a string or a PostalAddress object.
+- **Keys** (`email`, `vatID`, `gtin`, `uid`) are exact filters. Your `list` gets the value already normalised
+  (email lower-cased, vatID upper-cased without spaces, gtin digits): compare it with the normalised column
+  (`lower(email) = $1`), never with `ILIKE` or a prefix. A row that doesn't hold the value fails the call.
+- `ref.kind(kind)`: store the URI only, never a title; the host names it for each viewer. Any valid record URI is
+  accepted; your app never calls the other app. Models read it as `{ uri, kind }`.
+- `defineApp` throws on: an unknown kind, an `as` not in the kind, a wrong type, a single-valued property on two
+  fields, a missing required property, a key without `filter`.
+- Where kinds add nothing: a workspace with one app per kind, your own domain records, and creating records
+  ("new contact" still needs a choice of app). Models already read `contact` as a person; the gain is the
+  deterministic part — which field is the email, which filter is exact.
+
 ## Generated tools
 
 `<entity>_list`, `<entity>_get`, `search` and `fetch` (when a field has
 `search: true`), `<entity>_<action>` / `<action>`, `open_<page>` (not for
-record pages), `show_<fragment>`, `modelapp_resolve` (for hosts). Reads have
-`readOnlyHint: true`; writes `destructiveHint: true` when `confirm` is always.
+record pages), `show_<fragment>`, `modelapp_resolve` (for hosts; `not_found` for another app's URI). Reads have
+`readOnlyHint: true`; writes `destructiveHint: true` when `confirm` is always. With a kind, entity tools end with
+`Kind: person.` and carry `_meta.modelapp: { entity, kind }`; `search` takes `kind`.
 
 ## Rules
 
@@ -229,6 +271,9 @@ record pages), `show_<fragment>`, `modelapp_resolve` (for hosts). Reads have
 | A permission used but not declared | Add it under `permissions`; `defineApp` throws at start otherwise |
 | Translating tool names per caller | Tool names and descriptions are fixed in the app's `locale`; only data labels follow the caller |
 | Putting custom keys in `_meta` | Don't. Everything hosts need is in the manifest |
+| `kind` on every entity "for symmetry" | Only for things other apps hold too; a deal has none |
+| `as: "email"` on a notes field, or a key filter with `ILIKE` | `as` only for the real value; keys compared exactly on the normalised value |
+| Keeping another app's title next to a `ref.kind` URI | Keep the URI only |
 | `auth: { dev: true }` or `path` in a Next.js app | Next: your own `auth.resolve` (locally init's `MODELAPP_LOCAL_TOKEN`), no `path`; the route's mount does it |
 | `aud` checked with "includes", or not at all, in `resolve` | Exactly one audience, equal to `resource` |
 | The tenant taken from a tool argument or a header | From the verified token (or the database row it points to) only |
