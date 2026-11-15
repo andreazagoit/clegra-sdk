@@ -15,7 +15,8 @@
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
-    "test": "tsx --test \"src/**/*.test.ts\""
+    "test": "tsx --test \"src/**/*.test.ts\"",
+    "test:next": "tsx --test test/next.test.ts"
   },
   "dependencies": {
     "@modelapp/server": "*",
@@ -27,8 +28,12 @@
     "@better-auth/mcp": "^1.7.7"
   },
   "peerDependenciesMeta": {
-    "better-auth": { "optional": true },
-    "@better-auth/mcp": { "optional": true }
+    "better-auth": {
+      "optional": true
+    },
+    "@better-auth/mcp": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@better-auth/cimd": "1.7.7",
