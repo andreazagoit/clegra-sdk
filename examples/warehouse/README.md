@@ -130,3 +130,7 @@ in `EMBED_FRAME_ANCESTORS` (default `'self'`); every other page can't be framed 
 - role changes and removed members, with tokens issued before;
 - the consent steps;
 - the conformance suite.
+
+## Public demo
+
+https://modelapp-warehouse-demo.vercel.app (MCP at `/mcp`). Invented data. The sign-in page has "Enter as …" buttons, so no password is needed.
