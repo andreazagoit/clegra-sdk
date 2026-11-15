@@ -18,13 +18,15 @@ export default defineApp({ name, title, version, locale, auth, permissions, sett
 | Read | For |
 |---|---|
 | [spec.md](spec.md) | The specification (normative, short) |
-| [quickstart.md](quickstart.md) | A first app: write, run in the Inspector and ChatGPT, test |
+| [quickstart.md](quickstart.md) | Next.js in 5 minutes (`npx modelapp init`), a day to ship; standalone Node; tests |
+| [auth.md](auth.md) | Your sign-in as the authorization server, your `auth.resolve`: better-auth, Clerk, Auth0, WorkOS |
 | [ai-guide.md](ai-guide.md) ([llms.txt](llms.txt)) | The single-file reference for coding agents |
-| [examples/crm.md](examples/crm.md) | The reference app; code in [`examples/modelapp/crm`](../../examples/modelapp/crm) |
+| [examples/crm.md](examples/crm.md) | A CRM: Next.js, better-auth, Drizzle; code in [`examples/modelapp/crm`](../../examples/modelapp/crm) |
+| [examples/warehouse.md](examples/warehouse.md) | A warehouse: Next.js, better-auth, plain SQL; code in [`examples/modelapp/warehouse`](../../examples/modelapp/warehouse) |
 | [`packages/modelapp/spec`](../../packages/modelapp/spec) | The manifest's JSON Schema and the conformance checks, independent of the SDK |
 | [future/](future/README.md) | Earlier, larger drafts: non-normative, not part of 1.0 |
 
-**Status.** SDK: [`packages/modelapp`](../../packages/modelapp)
-(`modelapp`, private for now), with unit tests, a snapshot of the CRM's
-generated MCP output and the conformance checks. `npm run modelapp:test`,
-`npm run modelapp:crm`, `npm run modelapp:check -- <url>`.
+**Status.** One package, [`packages/modelapp`](../../packages/modelapp) (`modelapp`, MIT, not published yet):
+`modelapp`, `modelapp/next`, `modelapp/node`, `modelapp/testing`, `modelapp/spec` and the CLI
+(`npx modelapp init`, `npx modelapp check <url>`). Unit tests, a real Next.js run and the conformance checks.
+From the repository root: `npm run modelapp:test`, `npm run modelapp:crm`, `npm run modelapp:check -- <url>`.

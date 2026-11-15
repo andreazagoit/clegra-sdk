@@ -369,7 +369,7 @@ For a URL `client_id`:
 
 The SDK is not an authorization server outside development, and ships none:
 an app uses an existing one (better-auth's MCP plugin, Clerk, WorkOS, Auth0, …)
-and verifies its tokens in `auth.resolve`. For MCP clients
+and verifies its tokens in `auth.resolve` (recipes, non-normative: [auth.md](auth.md)). For MCP clients
 (ChatGPT, Claude, others) to connect to an app that signs people in itself,
 its authorization server needs:
 
@@ -410,7 +410,7 @@ differ by 30 seconds. Opaque tokens are not accepted in this mode.
 over HTTP, whatever it is built with:
 
 ```sh
-npm run modelapp:check -- https://crm.example.com --token <a plain caller's bearer>
+npx modelapp check https://crm.example.com --token <a plain caller's bearer>
 ```
 
 | Check | Passes when |

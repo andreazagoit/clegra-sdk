@@ -15,7 +15,15 @@ npm i modelapp zod
 | `modelapp/node` | `listen(app)`: the app on Node's own HTTP server |
 | `modelapp/testing` | `testClient(app)`: JSON-RPC to `app.fetch` with dev tokens |
 | `modelapp/spec` | `checkApp`, `formatReport`: the conformance checks |
-| CLI | `npx modelapp check <url> [--token …]` (or `MODELAPP_TOKEN`) |
+| CLI | `npx modelapp init [dir] [--dry-run]`; `npx modelapp check <url> [--token …]` (or `MODELAPP_TOKEN`) |
+
+## Next.js: `npx modelapp init`
+
+In an existing App Router app, `npx modelapp init` writes the three files below and wraps next.config. It also puts a
+random local bearer in `.env.local` (`MODELAPP_LOCAL_TOKEN`), which the generated `resolve` accepts only when
+`NODE_ENV` isn't `production`. It never overwrites a file, prints what it can't edit safely, and `--dry-run` writes
+nothing. Then `npm run dev` and `npx modelapp check http://localhost:3000 --token <MODELAPP_LOCAL_TOKEN>`.
+See [docs/map/quickstart.md](../../docs/map/quickstart.md).
 
 ## Next.js: three files
 
@@ -88,16 +96,17 @@ The app verifies its own access tokens: those its sign-in (better-auth, Clerk, A
 - `auth.authorizationServers` names your authorization server in the protected-resource metadata.
 - `auth.serve(request)` can answer its RFC 8414 metadata at the root.
 
-Recipes per sign-in library are in [docs/map](../../docs/map).
+Recipes for better-auth, Clerk, Auth0 and WorkOS: [docs/map/auth.md](../../docs/map/auth.md).
 
 Dev sign-in (`auth.dev`) answers loopback callers only. A Next route handler can't know the caller's address:
-`x-forwarded-for` is whatever the client sent. So `toNextHandlers` refuses an app with `auth.dev`. Use your own
-sign-in locally, or run the app with `listen` from `modelapp/node`.
+`x-forwarded-for` is whatever the client sent. So `toNextHandlers` refuses an app with `auth.dev`. Locally,
+use init's bearer (`MODELAPP_LOCAL_TOKEN`) or your own sign-in, or run the app with `listen` from `modelapp/node`.
 
 ## Tests
 
 ```sh
 npm test            # core + modelapp/next unit tests
+npx tsx --test "spec/src/**/*.test.ts"   # modelapp init (fixture projects in temp folders)
 npm run test:next   # test/fixture with next dev (port 3942), then next build + next start (3943); modelapp check through the rewrites
 npm run typecheck
 ```

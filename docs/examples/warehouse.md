@@ -1,0 +1,32 @@
+# A second app: a warehouse
+
+> Non-normative. Runnable code: [`examples/modelapp/warehouse`](../../../examples/modelapp/warehouse) (its README
+> has the setup and the demo people). Invented data. The example is still changing, so the code is the reference
+> where the two differ.
+
+A small shop's warehouse: **products**, **stock movements** and customer **orders**. It is an ordinary Next.js App
+Router app with its own sign-in (better-auth with organizations, the organization being the tenant), to which MAP was
+added. It exists to show that MAP doesn't care about the data layer: the [CRM](crm.md) uses Drizzle, the warehouse
+uses **plain SQL**.
+
+What it shows:
+
+- **Plain SQL, no ORM.** The app has one `sql(text, params)` and one `transaction(fn)` over `pg` or PGlite
+  (`lib/db.ts`), and its functions (`listProducts`, `registerMovement`, `confirmOrder`, … in `lib/warehouse.ts`)
+  always take the organization first. The MAP definition (`lib/modelapp.ts`) calls those same functions with
+  `ctx.installation`. Filters, sort, search and the cursor arrive already checked, and the list functions turn them
+  into SQL.
+- **A field permission.** `product.purchaseCost` carries `permission: "products.cost"`, which admins have and members
+  don't. modelapp keeps it out of members' rows and records, and refuses it in their filters, sorts and search. The
+  `stock_value` fragment, which is computed at purchase cost, requires the same permission.
+- **A confirmed action.** `confirm_order` takes all of an order's goods out of stock at once, so it is
+  `confirm: "always"`. The person confirms in the host, and a plain client that can elicit is asked by the server.
+  A second confirmation of the same order is a `conflict`. `register_movement` and `create_order` are
+  `confirm: "optional"`.
+- **An embedded page.** The page `stock` is `url: "/embed/stock"`: a real page of the app, the stock board, framed by
+  hosts at the app's public origin.
+- **Its own `resolve`.** better-auth is the authorization server. The app verifies better-auth's access tokens
+  itself and reads the person's role live (`lib/modelapp-auth.ts`), following the recipe in [auth.md](../auth.md).
+
+The tests run the MAP app over its real HTTP path on an in-memory PGlite. They cover tenant isolation, the
+purchase-cost permission, list filters, sort, search and cursor, and the actions and fragments.

@@ -1,16 +1,54 @@
 # AI guide: building a Model App Protocol (MAP) app
 
 > For coding agents. This one file is enough to write a correct app.
-> A MAP app is an app that is also an MCP server. SDK `modelapp`; normative text in [spec.md](spec.md).
+> A MAP app is an app that is also an MCP server. One package, `modelapp`; normative text in [spec.md](spec.md).
 
 ## The model
 
-You write **one object** and `export default defineApp({ … })`. The SDK turns
+You write **one object**, `defineApp({ … })` (exported by name, `app`, in a Next.js app). The SDK turns
 it into (a) a JSON manifest at `/.well-known/modelapp.json` that workspace
 hosts draw natively and (b) a plain MCP server at `/mcp` with tools and MCP
 Apps views for ChatGPT, Claude and any MCP client. Permissions, field
 visibility, confirmations and idempotency are enforced by the SDK before your
 handlers run. There is no other authoring API.
+
+## The package
+
+| Import | What |
+|---|---|
+| `modelapp` | `defineApp`, `AppError`, `AuthError`, `ref`, `SqlStore`, `MemoryStore`, types. `app.fetch(request)` runs anywhere |
+| `modelapp/next` | `toNextHandlers(app)` (the route), `withModelApp(config)` (next.config) |
+| `modelapp/node` | `listen(app, { port })`: Node's own HTTP server |
+| `modelapp/testing` | `testClient(app, …)` |
+| `modelapp/spec` | `checkApp`, `formatReport`: the conformance checks |
+| CLI | `npx modelapp init` (adds MAP to a Next.js app), `npx modelapp check <url> --token <bearer>` |
+
+## In a Next.js app (App Router)
+
+`npx modelapp init` writes these; by hand they are:
+
+```ts
+// modelapp.ts (or src/modelapp.ts): export the app by name
+export const app = defineApp({ … })
+
+// app/api/modelapp/[...path]/route.ts
+import { toNextHandlers } from "modelapp/next"
+import { app } from "@/modelapp"
+export const { GET, POST, DELETE, OPTIONS } = toNextHandlers(app)
+
+// next.config.ts: rewrites /mcp, /.well-known/modelapp.json and the OAuth metadata paths to that route
+import { withModelApp } from "modelapp/next"
+export default withModelApp(nextConfig)
+```
+
+- Under Next: never `auth.dev` (`toNextHandlers` refuses it) and never defineApp's `path` (the mount does that job).
+  `basePath` and `trailingSlash: true` are refused too.
+- Locally, before the sign-in is wired: init's `resolve` accepts the bearer in `.env.local` (`MODELAPP_LOCAL_TOKEN`)
+  only when `NODE_ENV !== "production"`.
+- In production: `MODELAPP_PUBLIC_URL` (an origin) and `auth.resource = ${MODELAPP_PUBLIC_URL}/mcp`, or every request
+  answers `500 misconfigured`. Use `store: new SqlStore(query)` on serverless.
+- The app's handlers call the same functions its pages use. Data access is yours (any DB or ORM), and so is auth:
+  `auth.resolve` verifies your own sign-in's tokens (recipes in [auth.md](auth.md)).
 
 ## The whole shape
 
@@ -27,13 +65,14 @@ export default defineApp({
   locale: "en",                      // language of bare strings and of tool names/descriptions (default "en")
   instructions: "…",                 // optional: MCP instructions for models
   websiteUrl: "https://…",           // optional
-  auth: {                            // or { dev: true } locally (loopback callers only, refused in production)
+  auth: {                            // or { dev: true } with listen() only (loopback callers, refused in production and under Next)
     resource: "https://crm.example.com/mcp",                 // this server's public MCP address: the only token audience; required in production
     resolve: async (token, request, { resource }) => ({ installation: "org_1", person: { id, name }, permissions: [...] }), // your own users' tokens: verify (signature, exp, aud === resource), map to a caller, or null
     authorizationServers: ["https://crm.example.com/api/auth"], // your auth library's OAuth server, named in the protected-resource metadata
+    serve: async (request) => null,                          // optional: answer your authorization server's RFC 8414 metadata at the root; null otherwise
     issuers: [{ issuer: "https://host.example.com" }],       // optional: workspace hosts (tokens with the modelapp claim)
   },
-  path: "/api/modelapp",             // optional: where MCP lives (default /mcp at the root)
+  path: "/api/modelapp",             // optional, never under Next: where MCP lives with app.fetch elsewhere (default /mcp at the root)
   store: new SqlStore(query),        // optional: idempotency + one-time token ids in your Postgres (serverless, several instances)
 
   permissions: {                     // ids are "group.verb"
@@ -173,7 +212,7 @@ record pages), `show_<fragment>`, `modelapp_resolve` (for hosts). Reads have
 7. Return short `message`s in the caller's language: `ctx.t({ en: "…", it: "…" })`.
 8. Names (`entities`, `actions`, `fragments`, `pages`, `agents` keys) are `[a-z][a-z0-9_]*`. Entities and fragments share one namespace. Don't name a filter/sort field `query`, `sort`, `dir`, `cursor` or `limit`.
 9. A list page with `params` also needs `query: (params) => ({ filters, text, sort })`.
-10. Dev auth (`auth: { dev: true }`) is off unless you set it, refused when `NODE_ENV=production`, and answers only callers on a loopback address. In production trust issuers and give `auth.resource`: your server's public MCP address, the only audience tokens are accepted for.
+10. Dev auth (`auth: { dev: true }`) is for `listen()` and tests only: off unless you set it, refused when `NODE_ENV=production`, answers only callers on a loopback address, refused by `toNextHandlers`. In production give `auth.resource`: your server's public MCP address, the only audience tokens are accepted for. In `resolve`, check signature, expiry, issuer and `aud === resource` (a single audience); return null or throw `AuthError` to refuse.
 11. `ctx.installation` is the tenant: what `auth.resolve` said (your organization id), or a host's installation bound to that host (`<installation>@<issuer>`). Use it as an opaque key; never take a tenant from a parameter.
 12. In `list`, search `query.text` only in `query.textFields`; in a fragment's `data`, leave out values the caller may not see (`ctx.can`): template data are yours, the SDK only drops items whose `uri` is out of the caller's reach.
 13. Your data access is yours (any DB/ORM). Pages with `url` may be same-site paths (`/embed/pipeline`).
@@ -190,6 +229,9 @@ record pages), `show_<fragment>`, `modelapp_resolve` (for hosts). Reads have
 | A permission used but not declared | Add it under `permissions`; `defineApp` throws at start otherwise |
 | Translating tool names per caller | Tool names and descriptions are fixed in the app's `locale`; only data labels follow the caller |
 | Putting custom keys in `_meta` | Don't. Everything hosts need is in the manifest |
+| `auth: { dev: true }` or `path` in a Next.js app | Next: your own `auth.resolve` (locally init's `MODELAPP_LOCAL_TOKEN`), no `path`; the route's mount does it |
+| `aud` checked with "includes", or not at all, in `resolve` | Exactly one audience, equal to `resource` |
+| The tenant taken from a tool argument or a header | From the verified token (or the database row it points to) only |
 
 ## Check your work
 
@@ -200,5 +242,6 @@ await c.listTools(); await c.call("deal_list", {}); await c.readResource("ui://c
 await (await testClient(app, { host: "workspace", permissions: "all" })).confirmed("deal_mark_won", { id: "d1" })
 ```
 
-`npm run modelapp:check -- <url> --token <bearer>` must end with `Conformant.`
-A complete, tested app to copy from: [`examples/modelapp/crm/src/app.ts`](../../examples/modelapp/crm/src/app.ts).
+`npx modelapp check <url> --token <bearer>` must end with `Conformant.`
+Complete, tested apps to copy from: the CRM ([`examples/modelapp/crm/modelapp/app.ts`](../../examples/modelapp/crm/modelapp/app.ts), Drizzle) and the
+warehouse ([`examples/modelapp/warehouse/lib/modelapp.ts`](../../examples/modelapp/warehouse/lib/modelapp.ts), plain SQL).

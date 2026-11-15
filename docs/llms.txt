@@ -9,6 +9,8 @@
 ## More
 
 - [Specification](spec.md): the manifest, the generated MCP server, enforcement, conformance (normative, short)
-- [Quickstart](quickstart.md): a first app, run in the MCP Inspector and ChatGPT, tested
-- [CRM example](examples/crm.md): the reference app; code in `examples/modelapp/crm/src/app.ts`
+- [Quickstart](quickstart.md): Next.js in 5 minutes (`npx modelapp init`), a day to ship; standalone Node; tests
+- [Auth](auth.md): your sign-in as the authorization server, your `auth.resolve`; recipes for better-auth, Clerk, Auth0, WorkOS
+- [CRM example](examples/crm.md): Next.js, better-auth, Drizzle; code in `examples/modelapp/crm/modelapp/app.ts`
+- [Warehouse example](examples/warehouse.md): Next.js, better-auth, plain SQL; code in `examples/modelapp/warehouse/lib/modelapp.ts`
 - JSON Schema of the manifest: `packages/modelapp/spec/schema/modelapp.schema.json`
