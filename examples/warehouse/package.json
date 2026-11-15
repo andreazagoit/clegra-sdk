@@ -5,10 +5,14 @@
   "type": "module",
   "description": "Reference app: a small warehouse (products, stock movements, orders) as a Next.js app with its own sign-in (better-auth) and plain SQL. Invented data.",
   "scripts": {
+    "setup": "tsx scripts/setup.ts",
+    "db:migrate": "tsx --env-file-if-exists=.env.local scripts/migrate.ts",
+    "db:seed": "tsx --env-file-if-exists=.env.local scripts/seed.ts",
     "dev": "next dev -p 3930",
     "build": "next build",
     "start": "next start -p 3930",
-    "typecheck": "tsc --noEmit -p ."
+    "typecheck": "tsc --noEmit -p .",
+    "test": "tsx --test \"test/**/*.test.ts\""
   },
   "dependencies": {
     "@better-auth/cimd": "1.7.7",
