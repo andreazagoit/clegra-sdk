@@ -3,13 +3,18 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Reference app: a small CRM (companies, contacts, deals) as a Next.js app with its own sign-in (better-auth) and Drizzle. Invented data.",
+  "description": "Reference app: a small CRM (companies, contacts, deals) as a Next.js app with its own sign-in (better-auth, organizations) and database (Drizzle, Postgres or PGlite), that is also a MAP app. Invented data.",
   "scripts": {
+    "setup": "tsx scripts/setup.ts",
     "dev": "next dev -p 3920",
     "build": "next build",
     "start": "next start -p 3920",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx scripts/migrate.ts",
+    "db:seed": "tsx scripts/seed.ts",
+    "auth:schema": "tsx scripts/auth-schema.ts",
     "typecheck": "tsc --noEmit -p .",
-    "test": "tsx --test src/app.test.ts"
+    "test": "tsx --test test/*.test.ts"
   },
   "dependencies": {
     "@better-auth/cimd": "1.7.7",

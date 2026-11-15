@@ -1,116 +1,98 @@
 # The reference app: a CRM
 
-> Non-normative. Runnable code: [`examples/modelapp/crm`](../../../examples/modelapp/crm)
-> (`src/app.ts`, tests in `src/app.test.ts`). Invented data.
+> Non-normative. Runnable code: [`examples/modelapp/crm`](../../../examples/modelapp/crm). Invented data.
 
-A small sales team's CRM: **companies**, **contacts** and **deals**, in
-memory, one copy per installation. The whole app is the one object at the
-bottom of `app.ts`: `export const app = defineApp({ … })`.
+A small sales team's CRM — **companies**, **contacts**, **deals**, **calls** — built the way a developer
+already builds a web app: Next.js (App Router), its own sign-in (better-auth: email + password,
+organizations as tenants), its own database (Drizzle on Postgres; an embedded PGlite locally). MAP is
+added on top in one file, `modelapp/app.ts`, over the functions the pages already use.
+
+**The pitch:** the page's «Mark as won» button and the MCP tool `deal_mark_won` call the same
+`markWon(orgId, dealId)` in `lib/crm.ts`. Nothing is written twice; the SDK adds the tenant from the
+verified caller, the permissions, the confirmations and the MCP surface.
+
+## Files
+
+| File | What it is |
+|---|---|
+| `db/schema.ts` | The CRM's tables (every row has `org_id`), `tenants`, `people`, the MAP store table. `db/auth-schema.ts` is better-auth's, generated |
+| `lib/db.ts` | Postgres (postgres.js) with `DATABASE_URL`; PGlite in `.data/` without; production without it is an error |
+| `lib/crm.ts` | The app's functions: `listDeals(orgId, query)` (filters, search, sort, paging in SQL), `markWon`, `setStage`, `logCall`, `createDeal`, pipeline totals, workspace provisioning |
+| `lib/auth.ts`, `lib/session.ts`, `lib/permissions.ts` | better-auth; the signed-in member of the active organization; role → permissions |
+| `app/(crm)/…`, `app/sign-in`, `app/embed/pipeline` | Pages and server actions; the board page made to be framed |
+| `modelapp/app.ts` | The MAP definition: `createCrmApp({ auth, store })` |
+| `modelapp/auth.ts` | Workspace hosts from the environment (`MODELAPP_ISSUERS`, `MODELAPP_RESOURCE`) |
+| `test/` | The lib on PGlite (tenants, lists, provisioning) and the MCP surface (`mcp.snapshot.json`) |
 
 ## What it declares
 
 | Key | In the CRM |
 |---|---|
-| `permissions` | `deals.view`, `deals.edit`, `contacts.edit` (default), `deals.values` (not default: only managers see money) |
+| `permissions` | `deals.view`, `deals.edit`, `contacts.edit` (members), `deals.values` (owners and admins only: money) — the same list the pages use (`lib/permissions.ts`) |
 | `settings` | `follow_up_days` (number, default 7) |
-| `entities` | `company` (name, city, industry), `contact` (name, email, `ref("company")`, last call, last note — **untrusted**), `deal` (name, company, stage as `status` with labels and tones, value as `amount` in EUR behind `deals.values`, close date, owner as `person`) |
-| `actions` | `mark_won` (on `deal`, confirm always, notifies), `set_stage` (on `deal`, `"optional"`), `log_call` (on `contact`), `create_deal` (global). All four `expose: { plain: true }` |
-| `pages` | `deals`, `companies`, `contacts` (lists), `deal` (record with two sections; the `company` and `contact` record pages are derived), `pipeline` (dashboard, param `days`), `forecast` (a custom view, behind `deals.values`) |
-| `fragments` | `pipeline_total` (stat, behind `deals.values`), `deals_by_stage` (chart), `closing_soon` (list, param `days`, the `create_deal` action inside); plus a record card per entity |
-| `agents` | `sales_assistant` (tier `fast`): `uses` the three entities, `set_stage`, `mark_won`, `log_call` |
+| `entities` | `company`, `contact` (`ref("company")`, last call, last note — **untrusted**), `deal` (stage as `status`, value as `amount` behind `deals.values`, owner as `person`) |
+| `actions` | `mark_won` (confirm always, notifies), `set_stage` (`"optional"`), `log_call`, `create_deal`. All `expose: { plain: true }` |
+| `pages` | `deals`, `companies`, `contacts`, `deal` (record), `pipeline` (dashboard), `forecast` (custom MCP Apps view), `board` (`url: "/embed/pipeline"`: a real page of the app, framed by hosts) |
+| `fragments` | `pipeline_total` (stat), `deals_by_stage` (chart), `closing_soon` (list) |
+| `agents` | `sales_assistant` |
 
-## The parts worth reading
-
-**Field meaning.** One line per field says how every host draws it:
+## Handlers are thin
 
 ```ts
-stage: z.enum(STAGES).meta({ role: "status", label: { en: "Stage", it: "Fase" }, filter: true, labels: stageLabels,
-  tones: { lead: "neutral", qualified: "info", proposal: "warning", won: "success", lost: "danger" } }),
-value: z.number().meta({ role: "amount", currency: "EUR", label: { en: "Value", it: "Valore" }, sort: true, permission: "deals.values" }),
-```
-
-Bruno (no `deals.values`) never receives `value`: not in lists, records or
-cards, not as a sort; `show_pipeline_total` and `open_forecast` are not even
-listed for him. The app wrote no check for this.
-
-**A record action.** `on: "deal"` types the third argument and adds `id` to the tool:
-
-```ts
+deal: {
+  schema: dealSchema,
+  permission: "deals.view",
+  list: async (q, ctx) => listDeals(await tenant(ctx), q),
+  …
+},
 mark_won: {
-  on: "deal",
-  title: { en: "Mark as won", it: "Segna come vinta" },
-  input: z.object({ note: z.string().max(500).optional() }),
-  confirm: true,
-  permission: "deals.edit",
-  expose: { plain: true },
-  run: (_input, ctx, deal) => {
-    if (deal.stage === "won" || deal.stage === "lost") throw new AppError("conflict", ctx.t({ en: `${deal.name} is already closed.`, it: `${deal.name} è già chiusa.` }))
-    dataOf(ctx).deals.set(deal.id, { ...deal, stage: "won", closeDate: new Date().toISOString().slice(0, 10) })
-    ctx.notify({ title: { en: `Deal won: ${deal.name}`, it: `Trattativa vinta: ${deal.name}` }, uri: ctx.uri("deal", deal.id) })
-    return { message: ctx.t({ en: `${deal.name} marked as won.`, it: `${deal.name} segnata come vinta.` }), record: deal.id }
+  on: "deal", confirm: true, permission: "deals.edit", expose: { plain: true },
+  run: async (input, ctx, deal) => {
+    await markWon(await tenant(ctx), deal.id, input).catch((e) => refused(e, ctx, { en: `${deal.name} is already closed.`, it: `${deal.name} è già chiusa.` }))
+    …
   },
 },
 ```
 
-In a workspace host the person sees «Mark as won» with the values and
-confirms; the host sends the proof. In ChatGPT the tool carries
-`destructiveHint: true`, so ChatGPT asks before calling it.
+`q` arrives already checked against the fields' meaning and the caller's field permissions; `listDeals`
+turns it into one `WHERE org_id = $1 AND …` query (search only in `q.textFields`), sorted, with an
+offset cursor and a total. Bruno (a member: no `deals.values`) never receives `value`, in the pages or
+over MCP.
 
-**Installation scoping.** All data go through `dataOf(ctx)`, keyed by
-`ctx.installation`. On a database the same rule is a column:
+## Two kinds of caller, one tenant column
 
-```sql
-CREATE TABLE deals (installation text NOT NULL, id text NOT NULL, …, PRIMARY KEY (installation, id));
-```
+- **The app's own users** (with the better-auth bridge, see below): the installation is the
+  organization id, the person the user id. Names come from the organization's members.
+- **A workspace host** (e.g. a Clegra node, `MODELAPP_ISSUERS`): the installation is
+  `<installation>@<issuer>`, never an organization. On its first call it gets its own copy of the demo
+  data (`provisionWorkspace`: one transaction, idempotent). Its people are named from their tokens and
+  remembered in `people` once they own a deal.
 
-`ctx.installation` is the host's installation bound to that host
-(`<installation>@<issuer>`): two hosts never share a row.
+Both are just values of `org_id`; `tenants` records which kind each one is.
 
-**Text from outside.** Company, contact and deal names, cities, emails and
-call notes are `untrusted: true`, and so is the «Closing soon» fragment that
-lists deal names: a model reads them inside `<untrusted>`, as data.
-
-```ts
-name: z.string().meta({ role: "title", label: { en: "Deal", it: "Trattativa" }, search: true, untrusted: true }),
-```
-
-**A dashboard and a custom page.**
-
-```ts
-pipeline: {
-  title: { en: "Pipeline", it: "Pipeline" },
-  permission: "deals.view",
-  params: z.object({ days: z.number().int().min(1).max(365).optional() }),
-  dashboard: (p: { days?: number }) => [
-    { type: "pipeline_total", params: {}, size: "small" },
-    { type: "deals_by_stage", params: {}, size: "medium" },
-    { type: "closing_soon", params: { days: p.days ?? 60 }, size: "medium" },
-  ],
-},
-forecast: { title: { en: "Forecast", it: "Previsione" }, permission: "deals.values", view: { html: () => import("./forecast-view").then((m) => m.forecastHtml) } },
-```
-
-The dashboard is drawn by the generated view (or natively by a host); the
-forecast is the app's own MCP Apps document (`src/forecast-view.ts`), which
-reads deals through the host with `tools/call` and has no network access.
-
-## Run and check it
+## Run it
 
 ```sh
-MODELAPP_DEV=1 npm run modelapp:crm       # http://127.0.0.1:3920 — MCP at /mcp, manifest at /.well-known/modelapp.json; dev sign-in on
-MODELAPP_DEV=1 MODELAPP_DEV_CODE=CRM2026 npm run modelapp:crm   # a fixed dev sign-in code instead of a random one
-npm run modelapp:test                     # SDK tests + the CRM's tests
-npm run modelapp:check -- http://127.0.0.1:3920 --token <bearer>
+cd examples/modelapp/crm
+npm run setup     # .env.local with generated secrets (if missing), migrations, demo data
+npm run dev       # http://localhost:3920 — «Enter as Ada Rossi (sales manager)» on /sign-in
+npm test          # lib + MAP tests on in-memory PGlite
 ```
 
-The dev sign-in is off unless `MODELAPP_DEV=1` (loopback callers only; five
-wrong codes close it until a restart). It offers two invented people: Ada
-(manager, every permission) and Bruno (sales rep, no `deals.values`).
-`MODELAPP_ISSUERS="<issuer>|<jwks url>"` adds a trusted workspace host, and
-then `MODELAPP_RESOURCE="https://<this server>/mcp"` is required: the
-server's public MCP address, the only audience that host's tokens are
-accepted for, and the address the host must install the app from.
+Demo accounts: Ada Rossi (admin, every permission) and Bruno Neri (member, no money) in *Orbita Sales*;
+Elena Conti in *Kestrel Design*, a second organization that sees none of Orbita's records. The password
+is `DEMO_PASSWORD` in `.env.local`; with `DEMO_SIGNIN=1` the sign-in page has one-click buttons and the
+password never leaves the server.
 
-`src/mcp.snapshot.json` is what MCP clients see (tools, annotations, views,
-manifest). A change to it is a change for every client, so it is reviewed as
-a diff; `UPDATE_SNAPSHOTS=1` rewrites it.
+`npm run db:generate` writes a migration after a schema change; `npm run auth:schema` regenerates
+better-auth's tables after a plugin change in `lib/auth-options.ts`. Migrations and seed never run at
+start-up.
+
+`test/mcp.snapshot.json` is what MCP clients see (tools, annotations, views, manifest): a change to it is
+a change for every client, reviewed as a diff (`UPDATE_SNAPSHOTS=1 npm test` rewrites it).
+
+## Next: MCP for the app's own users
+
+The MCP route (`app/api/modelapp/[...path]`, `@modelapp/next`) and the better-auth OAuth server
+(`@better-auth/mcp`, `jwt`, `@better-auth/cimd`) come next, so ChatGPT, Claude and any MCP client sign
+in with a CRM account.

@@ -1142,6 +1142,24 @@
       }
     },
     {
+      "name": "open_board",
+      "title": "Board",
+      "description": "Opens the page «Board»: The pipeline board, by stage. Its parameters set the state it opens in.",
+      "annotations": {
+        "title": "Board",
+        "readOnlyHint": true,
+        "idempotentHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "ui": "ui://crm/pages/board",
+      "inputSchema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {}
+      }
+    },
+    {
       "name": "show_pipeline_total",
       "title": "Open pipeline",
       "description": "The total value of open deals. Shows it as a live fragment; don't repeat its data in full.",
@@ -1218,6 +1236,10 @@
     },
     {
       "uri": "ui://crm/pages/forecast",
+      "mimeType": "text/html;profile=mcp-app"
+    },
+    {
+      "uri": "ui://crm/pages/board",
       "mimeType": "text/html;profile=mcp-app"
     }
   ],
@@ -2360,6 +2382,26 @@
           "plain": true
         },
         "view": "ui://crm/pages/forecast"
+      },
+      {
+        "name": "board",
+        "kind": "custom",
+        "title": {
+          "en": "Board",
+          "it": "Bacheca"
+        },
+        "icon": "kanban",
+        "permission": "deals.view",
+        "params": {
+          "type": "object",
+          "properties": {}
+        },
+        "tool": {
+          "name": "open_board",
+          "plain": true
+        },
+        "view": "ui://crm/pages/board",
+        "url": "/embed/pipeline"
       },
       {
         "name": "company",
