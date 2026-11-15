@@ -16,7 +16,8 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
     "test": "tsx --test \"src/**/*.test.ts\"",
-    "test:next": "tsx --test test/next.test.ts"
+    "test:next": "tsx --test test/next.test.ts",
+    "oauth-token": "tsx scripts/oauth-token.ts"
   },
   "dependencies": {
     "@modelapp/server": "*",
