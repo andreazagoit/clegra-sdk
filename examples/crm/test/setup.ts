@@ -11,7 +11,9 @@ process.env.PGLITE_DATA_DIR = "memory://"
 process.env.BETTER_AUTH_SECRET = randomBytes(32).toString("base64url")
 
 await migrate(database())
-/** The seeded accounts' user ids, by demo key (ada, bruno, elena). */
-export const { users } = await seed(randomBytes(18).toString("base64url"))
+/** The demo accounts' password in this test run. */
+export const password = randomBytes(18).toString("base64url")
+/** The seeded accounts' user ids, by demo key (alice, ben, emma). */
+export const { users } = await seed(password)
 
 after(() => closeDatabase())

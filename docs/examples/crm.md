@@ -18,11 +18,15 @@ verified caller, the permissions, the confirmations and the MCP surface.
 | `db/schema.ts` | The CRM's tables (every row has `org_id`), `tenants`, `people`, the MAP store table. `db/auth-schema.ts` is better-auth's, generated |
 | `lib/db.ts` | Postgres (postgres.js) with `DATABASE_URL`; PGlite in `.data/` without; production without it is an error |
 | `lib/crm.ts` | The app's functions: `listDeals(orgId, query)` (filters, search, sort, paging in SQL), `markWon`, `setStage`, `logCall`, `createDeal`, pipeline totals, workspace provisioning |
-| `lib/auth.ts`, `lib/session.ts`, `lib/permissions.ts` | better-auth; the signed-in member of the active organization; role → permissions |
-| `app/(crm)/…`, `app/sign-in`, `app/embed/pipeline` | Pages and server actions; the board page made to be framed |
-| `modelapp/app.ts` | The MAP definition: `createCrmApp({ auth, store })` |
-| `modelapp/auth.ts` | Workspace hosts from the environment (`MODELAPP_ISSUERS`, `MODELAPP_RESOURCE`) |
-| `test/` | The lib on PGlite (tenants, lists, provisioning) and the MCP surface (`mcp.snapshot.json`) |
+| `lib/auth-options.ts`, `lib/auth.ts` | better-auth: email + password, organizations, and the OAuth server for MCP clients (`jwt` + `mcp` + `cimd`) |
+| `lib/site.ts` | The one public address, `MODELAPP_PUBLIC_URL`: the issuer `<origin>/api/auth` and the MCP resource `<origin>/mcp` |
+| `lib/session.ts`, `lib/permissions.ts` | The signed-in member of the active organization; role → permissions |
+| `app/(crm)/…`, `app/embed/pipeline` | Pages and server actions; the board page made to be framed (`proxy.ts` sets its `frame-ancestors`) |
+| `app/sign-in`, `app/oauth/consent` | better-auth's login and consent pages; they also continue an OAuth authorization |
+| `modelapp/app.ts`, `modelapp/index.ts` | The MAP definition, `createCrmApp({ auth, store })`, and the app as served |
+| `modelapp/auth.ts` | The app's own `resolve` for better-auth access tokens, the issuer metadata, workspace hosts (`MODELAPP_ISSUERS`) |
+| `app/api/modelapp/[...path]/route.ts`, `next.config.ts` | `toNextHandlers` and `withModelApp`: MCP at `/mcp`, metadata under `/.well-known/` |
+| `test/` | The lib on PGlite, the MCP surface (`mcp.snapshot.json`), real OAuth tokens (`oauth.test.ts`) |
 
 ## What it declares
 
@@ -56,7 +60,7 @@ mark_won: {
 
 `q` arrives already checked against the fields' meaning and the caller's field permissions; `listDeals`
 turns it into one `WHERE org_id = $1 AND …` query (search only in `q.textFields`), sorted, with an
-offset cursor and a total. Bruno (a member: no `deals.values`) never receives `value`, in the pages or
+offset cursor and a total. Ben (a member: no `deals.values`) never receives `value`, in the pages or
 over MCP.
 
 ## Two kinds of caller, one tenant column
@@ -75,12 +79,12 @@ Both are just values of `org_id`; `tenants` records which kind each one is.
 ```sh
 cd examples/modelapp/crm
 npm run setup     # .env.local with generated secrets (if missing), migrations, demo data
-npm run dev       # http://localhost:3920 — «Enter as Ada Rossi (sales manager)» on /sign-in
+npm run dev       # http://localhost:3920 — «Enter as Alice Morgan (sales manager)» on /sign-in
 npm test          # lib + MAP tests on in-memory PGlite
 ```
 
-Demo accounts: Ada Rossi (admin, every permission) and Bruno Neri (member, no money) in *Orbita Sales*;
-Elena Conti in *Kestrel Design*, a second organization that sees none of Orbita's records. The password
+Demo accounts: Alice Morgan (admin, every permission) and Ben Carter (member, no money) in *Orbit Sales*;
+Emma Hayes in *Kestrel Design*, a second organization that sees none of Orbit's records. The password
 is `DEMO_PASSWORD` in `.env.local`; with `DEMO_SIGNIN=1` the sign-in page has one-click buttons and the
 password never leaves the server.
 
@@ -91,8 +95,43 @@ start-up.
 `test/mcp.snapshot.json` is what MCP clients see (tools, annotations, views, manifest): a change to it is
 a change for every client, reviewed as a diff (`UPDATE_SNAPSHOTS=1 npm test` rewrites it).
 
-## Next: MCP for the app's own users
+## MCP for the app's own users: better-auth as the OAuth server
 
-The MCP route (`app/api/modelapp/[...path]`, `modelapp/next`) and the better-auth OAuth server
-(`@better-auth/mcp`, `jwt`, `@better-auth/cimd`) come next, so ChatGPT, Claude and any MCP client sign
-in with a CRM account.
+This is the example's own choice. The SDK only asks for `auth.resolve(token) → caller`, and any sign-in works.
+better-auth runs with `organization`, `jwt`, `mcp` (scope `modelapp`) and `cimd`
+(`lib/auth-options.ts`):
+
+- **Clients** are identified by a metadata document (an https `client_id`), as ChatGPT and Claude do. Dynamic
+  client registration is off, so nobody can show an arbitrary name on the consent page.
+- **The organization goes into the token.** `postLogin.consentReferenceId` reads the session's active
+  organization, and `customAccessTokenClaims` writes it as `org`. A person here belongs to one organization, and a
+  new session starts in it, so there is no organization step. Without an organization the authorization fails.
+- **The pages are the app's own.** `/sign-in` continues the authorization when better-auth sends the person there
+  with the signed request, and so do the demo buttons. `/oauth/consent` shows the client's name and id, the
+  organization and what it may do, with Allow / Deny.
+
+`modelapp/auth.ts` has `resolveUser`, about 40 lines a developer can copy. It accepts a token only when all of
+these hold:
+
+- It is a JWT with `typ: at+jwt`, verified against better-auth's JWKS. The JWKS is read in-process and cached, and
+  read again for an unknown `kid`.
+- It comes from the issuer.
+- `aud` is exactly this server.
+- `exp` holds, with 30 s of skew.
+- It has no `cnf`.
+- It carries the `modelapp` scope.
+- It names an organization.
+
+Then the membership and role are read live, so a role change or a removed member takes effect on the next call. It
+returns `{ installation: orgId, person, permissions: permissionsForRole(role) }`. `crmAuth()` puts it next to
+`serve` (better-auth's RFC 8414 / OIDC metadata at the root), `authorizationServers`, `resource` and the
+workspace-host `issuers`.
+
+```sh
+T=$(MODELAPP_OAUTH_EMAIL=alice@orbit.example MODELAPP_OAUTH_PASSWORD=… npm run --silent token -- http://localhost:3920)
+npm run modelapp:check -- http://localhost:3920 --token "$T"     # from the repository root → Conformant.
+```
+
+`npm run token` runs the real flow over HTTP: sign in → authorize (PKCE, `resource`) → consent → token. MCP
+Inspector connects to `http://localhost:3920/mcp`. Claude and ChatGPT need a public https origin, set as
+`MODELAPP_PUBLIC_URL` (a deployment or a tunnel), and then `<origin>/mcp` as a custom connector.

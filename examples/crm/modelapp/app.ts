@@ -91,7 +91,7 @@ function refused(error: unknown, ctx: Context, closed?: { en: string; it: string
 // ------------------------------------------------------------------ the app
 
 export type CrmAppOptions = {
-  /** Who may call: the app's own users (`resolve`, phase 2: verifying better-auth's tokens) and workspace hosts (`issuers`). */
+  /** Who may call: the app's own users (`resolve`: better-auth access tokens, modelapp/auth.ts) and workspace hosts (`issuers`). */
   auth: AuthOptions
   /** Default: the `modelapp_store` table in the CRM's database. */
   store?: IdempotencyStore

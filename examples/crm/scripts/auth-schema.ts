@@ -13,9 +13,10 @@ import { drizzleAdapter } from "@better-auth/drizzle-adapter/relations-v2"
 import { authSchemaOptions } from "../lib/auth-options"
 
 const file = new URL("../db/auth-schema.ts", import.meta.url)
-const adapter = drizzleAdapter({} as never, { provider: "pg" })(authSchemaOptions)
+const options = authSchemaOptions()
+const adapter = drizzleAdapter({} as never, { provider: "pg" })(options)
 if (!adapter.createSchema) throw new Error("This better-auth Drizzle adapter has no schema generator")
-const { code } = await adapter.createSchema(authSchemaOptions, file.pathname)
+const { code } = await adapter.createSchema(options, file.pathname)
 if (!code) throw new Error("better-auth generated no schema")
 
 const relations = code.indexOf("export const authRelations")

@@ -1,5 +1,9 @@
-// The CRM's MAP server, as the app serves it (phase 2 mounts it in app/api/modelapp).
-import { authFromEnv } from "./auth"
-import { createCrmApp } from "./app"
+// The CRM's MAP server, as the app serves it (app/api/modelapp/[...path]/route.ts). Made on first use: its
+// configuration is read from the environment at run time, never during a build.
+import type { App } from "modelapp"
 
-export const app = createCrmApp({ auth: authFromEnv() })
+import { createCrmApp } from "./app"
+import { crmAuth } from "./auth"
+
+let app: App | undefined
+export const crmApp = (): App => (app ??= createCrmApp({ auth: crmAuth() }))

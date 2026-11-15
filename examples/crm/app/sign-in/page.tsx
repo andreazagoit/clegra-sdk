@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation"
 
 import { DEMO_USERS } from "@/lib/demo-data"
+import { oauthQueryOf } from "@/lib/oauth-pages"
 import { currentMember } from "@/lib/session"
 
 import { buttonClass, Card, inputClass, Notice, param, secondaryButtonClass } from "../_components/ui"
@@ -9,16 +10,19 @@ import { demoSignInAction, signInAction } from "./actions"
 export const metadata = { title: "Sign in" }
 
 export default async function SignInPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
-  if (await currentMember()) redirect("/")
   const sp = await searchParams
+  // Opened by an OAuth authorization (an MCP client connecting): sign in here, then better-auth continues it.
+  const oauthQuery = oauthQueryOf(sp)
+  if (!oauthQuery && (await currentMember())) redirect("/")
   const demo = process.env.DEMO_SIGNIN === "1"
   return (
     <main className="mx-auto flex min-h-screen max-w-sm flex-col justify-center px-4 py-10">
       <h1 className="mb-1 text-xl font-semibold tracking-tight">CRM</h1>
-      <p className="mb-6 text-zinc-500">Sign in to your sales team.</p>
+      <p className="mb-6 text-zinc-500">{oauthQuery ? "Sign in to connect an app to your CRM." : "Sign in to your sales team."}</p>
       <Notice error={param(sp.error)} />
       <Card>
         <form action={signInAction} className="flex flex-col gap-3">
+          {oauthQuery ? <input type="hidden" name="oauth_query" value={oauthQuery} /> : null}
           <label className="flex flex-col gap-1">
             <span className="text-xs text-zinc-500">Email</span>
             <input name="email" type="email" autoComplete="email" required className={inputClass} />
@@ -35,6 +39,7 @@ export default async function SignInPage({ searchParams }: { searchParams: Promi
           <div className="flex flex-col gap-2">
             {DEMO_USERS.map((u) => (
               <form key={u.email} action={demoSignInAction.bind(null, u.email)}>
+                {oauthQuery ? <input type="hidden" name="oauth_query" value={oauthQuery} /> : null}
                 <button type="submit" className={`${secondaryButtonClass} w-full text-left`}>Enter as {u.label}</button>
               </form>
             ))}

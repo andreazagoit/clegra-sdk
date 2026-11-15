@@ -1,15 +1,55 @@
-// The better-auth options that shape the database: what `npm run auth:schema`
-// turns into db/auth-schema.ts. lib/auth.ts adds the runtime parts (database,
-// secret, hooks, Next cookies). A plugin added here needs `npm run auth:schema`
-// and `npm run db:generate`.
+// The better-auth options: email + password, organizations (the tenant), and better-auth as the OAuth
+// authorization server of the CRM's MCP server (jwt + mcp + cimd). lib/auth.ts adds the database, the
+// secret and the hooks. They also shape the database: after a plugin change, `npm run auth:schema` then
+// `npm run db:generate`.
+import { cimd } from "@better-auth/cimd"
+import { fetchClientMetadataResource } from "@better-auth/cimd/node"
+import { mcp } from "@better-auth/mcp"
 import type { BetterAuthOptions } from "better-auth"
-import { organization } from "better-auth/plugins"
+import { APIError } from "better-auth/api"
+import { jwt, organization } from "better-auth/plugins"
 
-export const authSchemaOptions = {
-  // People get their accounts from the CRM's operator (here: `npm run db:seed`), never by signing up.
-  emailAndPassword: { enabled: true, disableSignUp: true },
-  plugins: [
-    // The tenant: every record belongs to the session's active organization.
-    organization({ allowUserToCreateOrganization: false }),
-  ],
-} satisfies BetterAuthOptions
+import { mcpResource } from "./site"
+
+/** The scope MAP servers announce in their protected-resource metadata; tokens without it are refused. */
+export const MODELAPP_SCOPE = "modelapp"
+
+/** The access-token claim that names the organization a connection is for. */
+export const ORG_CLAIM = "org"
+
+export function authSchemaOptions(env?: Record<string, string | undefined>) {
+  return {
+    // People get their accounts from the CRM's operator (here: `npm run db:seed`), never by signing up.
+    emailAndPassword: { enabled: true, disableSignUp: true },
+    // The jwt plugin's /token hands out session JWTs; MCP clients get OAuth access tokens only.
+    disabledPaths: ["/token"],
+    plugins: [
+      // The tenant: every record belongs to the session's active organization.
+      organization({ allowUserToCreateOrganization: false }),
+      jwt({ disableSettingJwtHeader: true }),
+      mcp({
+        resource: mcpResource(env),
+        loginPage: "/sign-in",
+        consentPage: "/oauth/consent",
+        scopes: ["openid", "profile", "email", "offline_access", MODELAPP_SCOPE],
+        // A connection is for one organization. Here a person belongs to exactly one (organizations are made by the
+        // operator), and a new session starts in it (lib/auth.ts), so there is no organization page to choose on:
+        // never redirect there. The organization is still always in the token, or the authorization fails.
+        postLogin: {
+          page: "/sign-in",
+          shouldRedirect: () => false,
+          consentReferenceId: ({ session }) => {
+            const org = session.activeOrganizationId
+            if (typeof org !== "string" || !org) throw new APIError("BAD_REQUEST", { error: "invalid_request", error_description: "this account belongs to no organization" })
+            return org
+          },
+        },
+        // The organization in every access token, also after a refresh.
+        customAccessTokenClaims: ({ referenceId }) => (referenceId ? { [ORG_CLAIM]: referenceId } : {}),
+      }),
+      // Clients identified by an https URL (ChatGPT, Claude, VS Code…): no registration. Dynamic client
+      // registration stays off: an open /register would let anyone show any name on the consent page.
+      cimd({ fetchClientMetadataResource, metadataProfile: "mcp-2026-07-28" }),
+    ],
+  } satisfies BetterAuthOptions
+}

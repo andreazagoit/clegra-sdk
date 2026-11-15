@@ -14,7 +14,8 @@
     "db:seed": "tsx scripts/seed.ts",
     "auth:schema": "tsx scripts/auth-schema.ts",
     "typecheck": "tsc --noEmit -p .",
-    "test": "tsx --test test/*.test.ts"
+    "test": "tsx --test test/*.test.ts",
+    "token": "tsx scripts/oauth-token.ts"
   },
   "dependencies": {
     "@better-auth/cimd": "1.7.7",

@@ -307,7 +307,7 @@ export async function insertTenantData(tx: Tx, orgId: string, data: DemoData, ow
   if (data.contacts.length)
     await tx.insert(contacts).values(data.contacts.map((c, i) => ({ orgId, id: c.id, name: c.name, email: c.email, companyId: c.company, lastCallOn: c.lastCall ?? null, lastNote: c.lastNote ?? null, createdAt: at(i) })))
   const called = data.contacts.filter((c) => c.lastCall)
-  if (called.length) await tx.insert(calls).values(called.map((c) => ({ orgId, id: `call-${c.id}`, contactId: c.id, personId: owners.ada, note: c.lastNote ?? null, calledOn: c.lastCall! })))
+  if (called.length) await tx.insert(calls).values(called.map((c) => ({ orgId, id: `call-${c.id}`, contactId: c.id, personId: owners.alice, note: c.lastNote ?? null, calledOn: c.lastCall! })))
   if (data.deals.length)
     await tx.insert(deals).values(data.deals.map((d, i) => ({ orgId, id: d.id, name: d.name, companyId: d.company, stage: d.stage, value: d.value, closeDate: d.closeDate, ownerId: owners[d.owner], createdAt: at(i) })))
 }
@@ -325,7 +325,7 @@ export async function provisionWorkspace(installation: string): Promise<void> {
     const created = await tx.insert(tenants).values({ id: installation, kind: "workspace" }).onConflictDoNothing().returning({ id: tenants.id })
     if (!created.length) return
     // The host's people are named by their ids there; the demo owners keep theirs.
-    const owners = { ada: "ada", bruno: "bruno", elena: "elena" } satisfies Record<OwnerKey, string>
+    const owners = { alice: "alice", ben: "ben", emma: "emma" } satisfies Record<OwnerKey, string>
     await insertTenantData(tx, installation, SALES_TEAM_DATA, owners)
     await tx.insert(people).values(Object.entries(OWNER_NAMES).map(([id, name]) => ({ orgId: installation, id, name })))
   })
