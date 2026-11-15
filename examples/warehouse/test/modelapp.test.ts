@@ -1,68 +1,79 @@
-// The warehouse as a MAP app, over the real HTTP path (testClient), on a seeded in-memory PGlite.
-// Callers are the app's own users: a test resolver stands in for the better-auth token check and then
-// maps the person through `callerFor` (live membership and role → permissions), exactly as production does.
+// The warehouse as a MAP app, with REAL better-auth access tokens: the OAuth flow (sign in → authorize with PKCE
+// and `resource` → consent → token) runs in-process against better-auth on a seeded in-memory PGlite, and every
+// call goes through the app's own `resolve` (lib/modelapp-auth.ts) and the Next route handlers.
 import assert from "node:assert/strict"
 import { randomBytes } from "node:crypto"
 import { readFileSync } from "node:fs"
 import { after, before, describe, test } from "node:test"
 
-import { SqlStore, type AuthOptions } from "modelapp"
+import { decodeJwt, decodeProtectedHeader, generateKeyPair, SignJWT } from "jose"
+import { SqlStore } from "modelapp"
+import { toNextHandlers } from "modelapp/next"
+import { checkApp, formatReport } from "modelapp/spec"
 import { testClient } from "modelapp/testing"
 
 process.env.PGLITE_DIR = "memory://"
 process.env.BETTER_AUTH_SECRET = randomBytes(32).toString("base64url")
 process.env.DEMO_PASSWORD = randomBytes(12).toString("base64url")
+delete process.env.MODELAPP_PUBLIC_URL
 
-const { closeDb, sql } = await import("../lib/db")
+const { closeDb, getDb, sql } = await import("../lib/db")
 const { migrate } = await import("../lib/migrate")
-const { seed, seedCompany } = await import("../lib/seed")
-const { AURORA } = await import("../lib/seed-data")
-const { callerFor } = await import("../lib/modelapp-auth")
+const { seed } = await import("../lib/seed")
+const { createAuth, getAuth } = await import("../lib/auth")
+const { modelAppAuth } = await import("../lib/modelapp-auth")
 const { createWarehouseApp } = await import("../lib/modelapp")
+const { oauthAccessToken } = await import("../scripts/oauth-flow")
+
+const SITE = "http://localhost:3930"
+const RESOURCE = `${SITE}/mcp`
+const ISSUER = `${SITE}/api/auth`
 
 type Client = Awaited<ReturnType<typeof testClient>>
 type Rows = { rows: Record<string, unknown>[]; next?: string; total?: number }
 
-// A workspace host's installation is a tenant of its own (`<installation>@<issuer>`); the test gives it Aurora's data.
-const WORKSPACE = "ws-aurora"
-const WORKSPACE_TENANT = `${WORKSPACE}@modelapp-dev`
-
-const tokens = new Map<string, { userId: string; orgId: string }>()
-const auth: AuthOptions = {
-  resolve: async (token) => {
-    const t = tokens.get(token)
-    return t ? callerFor(t.userId, t.orgId) : null
-  },
-  dev: { keyFile: false, installation: WORKSPACE, people: [{ id: "ws-person", name: "Workspace person", permissions: "all" }] },
-}
-const app = createWarehouseApp({ auth })
+const auth = await getAuth()
+const app = createWarehouseApp({ auth: modelAppAuth(auth) })
+const route = toNextHandlers(app, { publicUrl: SITE })
+const handler = (request: Request) => auth.handler(request)
 
 const ids: Record<string, { userId: string; orgId: string }> = {}
-async function as(email: string): Promise<Client> {
-  const token = randomBytes(16).toString("hex")
-  tokens.set(token, ids[email]!)
-  return testClient(app, { token })
+/** An access token for a demo person, by the real OAuth flow (a public client created for them). */
+const tokenOf = async (email: string, extra: Partial<Parameters<typeof oauthAccessToken>[0]> = {}) =>
+  (await oauthAccessToken({ authBaseURL: ISSUER, resource: RESOURCE, signIn: { email, password: process.env.DEMO_PASSWORD! }, fetch: handler, ...extra })).accessToken
+const as = async (email: string): Promise<Client> => testClient(app, { token: await tokenOf(email) })
+
+/** One JSON-RPC call through the Next route, as an MCP client makes it over HTTP. */
+async function rpc(token: string | null, method: string, params: Record<string, unknown> = {}) {
+  const response = await route.POST(
+    new Request(`${SITE}/api/modelapp/mcp`, {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "mcp-protocol-version": "2025-06-18", ...(token ? { authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+    }),
+  )
+  const text = await response.text()
+  if (response.status !== 200) return { status: response.status, headers: response.headers, text }
+  const data = response.headers.get("content-type")?.includes("text/event-stream") ? JSON.parse(text.split("\n").filter((l) => l.startsWith("data:")).pop()!.slice(5)) : JSON.parse(text)
+  return { status: 200, headers: response.headers, text, result: data.result }
 }
-const workspace = () => testClient(app, { host: "workspace", installation: WORKSPACE, person: "ws-person", permissions: "all" })
 
 const rows = (r: { structuredContent?: Record<string, unknown> }) => r.structuredContent as unknown as Rows
 const errorOf = (r: { isError?: boolean; structuredContent?: Record<string, unknown> }) => (r.isError ? ((r.structuredContent?.error as { code: string; message: string }) ?? { code: "?", message: "" }) : null)
 const stockOf = async (orgId: string, productId: string) => Number((await sql<{ stock: number }>(`SELECT stock FROM product_stock WHERE organization_id = $1 AND id = $2`, [orgId, productId]))[0]?.stock)
 
-let ada: Client, luca: Client, sofia: Client
-let aurora = "", colibri = ""
+let ada: Client, luke: Client, sophie: Client
+let aurora = "", hummingbird = ""
 
 before(async () => {
   await migrate()
   await seed()
   for (const r of await sql<{ email: string; userId: string; orgId: string }>(`SELECT u.email, u.id AS "userId", m."organizationId" AS "orgId" FROM "user" u JOIN member m ON m."userId" = u.id`)) ids[r.email] = { userId: r.userId, orgId: r.orgId }
-  aurora = ids["ada.ferri@aurora.example"]!.orgId
-  colibri = ids["sofia.greco@colibri.example"]!.orgId
-  await sql(`INSERT INTO "organization" (id, name, slug, "createdAt") VALUES ($1, 'Ferramenta Aurora (workspace)', 'ws-aurora', now())`, [WORKSPACE_TENANT])
-  await seedCompany(WORKSPACE_TENANT, "wsa", AURORA, { admin: null, member: null })
-  ada = await as("ada.ferri@aurora.example")
-  luca = await as("luca.marini@aurora.example")
-  sofia = await as("sofia.greco@colibri.example")
+  aurora = ids["ada.fernley@aurora.example"]!.orgId
+  hummingbird = ids["sophie.green@hummingbird.example"]!.orgId
+  ada = await as("ada.fernley@aurora.example")
+  luke = await as("luke.marsh@aurora.example")
+  sophie = await as("sophie.green@hummingbird.example")
 })
 
 after(async () => {
@@ -74,26 +85,19 @@ describe("tenant isolation", () => {
     const a = rows(await ada.call("product_list", { limit: 100 }))
     assert.equal(a.total, 25)
     assert.ok(a.rows.every((r) => String(r.id).startsWith("prd_aur_")))
-    const s = rows(await sofia.call("product_list", { limit: 100 }))
+    const s = rows(await sophie.call("product_list", { limit: 100 }))
     assert.equal(s.total, 6)
-    assert.ok(s.rows.every((r) => String(r.id).startsWith("prd_col_")))
-    assert.equal(rows(await sofia.call("order_list", {})).total, 3)
-    assert.equal(rows(await sofia.call("product_list", { query: "screw" })).total, 0, "Aurora's screws are not found from Colibrì")
+    assert.ok(s.rows.every((r) => String(r.id).startsWith("prd_hum_")))
+    assert.equal(rows(await sophie.call("order_list", {})).total, 3)
+    assert.equal(rows(await sophie.call("product_list", { query: "screw" })).total, 0, "Aurora's screws are not found from Hummingbird Crafts")
   })
 
   test("another organization's record is not found, and can't be acted on", async () => {
-    assert.equal(errorOf(await ada.call("product_get", { id: "prd_col_cansoy" }))?.code, "not_found")
-    assert.equal(errorOf(await sofia.call("order_get", { id: "ord_aur_9" }))?.code, "not_found")
-    const before = await stockOf(colibri, "prd_col_cansoy")
-    assert.equal(errorOf(await ada.call("product_register_movement", { id: "prd_col_cansoy", kind: "out", quantity: 1 }))?.code, "not_found")
-    assert.equal(await stockOf(colibri, "prd_col_cansoy"), before)
-  })
-
-  test("a caller who left the organization is refused", async () => {
-    const token = randomBytes(16).toString("hex")
-    tokens.set(token, { userId: ids["sofia.greco@colibri.example"]!.userId, orgId: aurora })
-    const c = await testClient(app, { token })
-    assert.equal(c.status, 401)
+    assert.equal(errorOf(await ada.call("product_get", { id: "prd_hum_cndlav" }))?.code, "not_found")
+    assert.equal(errorOf(await sophie.call("order_get", { id: "ord_aur_9" }))?.code, "not_found")
+    const before = await stockOf(hummingbird, "prd_hum_cndlav")
+    assert.equal(errorOf(await ada.call("product_register_movement", { id: "prd_hum_cndlav", kind: "out", quantity: 1 }))?.code, "not_found")
+    assert.equal(await stockOf(hummingbird, "prd_hum_cndlav"), before)
   })
 })
 
@@ -101,28 +105,28 @@ describe("purchase cost (products.cost)", () => {
   test("an admin sees it in rows and records", async () => {
     const r = rows(await ada.call("product_list", { query: "drill" }))
     assert.equal(r.rows[0]?.purchaseCost, 78)
-    const rec = (await ada.call("product_get", { id: "prd_aur_tra18v" })).structuredContent?.record as Record<string, unknown>
+    const rec = (await ada.call("product_get", { id: "prd_aur_drl18v" })).structuredContent?.record as Record<string, unknown>
     assert.equal(rec.purchaseCost, 78)
   })
 
   test("a member never gets it: not in rows, records, filters nor sorts", async () => {
-    const r = rows(await luca.call("product_list", { limit: 100 }))
+    const r = rows(await luke.call("product_list", { limit: 100 }))
     assert.equal(r.rows.length, 25)
     assert.ok(r.rows.every((row) => !("purchaseCost" in row)))
-    const rec = (await luca.call("product_get", { id: "prd_aur_tra18v" })).structuredContent?.record as Record<string, unknown>
+    const rec = (await luke.call("product_get", { id: "prd_aur_drl18v" })).structuredContent?.record as Record<string, unknown>
     assert.equal(rec.salePrice, 129)
     assert.ok(!("purchaseCost" in rec))
     // Not even a parameter of the member's list tool: refused before the handler runs.
-    const sorted = await luca.call("product_list", { sort: "purchaseCost", dir: "desc" })
+    const sorted = await luke.call("product_list", { sort: "purchaseCost", dir: "desc" })
     assert.ok(sorted.isError && /sort/.test(sorted.content?.[0]?.text ?? ""))
-    const filtered = await luca.call("product_list", { purchaseCost: { gte: 50 } })
+    const filtered = await luke.call("product_list", { purchaseCost: { gte: 50 } })
     assert.ok(filtered.isError && /purchaseCost/.test(filtered.content?.[0]?.text ?? ""))
-    const tool = (await luca.listTools()).find((t) => t.name === "product_list")!
+    const tool = (await luke.listTools()).find((t) => t.name === "product_list")!
     assert.ok(!JSON.stringify(tool.inputSchema).includes("purchaseCost"))
   })
 
   test("the stock value fragment is for admins only", async () => {
-    assert.ok(!(await luca.listTools()).some((t) => t.name === "show_stock_value"))
+    assert.ok(!(await luke.listTools()).some((t) => t.name === "show_stock_value"))
     const r = await ada.call("show_stock_value", {})
     const [expected] = await sql<{ v: string }>(`SELECT sum(purchase_cost * GREATEST(stock, 0)) AS v FROM product_stock WHERE organization_id = $1`, [aurora])
     assert.equal((r.structuredContent?.data as { value: number }).value, Number(expected!.v))
@@ -132,10 +136,10 @@ describe("purchase cost (products.cost)", () => {
 describe("lists: filters, sort, search, cursor", () => {
   test("filters by value, by range and by status", async () => {
     assert.equal(rows(await ada.call("product_list", { category: "tools" })).total, 5)
-    assert.equal(rows(await ada.call("product_list", { stockStatus: "out" })).rows[0]?.sku, "SMA-BL")
+    assert.equal(rows(await ada.call("product_list", { stockStatus: "out" })).rows[0]?.sku, "ENM-BL")
     const low = rows(await ada.call("product_list", { stock: { lte: 5 }, limit: 100 }))
     assert.ok(low.total! > 0 && low.rows.every((r) => Number(r.stock) <= 5))
-    const tools = rows(await luca.call("product_list", { category: { in: ["tools", "garden"] }, limit: 100 }))
+    const tools = rows(await luke.call("product_list", { category: { in: ["tools", "garden"] }, limit: 100 }))
     assert.ok(tools.rows.every((r) => r.category === "tools" || r.category === "garden"))
   })
 
@@ -143,15 +147,15 @@ describe("lists: filters, sort, search, cursor", () => {
     const byStock = rows(await ada.call("product_list", { sort: "stock", dir: "asc", limit: 100 })).rows.map((r) => Number(r.stock))
     assert.deepEqual(byStock, [...byStock].sort((a, b) => a - b))
     const byCost = rows(await ada.call("product_list", { sort: "purchaseCost", dir: "desc" })).rows
-    assert.equal(byCost[0]?.sku, "TRA-18V")
+    assert.equal(byCost[0]?.sku, "DRL-18V")
     assert.ok((await ada.call("product_list", { sort: "reorderLevel" })).isError)
   })
 
   test("searches the search fields only, case-insensitive, with SQL wildcards taken literally", async () => {
-    assert.deepEqual(rows(await ada.call("product_list", { query: "SCREW", sort: "sku" })).rows.map((r) => r.sku), ["CAC-SET", "VIT-440", "VIT-660"])
-    assert.equal(rows(await ada.call("product_list", { query: "vit-" })).total, 2, "by SKU")
+    assert.deepEqual(rows(await ada.call("product_list", { query: "SCREW", sort: "sku" })).rows.map((r) => r.sku), ["SCR-440", "SCR-660", "SDR-SET"])
+    assert.equal(rows(await ada.call("product_list", { query: "scr-" })).total, 2, "by SKU")
     assert.equal(rows(await ada.call("product_list", { query: "%" })).total, 0)
-    assert.equal(rows(await ada.call("order_list", { query: "tigli" })).total, 2, "by customer")
+    assert.equal(rows(await ada.call("order_list", { query: "linden" })).total, 2, "by customer")
   })
 
   test("pages through with the cursor, without overlaps", async () => {
@@ -159,98 +163,86 @@ describe("lists: filters, sort, search, cursor", () => {
     let cursor: string | undefined
     let pages = 0
     do {
-      const r = rows(await luca.call("product_list", { sort: "name", limit: 10, ...(cursor ? { cursor } : {}) }))
+      const r = rows(await luke.call("product_list", { sort: "name", limit: 10, ...(cursor ? { cursor } : {}) }))
       seen.push(...r.rows.map((x) => String(x.id)))
       cursor = r.next
       pages++
     } while (cursor && pages < 10)
     assert.equal(pages, 3)
     assert.equal(new Set(seen).size, 25)
-    assert.equal(errorOf(await luca.call("product_list", { cursor: "not-a-number" }))?.code, "invalid_input")
+    assert.equal(errorOf(await luke.call("product_list", { cursor: "not-a-number" }))?.code, "invalid_input")
   })
 })
 
 describe("register_movement", () => {
   test("changes the stock, by the person who registered it", async () => {
-    const before = await stockOf(aurora, "prd_aur_vit440")
-    const r = await luca.call("product_register_movement", { id: "prd_aur_vit440", kind: "in", quantity: 20, note: "Delivery 4471" })
+    const before = await stockOf(aurora, "prd_aur_scr440")
+    const r = await luke.call("product_register_movement", { id: "prd_aur_scr440", kind: "in", quantity: 20, note: "Delivery 4471" })
     assert.ok(!r.isError, JSON.stringify(r.content))
-    assert.equal(await stockOf(aurora, "prd_aur_vit440"), before + 20)
-    const latest = rows(await luca.call("movement_list", { product: "prd_aur_vit440", sort: "date", dir: "desc", limit: 1 })).rows[0]!
+    assert.equal(await stockOf(aurora, "prd_aur_scr440"), before + 20)
+    const latest = rows(await luke.call("movement_list", { product: "prd_aur_scr440", sort: "date", dir: "desc", limit: 1 })).rows[0]!
     assert.equal(latest.note, "Delivery 4471")
-    assert.equal(latest.by, ids["luca.marini@aurora.example"]!.userId)
-    await luca.call("product_register_movement", { id: "prd_aur_vit440", kind: "adjustment", quantity: -3, note: "Stocktake" })
-    assert.equal(await stockOf(aurora, "prd_aur_vit440"), before + 17)
+    assert.equal(latest.by, ids["luke.marsh@aurora.example"]!.userId)
+    await luke.call("product_register_movement", { id: "prd_aur_scr440", kind: "adjustment", quantity: -3, note: "Stocktake" })
+    assert.equal(await stockOf(aurora, "prd_aur_scr440"), before + 17)
   })
 
   test("refuses taking out more than is in stock, and changes nothing", async () => {
-    const before = await stockOf(aurora, "prd_aur_cacset")
-    const e = errorOf(await luca.call("product_register_movement", { id: "prd_aur_cacset", kind: "out", quantity: before + 1 }))
+    const before = await stockOf(aurora, "prd_aur_sdrset")
+    const e = errorOf(await luke.call("product_register_movement", { id: "prd_aur_sdrset", kind: "out", quantity: before + 1 }))
     assert.equal(e?.code, "conflict")
     assert.match(e!.message, /Only \d+ pcs/)
-    assert.equal(await stockOf(aurora, "prd_aur_cacset"), before)
-    assert.equal(errorOf(await luca.call("product_register_movement", { id: "prd_aur_cacset", kind: "in", quantity: -4 }))?.code, "invalid_input")
+    assert.equal(await stockOf(aurora, "prd_aur_sdrset"), before)
+    assert.equal(errorOf(await luke.call("product_register_movement", { id: "prd_aur_sdrset", kind: "in", quantity: -4 }))?.code, "invalid_input")
   })
 })
 
 describe("confirm_order", () => {
   test("a member can't confirm orders", async () => {
-    assert.ok(!(await luca.listTools()).some((t) => t.name === "order_confirm_order"))
-    assert.ok((await luca.call("order_confirm_order", { id: "ord_aur_9" })).isError)
-    assert.equal(((await luca.call("order_get", { id: "ord_aur_9" })).structuredContent?.record as Record<string, unknown>).status, "draft")
+    assert.ok(!(await luke.listTools()).some((t) => t.name === "order_confirm_order"))
+    assert.ok((await luke.call("order_confirm_order", { id: "ord_aur_9" })).isError)
+    assert.equal(((await luke.call("order_get", { id: "ord_aur_9" })).structuredContent?.record as Record<string, unknown>).status, "draft")
   })
 
   test("is marked destructive for plain clients, and refused when stock is short", async () => {
     const tool = (await ada.listTools()).find((t) => t.name === "order_confirm_order")!
     assert.equal(tool.annotations?.destructiveHint, true)
-    const before = await stockOf(aurora, "prd_aur_tra18v")
+    const before = await stockOf(aurora, "prd_aur_drl18v")
     const e = errorOf(await ada.call("order_confirm_order", { id: "ord_aur_11" }))
     assert.equal(e?.code, "conflict")
     assert.match(e!.message, /Cordless drill 18 V \(needs 12, \d+ in stock\)/)
-    assert.equal(await stockOf(aurora, "prd_aur_tra18v"), before, "nothing moved")
+    assert.equal(await stockOf(aurora, "prd_aur_drl18v"), before, "nothing moved")
   })
 
-  test("a workspace host needs the person's confirmation; the confirmed call runs once", async () => {
-    const ws = await workspace()
-    assert.equal(ws.status, 200)
-    const led = `prd_wsa_lede27`
-    const before = await stockOf(WORKSPACE_TENANT, led)
-    assert.equal(errorOf(await ws.call("order_confirm_order", { id: "ord_wsa_10" }))?.code, "confirmation_required")
-    assert.equal(await stockOf(WORKSPACE_TENANT, led), before)
-
-    const first = await ws.confirmed("order_confirm_order", { id: "ord_wsa_10" }, "call-confirm-10")
+  test("confirming moves the goods once: a second confirmation is a conflict", async () => {
+    const led = "prd_aur_lede27"
+    const before = await stockOf(aurora, led)
+    const first = await ada.call("order_confirm_order", { id: "ord_aur_10" })
     assert.ok(!first.isError, JSON.stringify(first.content))
-    assert.equal(await stockOf(WORKSPACE_TENANT, led), before - 24)
-    // The same call again (a retry): the stored result, nothing moves twice.
-    const retry = await ws.confirmed("order_confirm_order", { id: "ord_wsa_10" }, "call-confirm-10")
-    assert.deepEqual(retry.structuredContent, first.structuredContent)
-    assert.equal(await stockOf(WORKSPACE_TENANT, led), before - 24)
-    // A new call: the order is already confirmed.
-    assert.equal(errorOf(await ws.confirmed("order_confirm_order", { id: "ord_wsa_10" }, "call-confirm-10b"))?.code, "conflict")
-    const order = (await ws.call("order_get", { id: "ord_wsa_10" })).structuredContent?.record as Record<string, unknown>
-    assert.equal(order.status, "confirmed")
-    // Aurora's own order of the same number is untouched.
-    assert.equal(((await ada.call("order_get", { id: "ord_aur_10" })).structuredContent?.record as Record<string, unknown>).status, "draft")
+    assert.equal(await stockOf(aurora, led), before - 24)
+    assert.equal(errorOf(await ada.call("order_confirm_order", { id: "ord_aur_10" }))?.code, "conflict")
+    assert.equal(await stockOf(aurora, led), before - 24)
+    assert.equal(((await ada.call("order_get", { id: "ord_aur_10" })).structuredContent?.record as Record<string, unknown>).status, "confirmed")
   })
 })
 
 describe("create_order", () => {
   test("creates a draft at today's prices; nothing leaves the warehouse", async () => {
-    const before = await stockOf(aurora, "prd_aur_mar500")
-    const r = await ada.call("create_order", { customer: "Falegnameria Dal Bosco", lines: [{ product: "prd_aur_mar500", quantity: 2 }] })
+    const before = await stockOf(aurora, "prd_aur_ham500")
+    const r = await ada.call("create_order", { customer: "Woodland Joinery", lines: [{ product: "prd_aur_ham500", quantity: 2 }] })
     assert.ok(!r.isError, JSON.stringify(r.content))
-    const draft = rows(await ada.call("order_list", { query: "Dal Bosco" })).rows[0]!
+    const draft = rows(await ada.call("order_list", { query: "Woodland" })).rows[0]!
     assert.equal(draft.status, "draft")
     assert.equal(draft.total, 37)
     assert.match(String(draft.number), /^SO-\d{4}-0013$/)
-    assert.equal(await stockOf(aurora, "prd_aur_mar500"), before)
-    assert.equal(errorOf(await ada.call("create_order", { customer: "X Y", lines: [{ product: "prd_col_cansoy", quantity: 1 }] }))?.code, "not_found")
+    assert.equal(await stockOf(aurora, "prd_aur_ham500"), before)
+    assert.equal(errorOf(await ada.call("create_order", { customer: "X Y", lines: [{ product: "prd_hum_cndlav", quantity: 1 }] }))?.code, "not_found")
   })
 })
 
 describe("fragments and pages", () => {
   test("low stock lists the emptiest products first", async () => {
-    const r = await luca.call("show_low_stock", { limit: 3 })
+    const r = await luke.call("show_low_stock", { limit: 3 })
     const items = (r.structuredContent?.data as { items: { title: string; status: string }[] }).items
     assert.equal(items.length, 3)
     assert.equal(items[0]?.title, "Enamel paint, blue")
@@ -273,3 +265,149 @@ describe("fragments and pages", () => {
     assert.ok(migration.includes(SqlStore.schema()), "db/migrations/002_modelapp_store.sql must contain SqlStore.schema()")
   })
 })
+
+describe("MCP authorization (better-auth tokens, verified by the app)", () => {
+  test("the metadata: the protected resource names better-auth; its AS metadata is served at the root", async () => {
+    const prm = (await (await route.GET(new Request(`${SITE}/.well-known/oauth-protected-resource/mcp`))).json()) as { resource: string; authorization_servers: string[] }
+    assert.equal(prm.resource, RESOURCE)
+    assert.deepEqual(prm.authorization_servers, [ISSUER])
+    for (const path of ["/.well-known/oauth-authorization-server/api/auth", "/.well-known/openid-configuration/api/auth"]) {
+      const response = await route.GET(new Request(`${SITE}${path}`))
+      assert.equal(response.status, 200, path)
+      const meta = (await response.json()) as Record<string, unknown>
+      assert.equal(meta.issuer, ISSUER)
+      assert.deepEqual(meta.code_challenge_methods_supported, ["S256"])
+      assert.equal(meta.client_id_metadata_document_supported, true)
+      assert.ok(!("registration_endpoint" in meta), "dynamic client registration is off")
+    }
+  })
+
+  test("no token: 401 with WWW-Authenticate pointing at the protected-resource metadata", async () => {
+    const r = await rpc(null, "tools/list")
+    assert.equal(r.status, 401)
+    assert.match(r.headers.get("www-authenticate") ?? "", new RegExp(`resource_metadata="${SITE}/.well-known/oauth-protected-resource/mcp"`))
+  })
+
+  test("a token from the real flow is an audience-bound JWT carrying the organization, and passes the conformance checks", async () => {
+    const token = await tokenOf("ada.fernley@aurora.example")
+    assert.equal(decodeProtectedHeader(token).typ, "at+jwt")
+    const claims = decodeJwt(token)
+    assert.equal(claims.iss, ISSUER)
+    assert.equal(claims.aud, RESOURCE)
+    assert.equal(claims.org, aurora)
+    const listed = (await rpc(token, "tools/list")).result as { tools: { name: string }[] }
+    assert.ok(listed.tools.some((t) => t.name === "product_list"))
+    const report = await checkApp({ url: SITE, token, fetch: (r) => route[r.method as "GET"](r) })
+    assert.ok(report.ok && report.complete, formatReport(report))
+  })
+
+  test("the organization comes from the token only, never from arguments", async () => {
+    const token = await tokenOf("sophie.green@hummingbird.example")
+    const r = await rpc(token, "tools/call", { name: "product_list", arguments: { installation: aurora, org: aurora, limit: 100 } })
+    const ids = ((r.result as { structuredContent?: Rows } | undefined)?.structuredContent?.rows ?? []).map((x) => String(x.id))
+    assert.ok(!ids.some((id) => id.startsWith("prd_aur_")), r.text)
+  })
+
+  test("refused: another audience, tampered, expired, opaque, DPoP-bound, two audiences, no scope, no organization, a foreign key, a wrong typ", async () => {
+    const token = await tokenOf("ada.fernley@aurora.example")
+    const [h, p, s] = token.split(".")
+    const tampered = `${h}.${Buffer.from(JSON.stringify({ ...decodeJwt(token), org: hummingbird })).toString("base64url")}.${s}`
+    const now = Math.floor(Date.now() / 1000)
+    const cases: [string, string, RegExp][] = [
+      ["other audience", await resign(token, { aud: "https://other.example.test/mcp" }), /another server/],
+      ["tampered", tampered, /not valid/],
+      ["expired", await resign(token, { exp: now - 120, iat: now - 3600 }), /expired/],
+      ["opaque", "aBcDeFgHiJkLmNoPqRsTuVwXyZ012345", /not a JWT/],
+      ["dpop", await resign(token, { cnf: { jkt: "x" } }), /DPoP/],
+      ["two audiences", await resign(token, { aud: [RESOURCE, "https://other.example.test/mcp"] }), /several servers/],
+      ["no scope", await resign(token, { scope: "openid profile" }), /modelapp scope/],
+      ["no organization", await resign(token, { org: undefined }), /no organization/],
+      ["foreign key", await foreign(token), /not valid/],
+      ["wrong typ", await resign(token, {}, "JWT"), /not valid/],
+    ]
+    for (const [name, bad, reason] of cases) {
+      const r = await rpc(bad, "tools/list")
+      assert.equal(r.status, 401, name)
+      assert.match(r.headers.get("www-authenticate") ?? "", reason, name)
+    }
+    // Within the 30 s clock skew an expiry just passed still counts.
+    assert.equal((await rpc(await resign(token, { exp: now - 10 }), "tools/list")).status, 200)
+  })
+
+  test("a role change counts on the next call; a removed member is refused with a token issued before", async () => {
+    const luke = ids["luke.marsh@aurora.example"]!
+    const token = await tokenOf("luke.marsh@aurora.example")
+    const cost = async () => {
+      const r = await rpc(token, "tools/call", { name: "product_get", arguments: { id: "prd_aur_drl18v" } })
+      return ((r.result as { structuredContent: { record: Record<string, unknown> } }).structuredContent.record).purchaseCost
+    }
+    assert.equal(await cost(), undefined)
+    await sql(`UPDATE member SET role = 'admin' WHERE "userId" = $1 AND "organizationId" = $2`, [luke.userId, luke.orgId])
+    assert.equal(await cost(), 78)
+    await sql(`UPDATE member SET role = 'member' WHERE "userId" = $1 AND "organizationId" = $2`, [luke.userId, luke.orgId])
+    assert.equal(await cost(), undefined)
+    const [row] = await sql<{ id: string }>(`DELETE FROM member WHERE "userId" = $1 AND "organizationId" = $2 RETURNING id`, [luke.userId, luke.orgId])
+    try {
+      const r = await rpc(token, "tools/list")
+      assert.equal(r.status, 401)
+      assert.match(r.headers.get("www-authenticate") ?? "", /no longer a member/)
+    } finally {
+      await sql(`INSERT INTO member (id, "organizationId", "userId", role, "createdAt") VALUES ($1, $2, $3, 'member', now())`, [row!.id, luke.orgId, luke.userId])
+    }
+    assert.equal((await rpc(token, "tools/list")).status, 200)
+  })
+
+  test("the pages' calls, step by step: authorize → /sign-in → (signed in) → /oauth/consent → allow → code; deny → access_denied", async () => {
+    // A metadata-document client (CIMD), its document served by this test instead of the network.
+    const CLIENT_ID = "https://client.example.test/oauth/client.json"
+    const REDIRECT = "http://127.0.0.1:8976/callback"
+    const document = { client_id: CLIENT_ID, client_name: "Example MCP client", redirect_uris: [REDIRECT], token_endpoint_auth_method: "none", grant_types: ["authorization_code", "refresh_token"], response_types: ["code"] }
+    const cimdAuth = createAuth((await getDb()).pool, {
+      fetchClientMetadata: (async (input: RequestInfo | URL) => (String(input instanceof Request ? input.url : input) === CLIENT_ID ? Response.json(document, { headers: { "cache-control": "max-age=300" } }) : new Response("not found", { status: 404 }))) as never,
+    })
+    const flow = async (accept: boolean) => {
+      const jar: string[] = []
+      const send = async (path: string, init: { json?: unknown; query?: Record<string, string> } = {}) => {
+        const url = new URL(`${ISSUER}${path}`)
+        for (const [k, v] of Object.entries(init.query ?? {})) url.searchParams.set(k, v)
+        const response = await cimdAuth.handler(new Request(url, { method: init.json ? "POST" : "GET", redirect: "manual", headers: { origin: SITE, accept: "application/json", cookie: jar.join("; "), ...(init.json ? { "content-type": "application/json" } : {}) }, ...(init.json ? { body: JSON.stringify(init.json) } : {}) }))
+        for (const c of response.headers.getSetCookie()) jar.push(c.split(";")[0]!)
+        return response
+      }
+      const query = { response_type: "code", client_id: CLIENT_ID, redirect_uri: REDIRECT, scope: "modelapp", state: "s1", code_challenge: "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM", code_challenge_method: "S256", resource: RESOURCE }
+      const authorized = await send("/oauth2/authorize", { query })
+      const toLogin = new URL(authorized.headers.get("location") ?? ((await authorized.json()) as { url: string }).url, SITE)
+      assert.equal(toLogin.pathname, "/sign-in")
+      // What the sign-in page's server action posts: the credentials and the signed request.
+      const signedIn = (await (await send("/sign-in/email", { json: { email: "owen.rivers@hummingbird.example", password: process.env.DEMO_PASSWORD, oauth_query: toLogin.searchParams.toString() } })).json()) as { url?: string; redirect?: boolean }
+      assert.equal(signedIn.redirect, true, JSON.stringify(signedIn))
+      const toConsent = new URL(signedIn.url!, SITE)
+      assert.equal(toConsent.pathname, "/oauth/consent", "no organization step: the session already has the person's organization")
+      const client = (await (await send("/oauth2/public-client", { query: { client_id: CLIENT_ID } })).json()) as { client_name?: string }
+      assert.equal(client.client_name, "Example MCP client")
+      const answered = (await (await send("/oauth2/consent", { json: { accept, oauth_query: toConsent.searchParams.toString() } })).json()) as { url?: string }
+      return new URL(answered.url!)
+    }
+    const denied = await flow(false)
+    assert.equal(denied.searchParams.get("error"), "access_denied")
+    const back = await flow(true)
+    assert.equal(`${back.origin}${back.pathname}`, REDIRECT)
+    assert.ok(back.searchParams.get("code"))
+    assert.equal(back.searchParams.get("state"), "s1")
+  })
+})
+
+// The same claims re-signed with better-auth's own key: a token better-auth signed with other claims. `resolve`
+// must refuse it on the claims alone.
+async function resign(token: string, changes: Record<string, unknown>, typ = "at+jwt"): Promise<string> {
+  const { signJWT } = await import("better-auth/plugins")
+  const claims: Record<string, unknown> = { ...decodeJwt(token), ...changes }
+  for (const [k, v] of Object.entries(changes)) if (v === undefined) delete claims[k]
+  const jwtPlugin = (auth.options.plugins as { id: string; options?: unknown }[]).find((p) => p.id === "jwt")!
+  return signJWT({ context: await auth.$context } as never, { options: jwtPlugin.options as never, payload: claims, header: { typ } } as never)
+}
+
+async function foreign(token: string): Promise<string> {
+  const { privateKey } = await generateKeyPair("EdDSA")
+  return new SignJWT(decodeJwt(token)).setProtectedHeader({ alg: "EdDSA", typ: "at+jwt", kid: decodeProtectedHeader(token).kid! }).sign(privateKey)
+}

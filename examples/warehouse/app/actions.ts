@@ -1,12 +1,12 @@
 "use server"
 
-import { isAPIError } from "better-auth/api"
 import { revalidatePath } from "next/cache"
 import { headers } from "next/headers"
 import { redirect } from "next/navigation"
 
 import type { ActionState } from "@/components/action-form"
 import { getAuth } from "@/lib/auth"
+import { authPost, nextUrl } from "@/lib/auth-http"
 import { DEMO_USERS, demoPassword } from "@/lib/demo"
 import { requirePermission } from "@/lib/session"
 import { cancelOrder, confirmOrder, MOVEMENT_KINDS, registerMovement, WarehouseError, type MovementKind } from "@/lib/warehouse"
@@ -28,17 +28,23 @@ function refusal(error: unknown, form: FormData): ActionState {
   throw error
 }
 
+/**
+ * Signs in through better-auth's own endpoint. When the page was opened by an OAuth authorization (ChatGPT, Claude,
+ * Clegra connecting), its signed request rides along as `oauth_query` and better-auth answers where it continues
+ * (the consent page, or straight back to the client); otherwise the person lands on the dashboard.
+ */
+async function signIn(email: string, password: string, form: FormData): Promise<ActionState> {
+  const oauthQuery = text(form, "oauth_query")
+  const { ok, status, data } = await authPost("/sign-in/email", { email, password, ...(oauthQuery ? { oauth_query: oauthQuery } : {}) })
+  if (!ok) return { error: status === 401 ? "Wrong email or password." : status === 429 ? "Too many sign-in attempts from here: wait a few seconds and try again." : `Sign-in failed (${String(data.error_description ?? data.message ?? status)}).`, values: typed(form) }
+  redirect(nextUrl(data) ?? "/")
+}
+
 export async function signInAction(_state: ActionState, form: FormData): Promise<ActionState> {
   const email = text(form, "email").toLowerCase()
   const password = typeof form.get("password") === "string" ? (form.get("password") as string) : ""
   if (!email || !password) return { error: "Give your email and password.", values: typed(form) }
-  try {
-    await (await getAuth()).api.signInEmail({ body: { email, password }, headers: await headers() })
-  } catch (error) {
-    if (isAPIError(error)) return { error: "Wrong email or password.", values: typed(form) }
-    throw error
-  }
-  redirect("/")
+  return signIn(email, password, form)
 }
 
 /** One-click sign-in as a seeded demo person (DEMO_SIGNIN=1 only): the password never leaves the server. */
@@ -46,13 +52,18 @@ export async function demoSignInAction(_state: ActionState, form: FormData): Pro
   if (process.env.DEMO_SIGNIN !== "1") return { error: "Demo sign-in is off." }
   const user = DEMO_USERS.find((u) => u.email === text(form, "email"))
   if (!user) return { error: "Not a demo person." }
-  try {
-    await (await getAuth()).api.signInEmail({ body: { email: user.email, password: demoPassword() }, headers: await headers() })
-  } catch (error) {
-    if (isAPIError(error)) return { error: "The demo people are not seeded with this DEMO_PASSWORD: run `npm run db:seed`." }
-    throw error
-  }
-  redirect("/")
+  const result = await signIn(user.email, demoPassword(), form)
+  return result?.error?.startsWith("Wrong") ? { error: "The demo people are not seeded with this DEMO_PASSWORD: run `npm run db:seed`." } : result
+}
+
+/** The person's answer on the consent page: better-auth sends the client its code (or the refusal). */
+export async function consentAction(_state: ActionState, form: FormData): Promise<ActionState> {
+  const oauthQuery = text(form, "oauth_query")
+  if (!oauthQuery) return { error: "This page was not opened by an authorization request." }
+  const { ok, data } = await authPost("/oauth2/consent", { accept: text(form, "decision") === "accept", oauth_query: oauthQuery })
+  const url = nextUrl(data)
+  if (!ok || !url) return { error: `The authorization can't continue (${String(data.error_description ?? data.message ?? "no redirect")}). Start again from the app that asked.` }
+  redirect(url)
 }
 
 export async function signOutAction(): Promise<void> {

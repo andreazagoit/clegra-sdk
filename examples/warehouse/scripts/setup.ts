@@ -9,7 +9,6 @@ const has = (key: string) => new RegExp(`^${key}=.+`, "m").test(current)
 const add: string[] = []
 if (!has("BETTER_AUTH_SECRET")) add.push(`BETTER_AUTH_SECRET=${randomBytes(32).toString("base64url")}`)
 if (!has("DEMO_PASSWORD")) add.push(`DEMO_PASSWORD=${randomBytes(12).toString("base64url")}`)
-if (!/^BETTER_AUTH_URL=/m.test(current)) add.push("BETTER_AUTH_URL=http://localhost:3930")
 if (!/^DEMO_SIGNIN=/m.test(current)) add.push("DEMO_SIGNIN=1")
 if (add.length) {
   writeFileSync(file, `${current}${current && !current.endsWith("\n") ? "\n" : ""}${add.join("\n")}\n`, { mode: 0o600 })

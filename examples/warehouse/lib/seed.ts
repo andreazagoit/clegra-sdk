@@ -1,7 +1,7 @@
 import { getAuth } from "./auth"
 import { sql, transaction, type Sql } from "./db"
 import { COMPANIES, DEMO_USERS, demoPassword, type CompanySlug } from "./demo"
-import { AURORA, COLIBRI, type CompanyData } from "./seed-data"
+import { AURORA, HUMMINGBIRD, type CompanyData } from "./seed-data"
 
 /**
  * The demo data, idempotent: run it as often as you like (`npm run db:seed`).
@@ -75,8 +75,8 @@ export async function seedCompany(orgId: string, code: string, data: CompanyData
 }
 
 const DATA: Record<CompanySlug, { code: string; data: CompanyData }> = {
-  "ferramenta-aurora": { code: "aur", data: AURORA },
-  "bottega-colibri": { code: "col", data: COLIBRI },
+  "aurora-hardware": { code: "aur", data: AURORA },
+  "hummingbird-crafts": { code: "hum", data: HUMMINGBIRD },
 }
 
 export async function seed(log: (line: string) => void = () => undefined): Promise<void> {

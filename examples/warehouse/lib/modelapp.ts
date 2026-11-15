@@ -113,7 +113,7 @@ const permissions = Object.fromEntries(
 // ------------------------------------------------------------------ the app
 
 export type WarehouseAppOptions = {
-  /** Who may call (spec §7): the app's own tokens through `auth.resolve` (better-auth), workspace hosts' issuers, or dev mode in tests. */
+  /** Who may call (spec §7): the app's own better-auth tokens, verified by `auth.resolve` (lib/modelapp-auth.ts). */
   auth: AuthOptions
   /** Idempotency of writes and one-time token ids: the app's Postgres by default (table from db/migrations/002_modelapp_store.sql). */
   store?: IdempotencyStore

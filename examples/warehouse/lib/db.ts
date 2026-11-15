@@ -96,7 +96,10 @@ async function createDb(): Promise<Db> {
   const url = process.env.DATABASE_URL
   if (url) {
     const { default: pg } = await import("pg")
-    const pool = new pg.Pool({ connectionString: url, max: Number(process.env.DATABASE_POOL_MAX ?? 5) })
+    // TLS comes from the URL (`?sslmode=require`, as Neon gives it). Serverless: few connections per instance, closed
+    // when idle, so instances that scale up and down don't hold the database's connections; with Neon use its pooled
+    // (`-pooler`) host for the app — pg sends unnamed statements, which its transaction pooling supports.
+    const pool = new pg.Pool({ connectionString: url, max: Number(process.env.DATABASE_POOL_MAX ?? 5), idleTimeoutMillis: 10_000, connectionTimeoutMillis: 10_000 })
     return { kind: "postgres", pool: pool as unknown as Pool, exec: async (script) => void (await pool.query(script)) }
   }
   if (process.env.NODE_ENV === "production") throw new Error("DATABASE_URL is not set. In production the app needs a Postgres database; PGlite is for local development only.")

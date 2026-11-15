@@ -4,18 +4,18 @@
  * `.env.local`).
  */
 export type DemoUser = { email: string; name: string; role: "admin" | "member"; company: CompanySlug }
-export type CompanySlug = "ferramenta-aurora" | "bottega-colibri"
+export type CompanySlug = "aurora-hardware" | "hummingbird-crafts"
 
 export const COMPANIES: Record<CompanySlug, { name: string }> = {
-  "ferramenta-aurora": { name: "Ferramenta Aurora" },
-  "bottega-colibri": { name: "Bottega Colibrì" },
+  "aurora-hardware": { name: "Aurora Hardware" },
+  "hummingbird-crafts": { name: "Hummingbird Crafts" },
 }
 
 export const DEMO_USERS: DemoUser[] = [
-  { email: "ada.ferri@aurora.example", name: "Ada Ferri", role: "admin", company: "ferramenta-aurora" },
-  { email: "luca.marini@aurora.example", name: "Luca Marini", role: "member", company: "ferramenta-aurora" },
-  { email: "sofia.greco@colibri.example", name: "Sofia Greco", role: "admin", company: "bottega-colibri" },
-  { email: "enzo.riva@colibri.example", name: "Enzo Riva", role: "member", company: "bottega-colibri" },
+  { email: "ada.fernley@aurora.example", name: "Ada Fernley", role: "admin", company: "aurora-hardware" },
+  { email: "luke.marsh@aurora.example", name: "Luke Marsh", role: "member", company: "aurora-hardware" },
+  { email: "sophie.green@hummingbird.example", name: "Sophie Green", role: "admin", company: "hummingbird-crafts" },
+  { email: "owen.rivers@hummingbird.example", name: "Owen Rivers", role: "member", company: "hummingbird-crafts" },
 ]
 
 export function demoPassword(): string {
