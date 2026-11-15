@@ -484,6 +484,7 @@ describe("auth", () => {
     ;(process.env as Record<string, string | undefined>).NODE_ENV = "production" // writable here (Next's types make it read-only)
     try {
       assert.throws(() => makeApp(), /production/)
+      assert.throws(() => makeApp({ auth: { anonymous: { installation: "public", permissions: [] } } }), /auth\.anonymous.*production/)
     } finally {
       ;(process.env as Record<string, string | undefined>).NODE_ENV = env // writable here (Next's types make it read-only)
     }

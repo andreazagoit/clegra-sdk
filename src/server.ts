@@ -246,6 +246,7 @@ export class AppServer {
     this.locale = options.locale ?? "en"
     const auth = options.auth ?? {}
     if (auth.dev && process.env.NODE_ENV === "production") throw new Error("auth.dev is for development: it is refused when NODE_ENV is production")
+    if (auth.anonymous && process.env.NODE_ENV === "production") throw new Error("auth.anonymous is for local demos: it is refused when NODE_ENV is production")
     const path = (options.path ?? "").replace(/\/+$/, "")
     if (path && !/^(\/[A-Za-z0-9._~-]+)+$/.test(path)) throw new Error(`path "${options.path}": a URL path like /api/modelapp`)
     this.#path = path

@@ -143,7 +143,7 @@ export type AuthOptions = {
    * `production`; answers callers on a loopback address only.
    */
   dev?: boolean | DevOptions
-  /** Serve calls without a token as this caller (local demos only). Off by default. */
+  /** Serve calls without a token as this caller (local demos only). Off by default; refused when NODE_ENV is `production`. */
   anonymous?: { installation: string; person?: Person; permissions: string[] | "all"; locale?: string }
 }
 
