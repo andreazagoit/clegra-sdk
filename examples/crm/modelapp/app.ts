@@ -2,7 +2,7 @@
 // the functions the CRM already has (lib/crm.ts). Hosts and MCP clients get
 // the same rules as the pages: the tenant from the verified caller, the field
 // permissions applied by the SDK, the changes through the same functions.
-import { AppError, defineApp, ref, SqlStore, type App, type AuthOptions, type Context, type IdempotencyStore } from "@modelapp/server"
+import { AppError, defineApp, ref, SqlStore, type App, type AuthOptions, type Context, type IdempotencyStore } from "modelapp"
 import { z } from "zod"
 
 import {
@@ -91,7 +91,7 @@ function refused(error: unknown, ctx: Context, closed?: { en: string; it: string
 // ------------------------------------------------------------------ the app
 
 export type CrmAppOptions = {
-  /** Who may call: the app's own users (`resolve`, phase 2: the better-auth bridge) and workspace hosts (`issuers`). */
+  /** Who may call: the app's own users (`resolve`, phase 2: verifying better-auth's tokens) and workspace hosts (`issuers`). */
   auth: AuthOptions
   /** Default: the `modelapp_store` table in the CRM's database. */
   store?: IdempotencyStore

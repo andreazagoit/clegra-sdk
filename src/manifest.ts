@@ -1,4 +1,4 @@
-import { MANIFEST_PATH, PROTOCOL_NAME, PROTOCOL_SHORT_NAME, SCHEMA_ID, SPEC_VERSION, uriPrefix } from "@modelapp/spec/protocol"
+import { MANIFEST_PATH, PROTOCOL_NAME, PROTOCOL_SHORT_NAME, SCHEMA_ID, SPEC_VERSION, uriPrefix } from "../spec/src/protocol"
 import { z } from "zod"
 
 /**

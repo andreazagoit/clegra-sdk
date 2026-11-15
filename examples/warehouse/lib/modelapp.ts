@@ -2,7 +2,7 @@
 // hosts and a plain MCP server for ChatGPT, Claude and any MCP client. It adds nothing to the app's data
 // layer: every handler calls the functions the pages already use (lib/warehouse.ts), with the tenant the
 // SDK took from the verified caller (`ctx.installation` = the organization id).
-import { AppError, defineApp, ref, SqlStore, type AuthOptions, type Context, type IdempotencyStore } from "@modelapp/server"
+import { AppError, defineApp, ref, SqlStore, type AuthOptions, type Context, type IdempotencyStore } from "modelapp"
 import { z } from "zod"
 
 import { sql } from "./db"

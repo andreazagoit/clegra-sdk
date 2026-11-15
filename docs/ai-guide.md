@@ -1,7 +1,7 @@
 # AI guide: building a Model App Protocol (MAP) app
 
 > For coding agents. This one file is enough to write a correct app.
-> A MAP app is an app that is also an MCP server. SDK `@modelapp/server`; normative text in [spec.md](spec.md).
+> A MAP app is an app that is also an MCP server. SDK `modelapp`; normative text in [spec.md](spec.md).
 
 ## The model
 
@@ -15,7 +15,7 @@ handlers run. There is no other authoring API.
 ## The whole shape
 
 ```ts
-import { AppError, defineApp, ref } from "@modelapp/server"
+import { AppError, defineApp, ref } from "modelapp"
 import { z } from "zod"
 
 export default defineApp({
@@ -153,7 +153,7 @@ Labels given as `{ en, it }` maps reach the generated view in every locale: it d
 
 What `defineApp` returns: `manifest()`, `fetch(request)` (Fetch API handler),
 `start()`, `devToken()`, `devConfirmation()`, `uri()`. On Node alone:
-`listen(app, { port, host })` from `@modelapp/server/node`.
+`listen(app, { port, host })` from `modelapp/node`.
 
 ## Generated tools
 
@@ -194,7 +194,7 @@ record pages), `show_<fragment>`, `modelapp_resolve` (for hosts). Reads have
 ## Check your work
 
 ```ts
-import { testClient } from "@modelapp/server/testing"
+import { testClient } from "modelapp/testing"
 const c = await testClient(app, { permissions: ["deals.edit"] })      // or "all"; host: "workspace"; person; installation; locale
 await c.listTools(); await c.call("deal_list", {}); await c.readResource("ui://crm/view")
 await (await testClient(app, { host: "workspace", permissions: "all" })).confirmed("deal_mark_won", { id: "d1" })

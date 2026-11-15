@@ -1,4 +1,4 @@
-import type { ResolvedCaller } from "@modelapp/server"
+import type { ResolvedCaller } from "modelapp"
 
 import { sql } from "./db"
 import { permissionsFor } from "./permissions"
@@ -9,8 +9,8 @@ import { permissionsFor } from "./permissions"
  * there — read live, so a removed member or a changed role counts at once.
  * Null when the person is no longer a member: the call is refused.
  *
- * The token itself is verified by better-auth's MCP plugin through the
- * `@modelapp/next/better-auth` bridge, which then calls this.
+ * The token itself (better-auth's MCP access token) is verified by the app's
+ * own `auth.resolve`, which then calls this.
  */
 export async function callerFor(userId: string, organizationId: string): Promise<ResolvedCaller | null> {
   const [m] = await sql<{ role: string; name: string }>(

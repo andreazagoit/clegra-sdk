@@ -1,4 +1,4 @@
-import { toNextHandlers } from "@modelapp/next"
+import { toNextHandlers } from "modelapp/next"
 
 import { app } from "../../../../modelapp"
 

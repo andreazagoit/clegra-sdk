@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks"
 
 import { createMcpHandler, inputRequired, inputResponse, McpServer, type CallToolResult, type Icon, type ServerContext } from "@modelcontextprotocol/server"
-import { META_KEY, OAUTH_SCOPE, PROTOCOL_ID, RESOLVE_TOOL, URI_SCHEME, uriPrefix } from "@modelapp/spec/protocol"
+import { META_KEY, OAUTH_SCOPE, PROTOCOL_ID, RESOLVE_TOOL, URI_SCHEME, uriPrefix } from "../spec/src/protocol"
 import { z } from "zod"
 
 import { AuthError, canonicalJson, DEV_ISSUER, DevAuthority, INSTALLATION, isLoopback, signConfirmation, tenantOf, TokenVerifier, type AuthOptions, type Caller, type Person, type RequestTrust } from "./auth"
@@ -1468,7 +1468,7 @@ export class AppServer {
   }
 
   /**
-   * Readiness for serving (`listen` in `@modelapp/server/node`, a framework adapter): the manifest is built and
+   * Readiness for serving (`listen` in `modelapp/node`, a framework adapter): the manifest is built and
    * checked, the dev authority started. Returns the dev sign-in code when dev sign-in is on.
    */
   async start(): Promise<{ devCode: string | null }> {

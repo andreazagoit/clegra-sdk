@@ -1,0 +1,6 @@
+{
+  "name": "modelapp-next-fixture",
+  "private": true,
+  "type": "module",
+  "description": "A minimal Next.js App Router app for modelapp/next's real-Next test (test/next.test.ts). Not a workspace."
+}

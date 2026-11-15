@@ -1,14 +1,15 @@
-import type { App } from "@modelapp/server"
+import type { App } from "../define"
 import type { NextConfig } from "next"
 
 /**
- * `@modelapp/next`: a MAP app (a `defineApp` object) inside a Next.js app.
+ * `modelapp/next`: a MAP app (a `defineApp` object) inside a Next.js app.
  *
  * - `toNextHandlers(app)` → the route handlers of `app/api/modelapp/[...path]/route.ts`.
  * - `withModelApp(nextConfig)` → the rewrites that put MCP and the manifest where hosts and clients look for
  *   them: `/mcp` and `/.well-known/…` at the root of the site, served by that one route.
  *
- * Only types are imported from the SDK: next.config loads this module and stays light.
+ * Only types are imported from the core: next.config loads this module and stays light. `next` is an optional
+ * peer dependency, imported (as types) only here.
  */
 
 /** Where the catch-all route lives by default (`app/api/modelapp/[...path]/route.ts`). */
@@ -17,7 +18,7 @@ export const DEFAULT_MOUNT = "/api/modelapp"
 /** The paths rewritten to the route: MCP, the manifest and the OAuth metadata (RFC 9728, RFC 8414, OpenID discovery). */
 const PUBLIC_PATHS = [
   "/mcp",
-  // MANIFEST_PATH of @modelapp/spec (a test keeps the two equal; not imported so that next.config does not load the SDK).
+  // MANIFEST_PATH (a test keeps the two equal; not imported so that next.config does not load the SDK).
   "/.well-known/modelapp.json",
   "/.well-known/oauth-protected-resource/:path*",
   "/.well-known/oauth-authorization-server/:path*",
@@ -40,7 +41,7 @@ export type NextHandlers = { GET: NextRouteHandler; POST: NextRouteHandler; DELE
 
 function mountOf(mount: string | undefined): string {
   const m = (mount ?? DEFAULT_MOUNT).replace(/\/+$/, "")
-  if (!/^(\/[A-Za-z0-9._~-]+)+$/.test(m)) throw new Error(`@modelapp/next: mount "${mount}" must be a URL path like /api/modelapp`)
+  if (!/^(\/[A-Za-z0-9._~-]+)+$/.test(m)) throw new Error(`modelapp/next: mount "${mount}" must be a URL path like /api/modelapp`)
   return m
 }
 
@@ -50,10 +51,10 @@ function publicOrigin(value: string | undefined, where: string): URL | null {
   try {
     url = new URL(value)
   } catch {
-    throw new Error(`@modelapp/next: ${where} "${value}" is not a URL`)
+    throw new Error(`modelapp/next: ${where} "${value}" is not a URL`)
   }
   if (!/^https?:$/.test(url.protocol) || (url.pathname !== "/" && url.pathname !== "") || url.search || url.hash || url.username || url.password) {
-    throw new Error(`@modelapp/next: ${where} "${value}" must be an origin only, like https://crm.example.com (no path, query or credentials)`)
+    throw new Error(`modelapp/next: ${where} "${value}" must be an origin only, like https://crm.example.com (no path, query or credentials)`)
   }
   return url
 }
@@ -71,19 +72,19 @@ function publicOrigin(value: string | undefined, where: string): URL | null {
  *
  * Dev sign-in (`auth.dev`) is refused: it answers loopback callers only, and a Next route handler can't know the
  * peer's address (`x-forwarded-for` is whatever the client sent). Sign people in with the app's own auth
- * (`@modelapp/next/better-auth`), or run the app with `listen` from `@modelapp/server/node` while developing.
+ * (`auth.resolve`), or run the app with `listen` from `modelapp/node` while developing.
  */
 export function toNextHandlers(app: App, options: NextHandlerOptions = {}): NextHandlers {
   const mount = mountOf(options.mount)
   const fixedOrigin = options.publicUrl !== undefined ? publicOrigin(options.publicUrl, "publicUrl") : publicOrigin(process.env.MODELAPP_PUBLIC_URL, "MODELAPP_PUBLIC_URL")
   if (app.devMode) {
     throw new Error(
-      "@modelapp/next: auth.dev can't run inside Next.js — dev sign-in answers loopback callers only and a route handler can't know the caller's address. Use the app's own sign-in (auth.resolve, e.g. betterAuthBridge) or run the app with listen() from @modelapp/server/node.",
+      "modelapp/next: auth.dev can't run inside Next.js — dev sign-in answers loopback callers only and a route handler can't know the caller's address. Use the app's own sign-in (auth.resolve) or run the app with listen() from modelapp/node.",
     )
   }
   const mcpPath = app.manifest().mcp.url
   if (mcpPath !== "/mcp") {
-    throw new Error(`@modelapp/next: the app serves MCP at ${mcpPath}; with Next.js leave defineApp's \`path\` unset — the route's mount (${mount}) is taken off and withModelApp puts MCP at /mcp`)
+    throw new Error(`modelapp/next: the app serves MCP at ${mcpPath}; with Next.js leave defineApp's \`path\` unset — the route's mount (${mount}) is taken off and withModelApp puts MCP at /mcp`)
   }
 
   const handle: NextRouteHandler = async (request) => {
@@ -92,7 +93,7 @@ export function toNextHandlers(app: App, options: NextHandlerOptions = {}): Next
     if (path === mount || path.startsWith(`${mount}/`)) path = path.slice(mount.length) || "/"
     else if (path !== "/mcp" && !path.startsWith("/.well-known/")) {
       // The route file is somewhere else than `mount` says: a configuration error, said instead of guessed around.
-      return new Response(JSON.stringify({ error: "misconfigured", error_description: `@modelapp/next: request for ${path} reached the MAP route, but its mount is ${mount} (set the same mount in toNextHandlers and withModelApp)` }), {
+      return new Response(JSON.stringify({ error: "misconfigured", error_description: `modelapp/next: request for ${path} reached the MAP route, but its mount is ${mount} (set the same mount in toNextHandlers and withModelApp)` }), {
         status: 500,
         headers: { "content-type": "application/json" },
       })
@@ -131,8 +132,8 @@ export type WithModelAppOptions = {
   mount?: string
 }
 
-/** The packages Next must compile: the MAP SDK ships TypeScript source. */
-const SDK_PACKAGES = ["@modelapp/server", "@modelapp/spec", "@modelapp/next"]
+/** The package Next must compile: the MAP SDK ships TypeScript source. */
+const SDK_PACKAGES = ["modelapp"]
 
 /** The rewrites `withModelApp` adds (in `beforeFiles`, so no page or public file can shadow them). */
 export function modelAppRewrites(options: WithModelAppOptions = {}): Rewrite[] {

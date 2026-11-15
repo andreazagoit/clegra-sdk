@@ -1,5 +1,5 @@
-import { toNextHandlers } from "@modelapp/next"
-import type { App } from "@modelapp/server"
+import { toNextHandlers } from "modelapp/next"
+import type { App } from "modelapp"
 import type { NextRequest } from "next/server"
 
 // Test-only probes: what a route handler sees of a (rewritten) request, and an SSE stream through toNextHandlers.

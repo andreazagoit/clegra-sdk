@@ -25,7 +25,7 @@ manifest; a workspace host needs nothing beyond the manifest and MCP.
 
 Served at `GET /.well-known/modelapp.json` (no authentication) and as one
 MCP resource, `modelapp://<name>` (`application/json`); the two MUST be identical.
-JSON Schema: [`packages/modelapp-spec/schema/modelapp.schema.json`](../../packages/modelapp-spec/schema/modelapp.schema.json).
+JSON Schema: [`packages/modelapp/spec/schema/modelapp.schema.json`](../../packages/modelapp/spec/schema/modelapp.schema.json).
 
 | Key | Content |
 |---|---|
@@ -406,7 +406,7 @@ differ by 30 seconds. Opaque tokens are not accepted in this mode.
 
 ## 8. Conformance
 
-[`packages/modelapp-spec`](../../packages/modelapp-spec) checks any app from outside,
+[`packages/modelapp/spec`](../../packages/modelapp/spec) checks any app from outside,
 over HTTP, whatever it is built with:
 
 ```sh

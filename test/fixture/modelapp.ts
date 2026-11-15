@@ -1,4 +1,4 @@
-import { AuthError, defineApp } from "@modelapp/server"
+import { AuthError, defineApp } from "modelapp"
 import { z } from "zod"
 
 // A tiny MAP app for the real-Next test. Its "own tokens" are one random bearer the test passes in the environment

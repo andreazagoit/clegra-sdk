@@ -12,7 +12,7 @@
  * with its permissions and confirmations.
  */
 
-import { META_KEY, PROTOCOL_ID } from "@modelapp/spec/protocol"
+import { META_KEY, PROTOCOL_ID } from "../spec/src/protocol"
 
 export const MCP_APP_MIME_TYPE = "text/html;profile=mcp-app"
 export const MCP_APPS_PROTOCOL_VERSION = "2026-01-26"

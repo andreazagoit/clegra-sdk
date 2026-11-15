@@ -1,5 +1,5 @@
 // Who may call the CRM's MCP server, besides its own users.
-import type { AuthOptions } from "@modelapp/server"
+import type { AuthOptions } from "modelapp"
 
 /**
  * Workspace hosts (e.g. a Clegra node) from the environment. Their tokens carry the `modelapp` claim; the
@@ -8,7 +8,7 @@ import type { AuthOptions } from "@modelapp/server"
  * - MODELAPP_RESOURCE: this server's public MCP address (`https://…/mcp`), required with issuers: the only
  *   audience their tokens are accepted for, and the address a host must install the app from.
  *
- * The CRM's own users come next to these (phase 2: the better-auth bridge, `{ ...bridge, ...authFromEnv() }`).
+ * The CRM's own users come next to these (phase 2: the app's own `resolve` for better-auth's tokens, next to `...authFromEnv()`).
  * There is no dev sign-in: the app has a real one, and dev test people would land in a tenant that is no
  * organization of theirs. Tests sign their callers with `app.devToken` on an app made with `dev`.
  */

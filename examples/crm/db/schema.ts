@@ -100,7 +100,7 @@ export const people = pgTable(
   (t) => [primaryKey({ columns: [t.orgId, t.id] })],
 )
 
-/** The MAP server's idempotency store: the table of `SqlStore.schema()` (@modelapp/server). */
+/** The MAP server's idempotency store: the table of `SqlStore.schema()` (modelapp). */
 export const modelappStore = pgTable(
   "modelapp_store",
   {

@@ -61,7 +61,7 @@ over MCP.
 
 ## Two kinds of caller, one tenant column
 
-- **The app's own users** (with the better-auth bridge, see below): the installation is the
+- **The app's own users** (the app's own `auth.resolve` for better-auth's tokens, see below): the installation is the
   organization id, the person the user id. Names come from the organization's members.
 - **A workspace host** (e.g. a Clegra node, `MODELAPP_ISSUERS`): the installation is
   `<installation>@<issuer>`, never an organization. On its first call it gets its own copy of the demo
@@ -93,6 +93,6 @@ a change for every client, reviewed as a diff (`UPDATE_SNAPSHOTS=1 npm test` rew
 
 ## Next: MCP for the app's own users
 
-The MCP route (`app/api/modelapp/[...path]`, `@modelapp/next`) and the better-auth OAuth server
+The MCP route (`app/api/modelapp/[...path]`, `modelapp/next`) and the better-auth OAuth server
 (`@better-auth/mcp`, `jwt`, `@better-auth/cimd`) come next, so ChatGPT, Claude and any MCP client sign
 in with a CRM account.

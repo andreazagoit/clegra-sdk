@@ -6,8 +6,8 @@ import { randomBytes } from "node:crypto"
 import { readFileSync } from "node:fs"
 import { after, before, describe, test } from "node:test"
 
-import { SqlStore, type AuthOptions } from "@modelapp/server"
-import { testClient } from "@modelapp/server/testing"
+import { SqlStore, type AuthOptions } from "modelapp"
+import { testClient } from "modelapp/testing"
 
 process.env.PGLITE_DIR = "memory://"
 process.env.BETTER_AUTH_SECRET = randomBytes(32).toString("base64url")

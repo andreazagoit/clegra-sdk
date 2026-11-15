@@ -1,13 +1,13 @@
 # Quickstart
 
-> Model App Protocol (MAP): an app that is also an MCP server. The SDK is `@modelapp/server` (private for now, in
+> Model App Protocol (MAP): an app that is also an MCP server. The SDK is `modelapp` (private for now, in
 > [`packages/modelapp`](../../packages/modelapp)).
 
 ## 1. One file, one object
 
 ```ts
 // app.ts
-import { AppError, defineApp } from "@modelapp/server"
+import { AppError, defineApp } from "modelapp"
 import { z } from "zod"
 
 type Note = { id: string; title: string; status: "open" | "done" }
@@ -83,7 +83,7 @@ export default defineApp({
 
 ```ts
 // main.ts: a standalone app on Node's HTTP server (a Next.js app serves app.fetch from its routes instead)
-import { listen } from "@modelapp/server/node"
+import { listen } from "modelapp/node"
 import app from "./app"
 await listen(app, { port: 3920 })   // MCP at /mcp, manifest at /.well-known/modelapp.json
 ```
@@ -120,7 +120,7 @@ Three things you get by saying them in the schema:
 ## 3. Test it
 
 ```ts
-import { testClient } from "@modelapp/server/testing"
+import { testClient } from "modelapp/testing"
 import app from "./app"
 
 const plain = await testClient(app, { permissions: "all" })           // as ChatGPT would call

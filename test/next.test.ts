@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url"
 const here = dirname(fileURLToPath(import.meta.url))
 const fixture = join(here, "fixture")
 const root = join(here, "..", "..", "..")
+const cli = join(here, "..", "spec", "src", "cli.ts")
 const nextBin = join(root, "node_modules", "next", "dist", "bin", "next")
 const token = randomBytes(24).toString("base64url")
 const running = new Set<ChildProcess>()
@@ -58,7 +59,7 @@ async function serve(mode: "dev" | "start", port: number): Promise<{ base: strin
 }
 
 function modelappCheck(base: string, withToken: boolean) {
-  const r = spawnSync("npx", ["tsx", "packages/modelapp-spec/src/cli.ts", "check", base], { cwd: root, encoding: "utf8", env: { ...process.env, ...(withToken ? { MODELAPP_TOKEN: token } : {}) } })
+  const r = spawnSync("npx", ["tsx", cli, "check", base], { cwd: root, encoding: "utf8", env: { ...process.env, ...(withToken ? { MODELAPP_TOKEN: token } : {}) } })
   return { status: r.status, out: `${r.stdout}${r.stderr}` }
 }
 

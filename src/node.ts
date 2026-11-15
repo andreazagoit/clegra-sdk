@@ -1,14 +1,14 @@
 import { createServer, type IncomingMessage } from "node:http"
 
-import { PROTOCOL_ID } from "@modelapp/spec/protocol"
+import { PROTOCOL_ID } from "../spec/src/protocol"
 
 import { isLoopback } from "./auth"
 import type { App } from "./define"
 
 /**
- * `@modelapp/server/node`: an app on Node's own HTTP server, for a standalone
+ * `modelapp/node`: an app on Node's own HTTP server, for a standalone
  * app or local tools. A web app serves `app.fetch` from its framework instead
- * (`@modelapp/next`); the core itself never opens a socket.
+ * (`modelapp/next`); the core itself never opens a socket.
  */
 export async function listen(app: App, options: { port?: number; host?: string; log?: boolean } = {}): Promise<{ url: string; close: () => Promise<void> }> {
   const port = options.port ?? 3000

@@ -11,7 +11,7 @@ import { z } from "zod"
 import type { McpServer } from "@modelcontextprotocol/server"
 
 import { AppError, defineApp, generateSigningKey, manifestJsonSchema, manifestSchema, ref, signAccessToken, signConfirmation, type AuthOptions } from "./index"
-import { checkApp, formatReport } from "@modelapp/spec"
+import { checkApp, formatReport } from "../spec/src/conformance"
 
 import { listen } from "./node"
 import { testClient } from "./testing"
@@ -151,7 +151,7 @@ describe("definition", () => {
   })
 
   test("the published JSON Schema is the one generated from the SDK's manifest (npm run schema)", () => {
-    const published = JSON.parse(readFileSync(new URL("../../modelapp-spec/schema/modelapp.schema.json", import.meta.url), "utf8"))
+    const published = JSON.parse(readFileSync(new URL("../spec/schema/modelapp.schema.json", import.meta.url), "utf8"))
     assert.deepEqual(published, JSON.parse(JSON.stringify(manifestJsonSchema())))
   })
 
@@ -481,11 +481,11 @@ describe("auth", () => {
       assert.equal((await far.fetch(new Request(`${base}/mcp`, { method: "POST", headers: { authorization: `Bearer ${token}` }, body: "{}" }), { remoteAddress })).status, 401)
     }
     const env = process.env.NODE_ENV
-    process.env.NODE_ENV = "production"
+    ;(process.env as Record<string, string | undefined>).NODE_ENV = "production" // writable here (Next's types make it read-only)
     try {
       assert.throws(() => makeApp(), /production/)
     } finally {
-      process.env.NODE_ENV = env
+      ;(process.env as Record<string, string | undefined>).NODE_ENV = env // writable here (Next's types make it read-only)
     }
   })
 

@@ -5,8 +5,8 @@ import { test } from "node:test"
 
 import { users } from "./setup"
 
-import { testClient } from "@modelapp/server/testing"
-import { checkApp, formatReport } from "@modelapp/spec"
+import { testClient } from "modelapp/testing"
+import { checkApp, formatReport } from "modelapp/spec"
 import { and, eq } from "drizzle-orm"
 
 import { deals } from "../db/schema"

@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { afterEach, describe, test } from "node:test"
 import { z } from "zod"
 
-import { defineApp, MANIFEST_PATH, type App } from "@modelapp/server"
+import { defineApp, MANIFEST_PATH, type App } from "../index"
 import type { NextConfig } from "next"
 
 import { modelAppRewrites, toNextHandlers, withModelApp } from "./index"
@@ -221,8 +221,9 @@ describe("withModelApp: rewrites and config", () => {
   })
 
   test("transpilePackages: the SDK added, the app's kept, no duplicates; other keys untouched", () => {
-    const config = withModelApp({ transpilePackages: ["some-ui", "@modelapp/server"], reactStrictMode: true })
-    assert.deepEqual(config.transpilePackages, ["some-ui", "@modelapp/server", "@modelapp/spec", "@modelapp/next"])
+    const config = withModelApp({ transpilePackages: ["some-ui", "modelapp"], reactStrictMode: true })
+    assert.deepEqual(config.transpilePackages, ["some-ui", "modelapp"])
+    assert.deepEqual(withModelApp({}).transpilePackages, ["modelapp"])
     assert.equal(config.reactStrictMode, true)
   })
 

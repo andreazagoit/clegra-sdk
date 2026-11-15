@@ -6,7 +6,7 @@ import { join } from "node:path"
 import { after, describe, test } from "node:test"
 import { z } from "zod"
 
-import { checkApp, formatReport } from "@modelapp/spec"
+import { checkApp, formatReport } from "../spec/src/conformance"
 
 import { AuthError, defineApp, generateSigningKey, signAccessToken, type AuthOptions, type ResolvedCaller } from "./index"
 import { testClient } from "./testing"
@@ -127,13 +127,13 @@ describe("auth.resolve: the app's own tokens", () => {
   test("in production a resolver without auth.resource is a clear error, not a guess", async () => {
     const app = makeApp({ resource: undefined } as Partial<AuthOptions>)
     const prev = process.env.NODE_ENV
-    process.env.NODE_ENV = "production"
+    ;(process.env as Record<string, string | undefined>).NODE_ENV = "production" // writable here (Next's types make it read-only)
     try {
       const r = await app.fetch(new Request("https://notes.test/mcp", { method: "POST" }))
       assert.equal(r.status, 500)
       assert.match(((await r.json()) as { error_description: string }).error_description, /auth\.resource is required/)
     } finally {
-      process.env.NODE_ENV = prev
+      ;(process.env as Record<string, string | undefined>).NODE_ENV = prev // writable here (Next's types make it read-only)
     }
   })
 })

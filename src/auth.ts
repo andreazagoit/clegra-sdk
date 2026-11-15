@@ -17,7 +17,7 @@ import {
   type JWTPayload,
 } from "jose"
 
-import { CONFIRMATION_TYPE, OAUTH_SCOPE, PROTOCOL_ID, TOKEN_CLAIM } from "@modelapp/spec/protocol"
+import { CONFIRMATION_TYPE, OAUTH_SCOPE, PROTOCOL_ID, TOKEN_CLAIM } from "../spec/src/protocol"
 
 /**
  * AUTH (spec §7). Two kinds of access token reach an app:
