@@ -139,7 +139,8 @@ const resolve: CallerResolver = async (token, _request, { resource }) => {
     if (error instanceof errors.JOSEError) throw new AuthError("the access token is not valid")
     throw error
   }
-  if (Array.isArray(claims.aud) && claims.aud.length !== 1) throw new AuthError("the access token is for several servers")   // any of them could replay it here
+  // This server alone, plus better-auth's own userinfo endpoint when `openid` was asked (ChatGPT and Claude ask): any other audience could replay it here
+  if ([claims.aud].flat().some((aud) => aud !== resource && aud !== `${issuer}/oauth2/userinfo`)) throw new AuthError("the access token is for several servers")
   if (claims.cnf !== undefined) throw new AuthError("sender-constrained (DPoP) tokens are not accepted")                     // we don't verify DPoP proofs
   if (typeof claims.scope !== "string" || !claims.scope.split(" ").includes("modelapp")) throw new AuthError("the access token lacks the modelapp scope")
   const org = claims.org

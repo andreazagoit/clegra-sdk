@@ -6,7 +6,7 @@ import { redirect } from "next/navigation"
 
 import type { ActionState } from "@/components/action-form"
 import { getAuth } from "@/lib/auth"
-import { authPost, nextUrl } from "@/lib/auth-http"
+import { authorizeAgain, authPost, nextUrl, restartAuthorization, staleOAuthQuery } from "@/lib/auth-http"
 import { DEMO_USERS, demoPassword } from "@/lib/demo"
 import { requirePermission } from "@/lib/session"
 import { cancelOrder, confirmOrder, MOVEMENT_KINDS, registerMovement, WarehouseError, type MovementKind } from "@/lib/warehouse"
@@ -35,8 +35,17 @@ function refusal(error: unknown, form: FormData): ActionState {
  */
 async function signIn(email: string, password: string, form: FormData): Promise<ActionState> {
   const oauthQuery = text(form, "oauth_query")
-  const { ok, status, data } = await authPost("/sign-in/email", { email, password, ...(oauthQuery ? { oauth_query: oauthQuery } : {}) })
+  let { ok, status, data, setCookies } = await authPost("/sign-in/email", { email, password, ...(oauthQuery ? { oauth_query: oauthQuery } : {}) })
+  // The page was open longer than the signed request lives (ten minutes): sign in, then the same authorization
+  // again, now with a session, so it goes on to the consent page (or straight back to the app).
+  const restart = oauthQuery && !ok && staleOAuthQuery(data) ? restartAuthorization(oauthQuery, { signedIn: true }) : null
+  if (restart) ({ ok, status, data, setCookies } = await authPost("/sign-in/email", { email, password }))
   if (!ok) return { error: status === 401 ? "Wrong email or password." : status === 429 ? "Too many sign-in attempts from here: wait a few seconds and try again." : `Sign-in failed (${String(data.error_description ?? data.message ?? status)}).`, values: typed(form) }
+  if (restart) {
+    const url = await authorizeAgain(restart, setCookies)
+    if (!url) return { error: "The connection could not continue. Start again from the app that asked.", values: typed(form) }
+    redirect(url)
+  }
   redirect(nextUrl(data) ?? "/")
 }
 
@@ -61,6 +70,11 @@ export async function consentAction(_state: ActionState, form: FormData): Promis
   const oauthQuery = text(form, "oauth_query")
   if (!oauthQuery) return { error: "This page was not opened by an authorization request." }
   const { ok, data } = await authPost("/oauth2/consent", { accept: text(form, "decision") === "accept", oauth_query: oauthQuery })
+  // Answered after the signed request's ten minutes: the same authorization again, which asks once more.
+  if (!ok && staleOAuthQuery(data)) {
+    const again = await authorizeAgain(restartAuthorization(oauthQuery, { signedIn: false }))
+    if (again) redirect(again)
+  }
   const url = nextUrl(data)
   if (!ok || !url) return { error: `The authorization can't continue (${String(data.error_description ?? data.message ?? "no redirect")}). Start again from the app that asked.` }
   redirect(url)

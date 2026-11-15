@@ -2,7 +2,7 @@
 // and `resource` → consent → token) runs in-process against better-auth on a seeded in-memory PGlite, and every
 // call goes through the app's own `resolve` (lib/modelapp-auth.ts) and the Next route handlers.
 import assert from "node:assert/strict"
-import { randomBytes } from "node:crypto"
+import { createHash, randomBytes } from "node:crypto"
 import { readFileSync } from "node:fs"
 import { after, before, describe, test } from "node:test"
 
@@ -24,6 +24,7 @@ const { createAuth, getAuth } = await import("../lib/auth")
 const { modelAppAuth } = await import("../lib/modelapp-auth")
 const { createWarehouseApp } = await import("../lib/modelapp")
 const { oauthAccessToken } = await import("../scripts/oauth-flow")
+const { restartAuthorization, staleOAuthQuery } = await import("../lib/oauth-query")
 
 const SITE = "http://localhost:3930"
 const RESOURCE = `${SITE}/mcp`
@@ -413,6 +414,44 @@ describe("MCP authorization (better-auth tokens, verified by the app)", () => {
     assert.equal(`${back.origin}${back.pathname}`, REDIRECT)
     assert.ok(back.searchParams.get("code"))
     assert.equal(back.searchParams.get("state"), "s1")
+  })
+
+  test("a page left open past the signed request's ten minutes: refused, then the same authorization again after signing in goes on to consent; the token (openid asked, as ChatGPT does) works here", async () => {
+    const jar = new Map<string, string>()
+    const send = async (path: string, init: { json?: unknown; form?: Record<string, string> } = {}) => {
+      const body = init.json ? JSON.stringify(init.json) : init.form ? new URLSearchParams(init.form).toString() : undefined
+      const type = init.json ? "application/json" : init.form ? "application/x-www-form-urlencoded" : null
+      const response = await handler(new Request(new URL(path, SITE), { method: body ? "POST" : "GET", redirect: "manual", headers: { origin: SITE, accept: "application/json", cookie: [...jar].map(([k, v]) => `${k}=${v}`).join("; "), ...(type ? { "content-type": type } : {}) }, ...(body ? { body } : {}) }))
+      for (const c of response.headers.getSetCookie()) jar.set(c.slice(0, c.indexOf("=")), c.slice(c.indexOf("=") + 1).split(";")[0]!)
+      return response
+    }
+    const next = async (response: Response) => new URL(response.headers.get("location") ?? ((await response.json()) as { url: string }).url, SITE)
+    const email = "owen.rivers@hummingbird.example"
+    await send("/api/auth/sign-in/email", { json: { email, password: process.env.DEMO_PASSWORD } })
+    const redirectUri = "http://127.0.0.1:8978/callback"
+    const client = (await (await send("/api/auth/oauth2/create-client", { json: { client_name: "Stale page test", redirect_uris: [redirectUri], application_type: "native", token_endpoint_auth_method: "none", grant_types: ["authorization_code"], response_types: ["code"] } })).json()) as { client_id: string }
+    await send("/api/auth/sign-out", { json: {} })
+    jar.clear()
+    const verifier = randomBytes(32).toString("base64url")
+    const query = new URLSearchParams({ response_type: "code", client_id: client.client_id, redirect_uri: redirectUri, scope: "openid email offline_access modelapp", state: "s-stale", code_challenge: createHash("sha256").update(verifier).digest("base64url"), code_challenge_method: "S256", resource: RESOURCE })
+    // The sign-in page as better-auth sent the person there eleven minutes ago (it gives ten).
+    const now = Date.now
+    Date.now = () => now() - 11 * 60_000
+    const toSignIn = await next(await send(`/api/auth/oauth2/authorize?${query}`)).finally(() => (Date.now = now))
+    assert.equal(toSignIn.pathname, "/sign-in")
+    const oauthQuery = toSignIn.searchParams.toString()
+    // What the sign-in action posts: refused as stale, so it signs in alone and asks for the same authorization again.
+    const refused = await send("/api/auth/sign-in/email", { json: { email, password: process.env.DEMO_PASSWORD, oauth_query: oauthQuery } })
+    assert.equal(staleOAuthQuery((await refused.json()) as Record<string, unknown>), true)
+    assert.equal((await send("/api/auth/sign-in/email", { json: { email, password: process.env.DEMO_PASSWORD } })).status, 200)
+    const toConsent = await next(await send(restartAuthorization(oauthQuery, { signedIn: true })))
+    assert.equal(toConsent.pathname, "/oauth/consent")
+    assert.deepEqual([toConsent.searchParams.get("state"), toConsent.searchParams.get("code_challenge")], [query.get("state"), query.get("code_challenge")], "the client's own request")
+    const back = new URL(((await (await send("/api/auth/oauth2/consent", { json: { accept: true, oauth_query: toConsent.searchParams.toString() } })).json()) as { url: string }).url)
+    assert.equal(`${back.origin}${back.pathname}`, redirectUri)
+    const tokens = (await (await send("/api/auth/oauth2/token", { form: { grant_type: "authorization_code", code: back.searchParams.get("code")!, redirect_uri: redirectUri, client_id: client.client_id, code_verifier: verifier, resource: RESOURCE } })).json()) as { access_token: string }
+    assert.deepEqual(decodeJwt(tokens.access_token).aud, [RESOURCE, `${ISSUER}/oauth2/userinfo`], "openid asked: better-auth adds its userinfo endpoint")
+    assert.equal((await rpc(tokens.access_token, "tools/list")).status, 200)
   })
 })
 

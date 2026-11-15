@@ -3,7 +3,7 @@ import { redirect } from "next/navigation"
 
 import { demoSignInAction, signInAction } from "@/app/actions"
 import { ActionForm } from "@/components/action-form"
-import { oauthQueryOf } from "@/lib/auth-http"
+import { oauthQueryHolds, oauthQueryOf, restartAuthorization } from "@/lib/auth-http"
 import { COMPANIES, DEMO_USERS } from "@/lib/demo"
 import { getViewer } from "@/lib/session"
 
@@ -14,6 +14,8 @@ export default async function SignInPage({ searchParams }: { searchParams: Promi
   // Opened by an OAuth authorization (an MCP client connecting): the signed request continues after sign-in.
   const oauthQuery = oauthQueryOf(sp)
   if (!oauthQuery && (await getViewer())) redirect("/")
+  // Opened after its ten minutes (a tab left open, a page restored): the same authorization, signed anew.
+  if (oauthQuery && !(await oauthQueryHolds(oauthQuery))) redirect(restartAuthorization(oauthQuery, { signedIn: false }))
   const demo = process.env.DEMO_SIGNIN === "1"
   const carry = oauthQuery ? <input type="hidden" name="oauth_query" value={oauthQuery} /> : null
   return (

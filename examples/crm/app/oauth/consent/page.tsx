@@ -3,7 +3,7 @@ import { headers } from "next/headers"
 import { redirect } from "next/navigation"
 
 import { auth } from "@/lib/auth"
-import { oauthQueryOf } from "@/lib/oauth-pages"
+import { oauthQueryOf, restartAuthorization } from "@/lib/oauth-pages"
 import { currentMember } from "@/lib/session"
 
 import { buttonClass, Card, secondaryButtonClass } from "../../_components/ui"
@@ -24,9 +24,9 @@ export default async function ConsentPage({ searchParams }: { searchParams: Prom
   const sp = await searchParams
   const oauthQuery = oauthQueryOf(sp)
   const requestHeaders = await headers()
-  if (!oauthQuery || !(await verifyOAuthQueryParams(oauthQuery, (await auth().$context).secret))) {
-    return <Message title="This link has expired">Start connecting again from the app you were using.</Message>
-  }
+  if (!oauthQuery) return <Message title="Nothing to connect">This page opens when an app asks to connect to your CRM. Start connecting from that app.</Message>
+  // Opened after its ten minutes: the same authorization, signed anew (back here, or to the sign-in page).
+  if (!(await verifyOAuthQueryParams(oauthQuery, (await auth().$context).secret))) redirect(restartAuthorization(oauthQuery, { signedIn: false }))
   const member = await currentMember()
   if (!member) redirect(`/sign-in?${oauthQuery}`)
   const params = new URLSearchParams(oauthQuery)

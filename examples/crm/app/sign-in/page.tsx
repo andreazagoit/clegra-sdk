@@ -1,7 +1,9 @@
+import { verifyOAuthQueryParams } from "@better-auth/oauth-provider"
 import { redirect } from "next/navigation"
 
+import { auth } from "@/lib/auth"
 import { DEMO_USERS } from "@/lib/demo-data"
-import { oauthQueryOf } from "@/lib/oauth-pages"
+import { oauthQueryOf, restartAuthorization } from "@/lib/oauth-pages"
 import { currentMember } from "@/lib/session"
 
 import { buttonClass, Card, inputClass, Notice, param, secondaryButtonClass } from "../_components/ui"
@@ -14,6 +16,8 @@ export default async function SignInPage({ searchParams }: { searchParams: Promi
   // Opened by an OAuth authorization (an MCP client connecting): sign in here, then better-auth continues it.
   const oauthQuery = oauthQueryOf(sp)
   if (!oauthQuery && (await currentMember())) redirect("/")
+  // Opened again after its ten minutes (a tab left open, a page restored): the same authorization, signed anew.
+  if (oauthQuery && !(await verifyOAuthQueryParams(oauthQuery, (await auth().$context).secret))) redirect(restartAuthorization(oauthQuery, { signedIn: false }))
   const demo = process.env.DEMO_SIGNIN === "1"
   return (
     <main className="mx-auto flex min-h-screen max-w-sm flex-col justify-center px-4 py-10">

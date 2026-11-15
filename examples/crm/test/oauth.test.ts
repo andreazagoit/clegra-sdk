@@ -2,6 +2,7 @@
 // the app's own `resolve` (modelapp/auth.ts), through the Next route handlers as the app serves them.
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
+import { createHash, randomBytes } from "node:crypto"
 import { createServer } from "node:http"
 import { describe, test } from "node:test"
 
@@ -11,6 +12,7 @@ process.env.MODELAPP_PUBLIC_URL = SITE
 const { password, users } = await import("./setup")
 
 import { and, eq } from "drizzle-orm"
+import { verifyOAuthQueryParams } from "@better-auth/oauth-provider"
 import { decodeJwt, decodeProtectedHeader, generateKeyPair, SignJWT } from "jose"
 import { toNextHandlers } from "modelapp/next"
 import { checkApp, formatReport } from "modelapp/spec"
@@ -18,6 +20,8 @@ import { checkApp, formatReport } from "modelapp/spec"
 import { deals, member, user } from "../db/schema"
 import { auth } from "../lib/auth"
 import { db } from "../lib/db"
+import { oauthQueryOf } from "../lib/oauth-pages"
+import { answerConsent, signIn } from "../lib/sign-in"
 import { createCrmApp } from "../modelapp/app"
 import { crmAuth } from "../modelapp/auth"
 import { oauthAccessToken } from "../scripts/oauth-flow"
@@ -195,6 +199,96 @@ describe("the CRM's own users, with better-auth access tokens", () => {
     assert.equal(toConsent.searchParams.get("client_id"), client.client_id)
     const denied = (await (await send("/oauth2/consent", { json: { accept: false, oauth_query: toConsent.searchParams.toString() } })).json()) as { url: string }
     assert.equal(new URL(denied.url).searchParams.get("error"), "access_denied")
+  })
+
+  test("the demo button continues an authorization, also from a page left open past its ten minutes; the code gives a token (openid asked, as ChatGPT does) that works here", async () => {
+    const jar = new Map<string, string>()
+    const cookie = () => [...jar].map(([k, v]) => `${k}=${v}`).join("; ")
+    const send = async (path: string, init: { json?: unknown; query?: Record<string, string>; form?: Record<string, string> } = {}) => {
+      const url = new URL(`${ISSUER}${path}`)
+      for (const [k, v] of Object.entries(init.query ?? {})) url.searchParams.set(k, v)
+      const body = init.json ? JSON.stringify(init.json) : init.form ? new URLSearchParams(init.form).toString() : undefined
+      const type = init.json ? "application/json" : init.form ? "application/x-www-form-urlencoded" : null
+      const response = await handler(new Request(url, { method: body ? "POST" : "GET", redirect: "manual", headers: { origin: SITE, accept: "application/json", cookie: cookie(), ...(type ? { "content-type": type } : {}) }, ...(body ? { body } : {}) }))
+      for (const c of response.headers.getSetCookie()) jar.set(c.slice(0, c.indexOf("=")), c.slice(c.indexOf("=") + 1).split(";")[0]!)
+      return response
+    }
+    // Where a server action's redirect() goes (it throws Next's redirect error).
+    const redirectOf = async (action: Promise<unknown>) => {
+      const error = await action.then(() => assert.fail("no redirect"), (e: unknown) => e)
+      const digest = (error as { digest?: string }).digest ?? ""
+      assert.ok(digest.startsWith("NEXT_REDIRECT;"), String(error))
+      return new URL(digest.split(";").slice(2, -2).join(";"), SITE)
+    }
+    const pageQuery = (url: URL) => {
+      const record: Record<string, string | string[]> = {}
+      for (const key of new Set(url.searchParams.keys())) record[key] = url.searchParams.getAll(key)
+      for (const [k, v] of Object.entries(record)) if (v.length === 1) record[k] = v[0]!
+      return oauthQueryOf(record)!
+    }
+    const holds = async (query: string) => verifyOAuthQueryParams(query, (await auth().$context).secret)
+    // Signed requests made eleven minutes ago: better-auth gives them ten.
+    const elevenMinutesAgo = async <T>(run: () => Promise<T>) => {
+      const now = Date.now
+      Date.now = () => now() - 11 * 60_000
+      try {
+        return await run()
+      } finally {
+        Date.now = now
+      }
+    }
+    const asBrowser = () => new Headers({ origin: SITE, cookie: cookie() })
+
+    // A public client of Emma's own, so she has not agreed to it yet.
+    await send("/sign-in/email", { json: { email: accounts.emma, password } })
+    const redirectUri = "http://127.0.0.1:8977/callback"
+    const client = (await (await send("/oauth2/create-client", { json: { client_name: "Demo button test", redirect_uris: [redirectUri], application_type: "native", token_endpoint_auth_method: "none", grant_types: ["authorization_code", "refresh_token"], response_types: ["code"] } })).json()) as { client_id: string }
+    await send("/sign-out", { json: {} })
+    jar.clear()
+    const verifier = randomBytes(32).toString("base64url")
+    const query = { response_type: "code", client_id: client.client_id, redirect_uri: redirectUri, scope: "openid email offline_access modelapp", state: "s-demo", code_challenge: createHash("sha256").update(verifier).digest("base64url"), code_challenge_method: "S256", resource: RESOURCE }
+    const toSignIn = async () => {
+      const r = await send("/oauth2/authorize", { query })
+      const url = new URL(r.headers.get("location") ?? ((await r.json()) as { url: string }).url, SITE)
+      assert.equal(url.pathname, "/sign-in")
+      return pageQuery(url)
+    }
+
+    // On time: the button signs in and better-auth goes on to the consent page.
+    const fresh = await redirectOf(signIn(accounts.emma, password, await toSignIn(), asBrowser()))
+    assert.equal(fresh.pathname, "/oauth/consent")
+    // Past its ten minutes: refused by better-auth, yet the button signs in and starts the same authorization afresh.
+    const stale = await elevenMinutesAgo(toSignIn)
+    assert.equal(await holds(stale), false)
+    const restarted = await redirectOf(signIn(accounts.emma, password, stale, asBrowser()))
+    assert.equal(restarted.pathname, "/oauth/consent")
+    const consentQuery = pageQuery(restarted)
+    assert.ok(await holds(consentQuery), "a new signed request")
+    assert.deepEqual([new URLSearchParams(consentQuery).get("state"), new URLSearchParams(consentQuery).get("code_challenge")], [query.state, query.code_challenge], "the client's own request")
+
+    // Allow on a consent page left open too long: asked again, with a new signed request.
+    await send("/sign-in/email", { json: { email: accounts.emma, password } })
+    const staleConsent = await elevenMinutesAgo(async () => pageQuery(new URL(((await (await send("/oauth2/authorize", { query })).json()) as { url: string }).url, SITE)))
+    assert.equal(await holds(staleConsent), false)
+    const askedAgain = await redirectOf(answerConsent(staleConsent, true, asBrowser()))
+    assert.equal(askedAgain.pathname, "/oauth/consent")
+    // Allow → the client's redirect with a code; the code and the PKCE verifier give a token the MCP server accepts.
+    const back = await redirectOf(answerConsent(pageQuery(askedAgain), true, asBrowser()))
+    assert.equal(`${back.origin}${back.pathname}`, redirectUri)
+    assert.equal(back.searchParams.get("state"), query.state)
+    const token = await handler(
+      new Request(`${ISSUER}/oauth2/token`, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
+        body: new URLSearchParams({ grant_type: "authorization_code", code: back.searchParams.get("code")!, redirect_uri: redirectUri, client_id: client.client_id, code_verifier: verifier, resource: RESOURCE }).toString(),
+      }),
+    )
+    const tokens = (await token.json()) as { access_token: string; refresh_token?: string }
+    assert.equal(token.status, 200, JSON.stringify(tokens))
+    assert.deepEqual(decodeJwt(tokens.access_token).aud, [RESOURCE, `${ISSUER}/oauth2/userinfo`], "openid asked: better-auth adds its userinfo endpoint")
+    const listed = await rpc(tokens.access_token, "tools/list")
+    assert.equal(listed.status, 200, JSON.stringify(listed))
+    assert.ok(tokens.refresh_token)
   })
 
   test("npm run token over real HTTP (sign in → authorize → consent → token), then the conformance checks on it", { timeout: 90_000 }, async () => {
