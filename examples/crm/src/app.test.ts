@@ -94,3 +94,18 @@ test("names typed in from outside reach a model as data: deals, companies, conta
   const company = (await c.call("company_get", { id: "co1" })).content![0]!.text!
   assert.ok(company.includes("<untrusted>Officine Bianchi</untrusted>") && company.includes("<untrusted>Torino</untrusted>"))
 })
+
+test("deal owners reach hosts and models by name, never as person ids", async () => {
+  const c = await testClient(app, { person: "bruno", permissions: "all" })
+  const r = await c.call("deal_list", {})
+  const refs = (r.structuredContent as { refs: { owner: Record<string, string> } }).refs
+  assert.ok(refs.owner.ada?.startsWith("Ada Rossi") && refs.owner.bruno?.startsWith("Bruno Neri"), JSON.stringify(refs))
+  assert.ok(!/"owner":"(ada|bruno)"/.test(r.content![0]!.text!), "the model reads { id, name }")
+  // Someone signed in by a host the CRM never saw: named from their token once they own a deal.
+  const carla = await testClient(app, { permissions: "all", token: await app.devToken({ person: { id: "host-person-9", name: "Carla Test" }, permissions: "all" }) })
+  const made = await carla.call("create_deal", { name: "Pixel Lab — training", company: "co4", value: 900, closeDate: "2027-02-01" })
+  assert.ok(!made.isError, JSON.stringify(made))
+  const id = (made.structuredContent as { record: string }).record.split("/").pop()!
+  const seen = await c.call("deal_get", { id })
+  assert.deepEqual((seen.structuredContent as { refs: { owner: Record<string, string> } }).refs.owner, { "host-person-9": "Carla Test" })
+})

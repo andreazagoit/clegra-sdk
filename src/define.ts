@@ -3,7 +3,7 @@ import type { z } from "zod"
 
 import type { AuthOptions, Caller } from "./auth"
 import type { Label } from "./labels"
-import { AppServer } from "./server"
+import { AppServer, type PeopleResolver } from "./server"
 import type { IdempotencyStore } from "./store"
 import type { ActionHandle, ActionResult, Confirm, Context, EntityHandle, Exposure, FragmentInstance, ListResult, PageConfig, PermissionConfig, Query, SettingConfig, TemplateData, ViewSource } from "./types"
 
@@ -142,6 +142,12 @@ export type AppDefinition<E extends Schemas, A extends Schemas, F extends Schema
   mcp?: (server: McpServer, caller: Caller | null) => void
   /** Where write results are kept for idempotency (default: in memory). */
   store?: IdempotencyStore
+  /**
+   * The names of people of the installation by id: the values of `role: "person"` fields. With it (or the dev
+   * sign-in) hosts show names, and a person nobody can name as an unknown person, never the id. Without it a
+   * person field holds the name itself.
+   */
+  people?: PeopleResolver
 }
 
 /** What defineApp returns: the app, ready to serve. */

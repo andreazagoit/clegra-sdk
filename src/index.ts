@@ -1,5 +1,5 @@
 export { defineApp, type ActionDef, type AgentDef, type App, type AppDefinition, type EntityDef, type FragmentDef, type PageDef } from "./define"
-export { AppError, META_KEY, type ErrorCode } from "./server"
+export { AppError, META_KEY, type ErrorCode, type PeopleResolver } from "./server"
 export { ref, ROLES, TONES, type FieldMeta, type Role, type Tone } from "./meaning"
 export { localize, type Label } from "./labels"
 export { argsHash, canonicalJson, CONFIRMATION_TYPE, generateSigningKey, signAccessToken, signConfirmation, type AuthOptions, type Caller, type HostClaim, type Issuer, type Person, type SigningKey } from "./auth"

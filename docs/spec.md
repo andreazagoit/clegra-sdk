@@ -64,6 +64,15 @@ Schema; `fields` says what each field means:
 
 A record's URI is `modelapp://<app>/<entity>/<id>`.
 
+**People.** A `person` field without `ref` holds a person id (as tokens name
+people, `sub` / `person.id`) or, in an app that can't name people, the name
+itself. An app that names people (the SDK's `people` resolver, or its dev
+sign-in's test people) sends their names as `refs` of that field, like a
+reference's titles: `{ <field>: { <id>: <name> } }`, the caller's own name
+taken from the token. A host shows the name; an id the app couldn't name is
+shown as an unknown person, never as the id. In a result's text the field is
+`{ "id": …, "name": … }`.
+
 **Sorting.** A list is ordered by `sort` (one field) and `dir` (`asc`, the
 default, or `desc`). Only a field with `sort: true` that the caller may see
 is accepted; any other fails with `invalid_input`, so nothing is ever ordered
@@ -233,7 +242,7 @@ and `error.pending: true`.
 - Requests MAY carry `{ call, confirmation, settings }`. `settings` are the
   installation's values (§2) and count only from a workspace host; any other
   caller gets the defaults.
-- Results MAY carry `{ notifications, untrusted }`:
+- Results MAY carry `{ notifications, untrusted, l10n }`:
   - `notifications`: `[{ title, body?, uri?, to }]`, `to` the ids of people
     (as the token named them; default the caller). A workspace host delivers
     them to those people; a plain client ignores them.
@@ -242,6 +251,12 @@ and `error.pending: true`.
     `<untrusted>…</untrusted>` with `&`, `<`, `>` (and their full-width and
     small forms) escaped as XML text, so nothing inside is a tag. A host that
     gives a model `structuredContent` wraps the pointed values the same way.
+  - `l10n`: `{ <locale>: { <label as shown>: <the same label in that locale> } }`
+    for the app's labels the result shows (titles, columns, enum values,
+    actions, inputs, the handler's own `t` texts). A view draws them in the
+    reader's language (MCP Apps `hostContext.locale`, ChatGPT's
+    `window.openai.locale`), else English, else as shown. For views only: a
+    model never reads `_meta`.
 
 **Errors**: `isError: true` and `structuredContent.error = { code, message }`,
 `code` one of `unauthorized`, `permission_denied`, `not_found`,

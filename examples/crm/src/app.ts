@@ -109,9 +109,11 @@ const SEED = {
     { id: "d4", name: "Pixel Lab — integration", company: "co4", stage: "lead", value: 12500, closeDate: "2027-01-20", owner: "ada" },
     { id: "d5", name: "Verdi Retail — 3 stores", company: "co2", stage: "lost", value: 9000, closeDate: "2026-09-12", owner: "ada" },
   ] as Deal[],
+  // The sales team, by the person ids deals' owners hold (invented people).
+  people: { ada: "Ada Rossi", bruno: "Bruno Neri" } as Record<string, string>,
 }
 
-type Data = { companies: Map<string, Company>; contacts: Map<string, Contact>; deals: Map<string, Deal>; seq: number }
+type Data = { companies: Map<string, Company>; contacts: Map<string, Contact>; deals: Map<string, Deal>; people: Map<string, string>; seq: number }
 const byInstallation = new Map<string, Data>()
 
 /**
@@ -123,7 +125,7 @@ export function dataOf(ctx: Pick<Context, "installation">): Data {
   let d = byInstallation.get(ctx.installation)
   if (!d) {
     const copy = <T extends { id: string }>(rows: T[]) => new Map(rows.map((r) => [r.id, { ...r }]))
-    d = { companies: copy(SEED.companies), contacts: copy(SEED.contacts), deals: copy(SEED.deals), seq: 100 }
+    d = { companies: copy(SEED.companies), contacts: copy(SEED.contacts), deals: copy(SEED.deals), people: new Map(Object.entries(SEED.people)), seq: 100 }
     byInstallation.set(ctx.installation, d)
   }
   return d
@@ -166,6 +168,8 @@ export const app = defineApp({
   locale: "en",
   instructions: "A CRM. Use search or the *_list tools to find records, *_get for one record, open_pipeline for the overview. Changes need the person's confirmation.",
   auth: authFromEnv(),
+  // Deal owners are person ids: their names, so a host never shows an id.
+  people: (ids, ctx) => Object.fromEntries(ids.flatMap((id) => (dataOf(ctx).people.has(id) ? [[id, dataOf(ctx).people.get(id)!]] : []))),
 
   permissions: {
     "deals.view": { label: { en: "See deals", it: "Vedere le trattative" }, default: true },
@@ -271,6 +275,8 @@ export const app = defineApp({
         if (!d.companies.has(input.company)) throw new AppError("invalid_input", ctx.t({ en: `Unknown company ${input.company}.`, it: `Azienda ${input.company} sconosciuta.` }))
         const id = `d${++d.seq}`
         d.deals.set(id, { id, ...input, stage: "lead", owner: ctx.person?.id ?? "unknown" })
+        // The owner by name from now on, also for the others who read the deal.
+        if (ctx.person?.name) d.people.set(ctx.person.id, ctx.person.name)
         return { message: ctx.t({ en: `Deal «${input.name}» created.`, it: `Trattativa «${input.name}» creata.` }), record: ctx.uri("deal", id) }
       },
     },

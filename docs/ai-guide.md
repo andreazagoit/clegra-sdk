@@ -50,7 +50,7 @@ export default defineApp({
           labels: { open: "Open", won: "Won", lost: "Lost" }, tones: { won: "success", lost: "danger" } }),
         value: z.number().meta({ role: "amount", currency: "EUR", label: "Value", sort: true, permission: "deals.values" }),
         closeDate: z.string().meta({ role: "date", label: "Close date", sort: true, filter: true }),
-        owner: z.string().meta({ role: "person", label: "Owner" }),
+        owner: z.string().meta({ role: "person", label: "Owner" }),     // a person id: name it with `people` (below)
         note: z.string().optional().meta({ label: "Note", untrusted: true }),  // text written by outsiders
       }),
       permission: "deals.view",                                // optional: who sees the entity at all
@@ -129,6 +129,13 @@ An action's `input` is its form: `ref("entity")` becomes a picker, `.meta({ labe
 required/min/max/date are checked before sending, and an input the schema refuses comes back per field
 (`error.fields`). Views add no confirmation of their own: confirming is the host's (annotations, elicitation, or a
 workspace host's proof).
+
+`people: (ids, ctx) => ({ [id]: name })` (optional, beside `entities`): the names of the people `role: "person"`
+fields hold. Hosts and models then see names (the caller's own comes from the token); an id it can't name shows as
+an unknown person, never as the id. Without it a person field must hold the name itself.
+
+Labels given as `{ en, it }` maps reach the generated view in every locale: it draws them in the reader's language
+(`hostContext.locale`), else English. Give every label in each language you support.
 
 `ctx`: `app`, `installation`, `person` (`{ id, name }` or null), `permissions`,
 `can(p)`, `locale`, `host` (`"workspace" | "plain"`), `settings`, `call`,

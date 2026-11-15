@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks"
 import { createServer as createHttpServer, type IncomingMessage } from "node:http"
 
 import { createMcpHandler, inputRequired, inputResponse, McpServer, type CallToolResult, type Icon, type ServerContext } from "@modelcontextprotocol/server"
@@ -66,9 +67,14 @@ export type ServerOptions = {
   store?: IdempotencyStore
   /** Escape hatch: the raw McpServer of each request, to add hand-written tools, resources or views. */
   mcp?: (server: McpServer, caller: Caller | null) => void
+  /** The names of people of the installation by their ids (the values of `person` fields): what a host shows in place of an id. */
+  people?: PeopleResolver
 }
 
-/** The one `_meta` key of the host protocol (spec §7): `{ call, confirmation, settings }` on requests, `{ notifications, untrusted }` on results. */
+/** Names by person id, for the ids it knows (spec §3, «People»). An id it leaves out is shown as an unknown person, never as the id. */
+export type PeopleResolver = (ids: string[], ctx: Context) => Record<string, string> | Promise<Record<string, string>>
+
+/** The one `_meta` key of the host protocol (spec §7): `{ call, confirmation, settings }` on requests, `{ notifications, untrusted, l10n }` on results. */
 export { META_KEY }
 type HostMeta = { call?: unknown; confirmation?: unknown; settings?: unknown }
 const hostMeta = (meta: Record<string, unknown> | undefined): HostMeta => {
@@ -132,6 +138,38 @@ function markAll(value: unknown, pointer: string, pointers: string[], skip?: Rea
 const TEMPLATE_KEYS = new Set(["uri", "kind", "format", "currency"])
 
 const text = (t: string): CallToolResult["content"] => [{ type: "text", text: t }]
+
+// ------------------------------------------------------------ labels for views (spec §7, `_meta.modelapp.l10n`)
+
+/** Per locale: each label as this call showed it → the same label in that locale. */
+type L10n = Map<string, Record<string, string>>
+const shownLabels = new AsyncLocalStorage<L10n>()
+
+/**
+ * A label in `locale`; inside a tool call, its other locales are noted too, so the call's view can draw it
+ * in the reader's language (MCP Apps `hostContext.locale`), whatever language the token named.
+ */
+function say(label: Label | undefined, locale: string | undefined, fallback: string): string {
+  const shown = localize(label, locale, fallback)
+  const notes = shownLabels.getStore()
+  if (notes && label && typeof label === "object" && shown) {
+    for (const [l, value] of Object.entries(label)) {
+      if (typeof value !== "string" || value === shown) continue
+      let d = notes.get(l)
+      if (!d) notes.set(l, (d = {}))
+      d[shown] ??= value
+    }
+  }
+  return shown
+}
+
+/** The labels a call showed, beside its result (`_meta.modelapp.l10n`), for its view only: a model never reads `_meta`. */
+function withL10n(result: CallToolResult, notes: L10n): CallToolResult {
+  if (!notes.size) return result
+  const meta = (result._meta ?? {}) as Record<string, unknown>
+  const own = (meta[META_KEY] && typeof meta[META_KEY] === "object" ? meta[META_KEY] : {}) as Record<string, unknown>
+  return { ...result, _meta: { ...meta, [META_KEY]: { ...own, l10n: Object.fromEntries(notes) } } }
+}
 
 /**
  * A tool's input as it is listed (the same JSON Schema), left for the SDK's own handler to check: an action's
@@ -370,14 +408,14 @@ export class AppServer {
       host: caller.host,
       settings,
       call,
-      t: (label) => localize(label, locale, this.locale),
+      t: (label) => say(label, locale, this.locale),
       notify: (n) => void notes.push(n),
       uri: (entity, id) => this.uri(entity, id),
     }
   }
 
   #t(caller: Caller | null, label: Label | undefined): string {
-    return localize(label, caller?.locale ?? this.locale, this.locale)
+    return say(label, caller?.locale ?? this.locale, this.locale)
   }
 
   #visibleFields(entity: EntityRecord, caller: Caller): FieldInfo[] {
@@ -594,14 +632,54 @@ export class AppServer {
         out[f.name] = titles
       }),
     )
+    Object.assign(out, await this.#personRefs(entity, rows, caller, ctx))
     // In declaration order, whatever finished first.
     const ordered: Record<string, Record<string, string>> = {}
     for (const f of entity.fields) {
       if (!out[f.name]) continue
       ordered[f.name] = out[f.name]!
-      if (pointers && this.#untrustedTitle(this.#entities.get(f.ref!)!)) for (const id of Object.keys(ordered[f.name]!)) pointers.push(`/refs/${pointerKey(f.name)}/${pointerKey(id)}`)
+      if (pointers && f.ref && this.#untrustedTitle(this.#entities.get(f.ref)!)) for (const id of Object.keys(ordered[f.name]!)) pointers.push(`/refs/${pointerKey(f.name)}/${pointerKey(id)}`)
     }
     return ordered
+  }
+
+  /** Whether this app names people: it declares `people`, or its dev sign-in knows its test people. */
+  #namesPeople(): boolean {
+    return Boolean(this.options.people || this.#dev)
+  }
+
+  /**
+   * The names of the people a list's `person` fields hold (field → id → name), when the app names people:
+   * the caller's own name from the token, the dev sign-in's test people, then the app's `people`. An id none
+   * of them knows is left out (a host shows an unknown person, never the id). Without a way to name people
+   * nothing is sent: the field's values are the names themselves.
+   */
+  async #personRefs(entity: EntityRecord, rows: Record<string, unknown>[], caller: Caller, ctx: Context): Promise<Record<string, Record<string, string>>> {
+    const fields = this.#visibleFields(entity, caller).filter((f) => f.role === "person" && !f.ref)
+    if (!fields.length || !this.#namesPeople()) return {}
+    const ids = [...new Set(rows.flatMap((r) => fields.map((f) => r[f.name])).filter((v): v is string => typeof v === "string" && v !== ""))].slice(0, 200)
+    const names: Record<string, string> = {}
+    if (caller.person?.name) names[caller.person.id] = caller.person.name
+    for (const p of this.#dev?.people ?? []) if (p.name) names[p.id] ??= p.name
+    const unknown = ids.filter((id) => !names[id])
+    if (unknown.length && this.options.people) {
+      try {
+        const found = await this.options.people(unknown, ctx)
+        for (const id of unknown) if (typeof found?.[id] === "string" && found[id]) names[id] = found[id]!
+      } catch (error) {
+        console.error(`[${PROTOCOL_ID}] people`, error)
+      }
+    }
+    const out: Record<string, Record<string, string>> = {}
+    for (const f of fields) {
+      const own: Record<string, string> = {}
+      for (const r of rows) {
+        const id = r[f.name]
+        if (typeof id === "string" && names[id]) own[id] = names[id]!
+      }
+      out[f.name] = own
+    }
+    return out
   }
 
   #untrustedTitle(entity: EntityRecord): boolean {
@@ -613,8 +691,11 @@ export class AppServer {
     const out = { ...row }
     for (const f of entity.fields) {
       const id = out[f.name]
-      const title = f.ref && typeof id === "string" ? refs[f.name]?.[id] : undefined
-      if (title !== undefined) out[f.name] = { id, title: this.#untrustedTitle(this.#entities.get(f.ref!)!) ? untrustedText(title) : title }
+      const title = typeof id === "string" ? refs[f.name]?.[id] : undefined
+      if (title === undefined) continue
+      // A person by name; a referenced record by its title (an outsider's title wrapped).
+      if (f.ref) out[f.name] = { id, title: this.#untrustedTitle(this.#entities.get(f.ref)!) ? untrustedText(title) : title }
+      else if (f.role === "person") out[f.name] = { id, name: title }
     }
     return out
   }
@@ -817,7 +898,7 @@ export class AppServer {
     void era
     const o = this.options
     // Tool names, titles and descriptions are in the app's own locale: stable for every caller (spec §6). Data labels follow the caller.
-    const t = (l: Label | undefined) => localize(l, this.locale, this.locale)
+    const t = (l: Label | undefined) => say(l, this.locale, this.locale)
     const s = new McpServer(
       { name: o.name, version: o.version, title: t(o.title), ...(o.description ? { description: t(o.description) } : {}), ...(o.icons ? { icons: o.icons } : {}), ...(o.websiteUrl ? { websiteUrl: o.websiteUrl } : {}) },
       { ...(o.instructions ? { instructions: o.instructions } : {}) },
@@ -849,8 +930,9 @@ export class AppServer {
     const plainCaller = caller.host === "plain"
     const reg = s.registerTool.bind(s) as unknown as (name: string, config: Record<string, unknown>, cb: (args: Record<string, unknown>, ctx: ServerContext) => Promise<CallToolResult>) => void
     const guard = (name: string, fn: (args: Record<string, unknown>, ctx: ServerContext) => Promise<CallToolResult>) => async (args: Record<string, unknown>, ctx: ServerContext) => {
+      const notes: L10n = new Map()
       try {
-        return await fn(args ?? {}, ctx)
+        return withL10n(await shownLabels.run(notes, () => fn(args ?? {}, ctx)), notes)
       } catch (error) {
         if (error instanceof AppError) return failure(error.code, error.message, error.details)
         console.error(`[${PROTOCOL_ID}] ${name}`, error)
@@ -885,7 +967,7 @@ export class AppServer {
           const refs = await this.#refs(e, out.rows, caller, ctx, pointers)
           return {
             content: text(JSON.stringify({ rows: marked.map((r, i) => ({ uri: uris[i], ...this.#named(e, r, refs) })), ...(out.next ? { next: out.next } : {}), ...(out.total !== undefined ? { total: out.total } : {}) })),
-            structuredContent: { entity: e.name, ...out, uris, refs, view: { kind: "list", title: plural, columns: columns(), tool: e.tools.list.name, args, getTool: e.tools.get.name, ...(query.sort ? { sort: query.sort } : {}) } },
+            structuredContent: { entity: e.name, ...out, uris, refs, view: { kind: "list", title: this.#t(caller, e.config.plural ?? e.config.label), columns: columns(), tool: e.tools.list.name, args, getTool: e.tools.get.name, ...(query.sort ? { sort: query.sort } : {}) } },
             ...this.#marks(pointers),
           }
         }),
@@ -910,7 +992,7 @@ export class AppServer {
           const refs = await this.#refs(e, [record], caller, ctx, pointers)
           return {
             content: text(JSON.stringify({ uri, ...this.#named(e, marked, refs) })),
-            structuredContent: { entity: e.name, uri, record, refs, view: { kind: "record", title: label, tool: e.tools.get.name, fields: this.#visibleFields(e, caller).map((f) => this.#column(f, caller)), actions: this.#recordActions(e, caller) } },
+            structuredContent: { entity: e.name, uri, record, refs, view: { kind: "record", title: this.#t(caller, e.config.label), tool: e.tools.get.name, fields: this.#visibleFields(e, caller).map((f) => this.#column(f, caller)), actions: this.#recordActions(e, caller) } },
             ...this.#marks(pointers),
           }
         }),
@@ -941,7 +1023,7 @@ export class AppServer {
               const uri = this.uri(e.name, String(row.id))
               const card = this.#recordCard(e, row, caller)
               const marked = this.#markCard(e, card, `/results/${results.length}`, pointers)
-              results.push({ id: uri, entity: e.name, entityLabel: t(e.config.label), ...card, url: uri })
+              results.push({ id: uri, entity: e.name, entityLabel: this.#t(caller, e.config.label), ...card, url: uri })
               forModel.push({ id: uri, title: marked.title, url: uri })
             }
           }
@@ -971,7 +1053,7 @@ export class AppServer {
           const title = "title" in r ? r.title : ""
           return {
             content: text(JSON.stringify({ id: r.uri, title: entity ? this.#markCard(entity, { title }, "", []).title : title, text: JSON.stringify(marked), url: r.uri, metadata: { type: parsed.type } })),
-            structuredContent: entity ? { entity: entity.name, uri: r.uri, record, refs, view: r.template === "record" ? { ...("view" in r ? r.view : {}), title: t(entity.config.label) } : undefined } : { ...r, view: { kind: "fragment", title } },
+            structuredContent: entity ? { entity: entity.name, uri: r.uri, record, refs, view: r.template === "record" ? { ...("view" in r ? r.view : {}), title: this.#t(caller, entity.config.label) } : undefined } : { ...r, view: { kind: "fragment", title } },
             ...this.#marks(pointers),
           }
         }),
@@ -1078,7 +1160,7 @@ export class AppServer {
             const refs = await this.#refs(e, out.rows, caller, ctx, pointers)
             return {
               content: text(JSON.stringify({ page: p.name, rows: marked.map((r) => this.#named(e, r, refs)), ...(out.next ? { next: out.next } : {}) })),
-              structuredContent: { page: p.name, entity: e.name, params: pageParams, ...out, uris: out.rows.map((r) => this.uri(e.name, String(r.id))), refs, view: { kind: "list", title, columns, tool: p.tool.name, args: pageParams, getTool: e.tools.get.name, ...(query.sort && !c.params ? { sort: query.sort } : {}) } },
+              structuredContent: { page: p.name, entity: e.name, params: pageParams, ...out, uris: out.rows.map((r) => this.uri(e.name, String(r.id))), refs, view: { kind: "list", title: this.#t(caller, c.title), columns, tool: p.tool.name, args: pageParams, getTool: e.tools.get.name, ...(query.sort && !c.params ? { sort: query.sort } : {}) } },
               ...this.#marks(pointers),
             }
           }
@@ -1089,11 +1171,11 @@ export class AppServer {
             const pointers: string[] = []
             return {
               content: text(JSON.stringify({ page: p.name, fragments: fragments.map((f, i) => ({ uri: f.uri, state: f.state, ...("data" in f ? { data: this.#markResolved(f, `/fragments/${i}`, pointers) } : {}) })) })),
-              structuredContent: { page: p.name, params: pageParams, fragments, view: { kind: "dashboard", title } },
+              structuredContent: { page: p.name, params: pageParams, fragments, view: { kind: "dashboard", title: this.#t(caller, c.title) } },
               ...this.#marks(pointers),
             }
           }
-          return { content: text(`Opened ${title}.`), structuredContent: { page: p.name, params: pageParams, view: { kind: "custom", title } } }
+          return { content: text(`Opened ${title}.`), structuredContent: { page: p.name, params: pageParams, view: { kind: "custom", title: this.#t(caller, c.title) } } }
         }),
       )
     }
@@ -1115,7 +1197,7 @@ export class AppServer {
           const r = await this.#resolve({ type: f.type, params: args }, caller, ctxOf(mctx))
           if (r.state !== "ok") return failure(r.state === "no-access" ? "permission_denied" : "not_found", r.state === "no-access" ? "No access." : "Not available.")
           const pointers: string[] = []
-          return { content: text(JSON.stringify({ uri: r.uri, data: this.#markResolved(r, "", pointers) })), structuredContent: { ...r, view: { kind: "fragment", title } }, ...this.#marks(pointers) }
+          return { content: text(JSON.stringify({ uri: r.uri, data: this.#markResolved(r, "", pointers) })), structuredContent: { ...r, view: { kind: "fragment", title: this.#t(caller, f.config.title) } }, ...this.#marks(pointers) }
         }),
       )
     }
