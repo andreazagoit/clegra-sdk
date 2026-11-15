@@ -1,0 +1,42 @@
+{
+  "name": "modelapp-example-warehouse",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Reference app: a small warehouse (products, stock movements, orders) as a Next.js app with its own sign-in (better-auth) and plain SQL. Invented data.",
+  "scripts": {
+    "dev": "next dev -p 3930",
+    "build": "next build",
+    "start": "next start -p 3930",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "@better-auth/cimd": "1.7.7",
+    "@better-auth/core": "1.7.7",
+    "@better-auth/mcp": "1.7.7",
+    "@better-auth/oauth-provider": "1.7.7",
+    "@better-auth/utils": "0.4.2",
+    "@better-fetch/fetch": "1.3.2",
+    "@electric-sql/pglite": "0.5.16",
+    "@modelapp/next": "*",
+    "@modelapp/server": "*",
+    "better-auth": "1.7.7",
+    "better-call": "1.4.0",
+    "pg": "^8.23.1",
+    "next": "16.4.3",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@modelapp/spec": "*",
+    "@tailwindcss/postcss": "^4.3.3",
+    "@types/node": "^22",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "tailwindcss": "^4.3.3",
+    "tsx": "^4.23.15",
+    "typescript": "^5",
+    "@types/pg": "^8"
+  }
+}
