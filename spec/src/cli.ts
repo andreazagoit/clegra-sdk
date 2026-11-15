@@ -1,13 +1,19 @@
 #!/usr/bin/env -S npx tsx
 import { checkApp, formatReport } from "./conformance"
+import { initMain } from "./init/index"
 
 // modelapp check <url> [--token <bearer>]   (or MODELAPP_TOKEN in the environment)
+// modelapp init [dir] [--dry-run]           (MAP added to an existing Next.js App Router app)
+const USAGE = "usage: modelapp check <url> [--token <bearer>]\n       modelapp init [dir] [--dry-run]"
 const [command, ...args] = process.argv.slice(2)
-const url = args.find((a) => !a.startsWith("--"))
+
+if (command === "init") process.exit(initMain(args))
+
+const url = args.find((a, i) => !a.startsWith("--") && args[i - 1] !== "--token")
 const at = args.indexOf("--token")
 const token = at >= 0 ? args[at + 1] : process.env.MODELAPP_TOKEN
 if (command !== "check" || !url) {
-  console.error("usage: modelapp check <url> [--token <bearer>]")
+  console.error(USAGE)
   process.exit(2)
 }
 const report = await checkApp({ url, ...(token ? { token } : {}) })
