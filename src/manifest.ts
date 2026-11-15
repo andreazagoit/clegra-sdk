@@ -1,3 +1,4 @@
+import { PROPERTY_TYPES } from "../spec/src/kinds"
 import { MANIFEST_PATH, PROTOCOL_NAME, PROTOCOL_SHORT_NAME, SCHEMA_ID, SPEC_VERSION, uriPrefix } from "../spec/src/protocol"
 import { z } from "zod"
 
@@ -24,6 +25,7 @@ export const fieldSchema = z.object({
   enum: z.array(z.string()).optional(),
   role: z.enum(["title", "subtitle", "status", "amount", "date", "person"]).optional(),
   label: labelMap,
+  as: z.string().optional().describe("The property of the entity's kind this field holds (spec §3.1)"),
   ref: z.string().optional().describe("The entity whose record id this field holds"),
   permission: z.string().optional().describe("Only callers with this permission see the field"),
   filter: z.boolean().optional(),
@@ -43,6 +45,10 @@ export const entitySchema = z.object({
   plural: labelMap,
   description: labelMap.optional(),
   icon: z.string().optional(),
+  kind: z
+    .union([z.string(), z.object({ by: z.string().describe("A required enum field"), map: z.record(z.string(), z.string()).describe("A kind for each of its values") })])
+    .optional()
+    .describe("What the entity is (spec §3.1): a kind, or one per record by an enum field"),
   permission: z.string().optional(),
   schema: jsonSchema,
   fields: z.array(fieldSchema),
@@ -113,6 +119,10 @@ export const manifestSchema = z.object({
   view: z.string().describe("The generated ui:// view for lists, records, dashboards and fragments"),
   resolveTool: z.string().describe("Hosts resolve record and fragment URIs with this tool"),
   searchTool: z.string().optional(),
+  kinds: z
+    .record(z.string(), z.object({ label: labelMap, properties: z.record(z.string(), z.object({ type: z.enum(PROPERTY_TYPES), many: z.boolean().optional(), key: z.boolean().optional() })) }))
+    .optional()
+    .describe("The namespaced kinds (with a dot) this app defines (spec §3.1)"),
   entities: z.array(entitySchema),
   actions: z.array(actionSchema),
   pages: z.array(pageSchema),

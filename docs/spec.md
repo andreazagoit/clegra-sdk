@@ -35,6 +35,7 @@ JSON Schema: [`packages/modelapp/spec/schema/modelapp.schema.json`](../../packag
 | `auth` | `{ resource?, authorizationServers }` (§7). `resource` is the app's own public MCP address: the only token audience it accepts |
 | `view` | The generated `ui://` view that draws lists, records, dashboards, fragments |
 | `resolveTool`, `searchTool?` | Tools a host uses to resolve URIs and to search |
+| `kinds?` | Definitions of the namespaced kinds this app uses (§3.1) |
 | `entities`, `actions`, `pages`, `fragments`, `agents` | §3–§5 |
 | `permissions` | `{ id, label, description?, default }`; ids are `group.verb` |
 | `settings` | `{ id, label, description?, type: text\|number\|boolean, required, default? }` (`id`: `[a-z][a-z0-9_]{1,39}`): values an administrator sets per installation; the workspace host sends them with every call (§7). Never secrets: those stay in the app's own configuration |
@@ -48,14 +49,17 @@ fast|standard|strong, starters? }`: the host's model runs them with those tools.
 
 ## 3. Entities and field meaning
 
-An entity is `{ name, label, plural, description?, icon?, permission?, schema,
-fields, tools: { list, get }, searchable }`. `schema` is the record's JSON
-Schema; `fields` says what each field means:
+An entity is `{ name, label, plural, description?, icon?, kind?, permission?,
+schema, fields, tools: { list, get }, searchable }`. `kind` says what the
+entity is (§3.1): a kind name, or `{ by, map }` where `by` is a required enum
+field and `map` gives a kind for each of its values. `schema` is the record's
+JSON Schema; `fields` says what each field means:
 
 | Field key | Meaning |
 |---|---|
 | `name`, `type`, `required`, `enum?`, `label` | The basics. Every entity has a required string `id` |
 | `role?` | `title` (exactly one per entity), `subtitle`, `status`, `amount`, `date`, `person`; at most one field per role |
+| `as?` | The property of the entity's kind this field holds (§3.1) |
 | `ref?` | The field holds the id of a record of that entity |
 | `filter?`, `sort?`, `search?` | Usable as a list filter, a sort key, in text search (below) |
 | `permission?` | Only callers with it ever receive the field |
@@ -87,6 +91,83 @@ referenced record as the caller may see it (none for a record out of reach).
 A host shows the title, never the id. In a result's **text** (what a model
 reads) the field is `{ "id": …, "title": … }`; `structuredContent` keeps the
 bare id, with `refs` beside it.
+
+### 3.1 Kinds
+
+A **kind** names what an entity is, the same in every app. Kinds without a
+dot are defined by this specification and published, with their properties,
+as [`packages/modelapp/spec/kinds.json`](../../packages/modelapp/spec/kinds.json).
+Property names are schema.org's, verbatim (JSCalendar's where schema.org has
+none: `due`, `uid`):
+
+| `kind` | Properties (`as`) | Keys |
+|---|---|---|
+| `person` | `givenName`, `familyName`, `email`†, `telephone`†, `jobTitle`, `worksFor`, `address`, `image` | `email` |
+| `organization` | `legalName`, `email`†, `telephone`†, `url`, `address`, `vatID`, `taxID` | `vatID` |
+| `event` | `startDate` (required), `endDate`, `location`, `attendee`†, `organizer`, `uid` | `uid` |
+| `task` | `due`, `startDate`, `completed`, `assignee` | — |
+| `document` | `url`, `encodingFormat`, `author`, `contentSize` | — |
+| `product` | `sku`, `gtin`, `brand`, `price` | `gtin` |
+| `order` | `orderNumber`, `orderDate`, `customer`, `totalPrice` | — |
+
+† multi-valued: an array field, or several fields with the same `as`. Any
+entity, with or without a kind, MAY mark the **universal** properties `url`
+(the record in the app's own pages), `dateCreated` and `dateModified`; on a
+kind that defines `url` itself (organization: its website; document: the
+document) the kind's meaning applies. `message`, `place`, `invoice` and
+`project` are reserved: no app may use them as kinds.
+
+A property has a type, and the field holding it a matching one: `string`
+and `date` (rule 4) a string field; `number` a number or integer; `boolean`
+a boolean; `address` a string or an object; `money` a number or integer
+whose field names its `currency`. A multi-valued property also matches an
+array of those.
+
+A kind with a dot is a third party's, named reverse-DNS under a domain it
+controls (`com.acme.shipment`: lowercase segments of letters, digits and
+`-`). A manifest MAY define it in `kinds`: `{ <kind>: { label, properties: {
+<name>: { type, many?, key? } } } }`, names `[a-z][A-Za-z0-9]*`, a key always
+of type `string` and compared exactly. Hosts match namespaced kinds by exact
+name. An entity whose namespaced kind the manifest doesn't define may mark
+only the universal properties.
+
+1. An entity has at most one kind per record. Its `title` field is the kind's
+   `name`; no `as` is needed for it. With `{ by, map }`, `by` is a required
+   enum field without `permission` (a record's kind is seen with the record),
+   and `map` names a kind for each of its values and for no other value.
+2. `as` MUST name a property of the entity's kind (of any mapped kind, with
+   `{ by, map }`) or a universal property. The field's type MUST match the
+   property's. A property not marked many MUST be on at most one field.
+3. An entity MUST have the properties its kind requires (`event`:
+   `startDate`). All others are optional. An app MUST NOT use `as` for a value
+   that only resembles the property. Fields without `as` are the app's own and
+   mean what they meant before.
+4. Values: `email` an addr-spec; `telephone` SHOULD be E.164; `vatID` the
+   country prefix and the number, no spaces; `gtin` 8, 12, 13 or 14 digits;
+   dates RFC 3339 (a date alone on an event means all day); `address` a string
+   or a schema.org `PostalAddress` object; `price` and `totalPrice` are
+   numbers whose field has `currency`.
+5. A field whose `as` is a **key** of its kind (`email`, `vatID`, `gtin`,
+   `uid`, and a namespaced kind's `key` properties) MUST have `filter: true`.
+   That filter is exact on the normalised value: `email` lower-cased, `vatID`
+   upper-cased without spaces, `gtin` its digits (spaces and `-` removed; any
+   other character is `invalid_input`), `uid` and namespaced keys as they are.
+   It takes a value or `{ in: [...] }`, never a range, and on a multi-valued
+   field it matches any of the values. The server normalises the filter
+   before the handler, and a list that answers a key filter with a record not
+   holding the value fails with `internal`.
+6. Kinds add no permission and remove none: `permission` on the entity and
+   its fields applies unchanged (a key filter on a field the caller may not see
+   fails with `invalid_input`, as any filter does).
+7. A host MUST treat an entity whose kind it does not know as an entity
+   without a kind. Within one `specVersion`, kinds and properties are only
+   added. `taxID` is a property, not a key, until a country-qualified form is
+   defined.
+
+Kinds pay off when several apps of one workspace hold the same kind of thing
+(pickers, references and search across apps, matching by key). An app's own
+records (a deal, a ticket, a quote line) have no kind; none is invented for
+them.
 
 ## 4. Actions
 
@@ -154,7 +235,7 @@ Streamable HTTP at `mcp.url`. Tools, in this order of derivation:
 | Tool | From | Kind |
 |---|---|---|
 | `<entity>_list`, `<entity>_get` | each entity (filters, `query`, `sort`, `dir`, `cursor`, `limit` ≤ 100, default 25) | read |
-| `search`, `fetch` | entities with a `search` field | read |
+| `search`, `fetch` | entities with a `search` field; `search` takes an optional `kind` (an enum of the searchable entities' kinds) and each result carries `kind` when its entity has one; `fetch` carries it in `metadata` | read |
 | `modelapp_resolve` | always: `{ uris, want? }` → each URI's state `ok \| gone \| no-access` and data, for hosts; hidden from models | read |
 | `<entity>_<action>` or `<action>` | each action | read or write |
 | `open_<page>` | each page except `record` pages (those are `<entity>_get`) | read |
@@ -169,6 +250,8 @@ Rules:
 5. A tool the caller lacks the permission for is not listed.
 6. Tools with a view name it in `_meta.ui.resourceUri`; the data to draw is the result's `structuredContent`.
 7. Hand-written tools, resources and views MAY be added to the same server; they are outside the manifest.
+8. Entity tools (`<entity>_list`, `<entity>_get`) carry `_meta.modelapp: { entity, kind? }`, `kind` as in the manifest. With a kind, their description ends with one fixed sentence: `Kind: person.`; with `{ by, map }`, the kinds in the map's order and the field: `Kind: organization or person (by type).`
+9. A list filter on a field with `as` names the property in its description (`Company (worksFor): …`); a key filter says it is exact (`Email: exact email; a value or { in: [...] }`) and carries `format` where JSON Schema has one (`email`).
 
 ## 7. Enforcement
 
@@ -425,6 +508,14 @@ npx modelapp check https://crm.example.com --token <a plain caller's bearer>
 | `mcp.sort` | a list tool offers to sort only by fields the manifest declares sortable, and refuses any other key |
 | `mcp.views` | every view a tool names is served as an MCP Apps document |
 | `mcp.manifest` | the manifest is one MCP resource, identical to the file |
+| `kinds.known` | every unprefixed kind is in `kinds.json` for the `specVersion`; every dotted kind is well-formed |
+| `kinds.properties` | every `as` belongs to the entity's kind (or is universal) with a matching type; single-valued properties appear once; required ones exist; keys are filters; `kinds` definitions are well-formed |
+| `kinds.keys` | listing with a key value taken from a returned record, in another letter case where case doesn't count, returns that record and only records holding that value |
+| `kinds.values` | sampled records: `email`, `vatID`, `gtin`, dates, `address` and numbers have the stated form |
+| `kinds.tools` | entity tools carry the kind in the description and in `_meta.modelapp`; `search` offers `kind`, keeps to it, and names each result's kind |
+
+The `kinds.*` checks are skipped, not failed, for an app that declares no
+kinds (and `kinds.keys` when no listed record holds a key value to try).
 
 An app is conformant when every check passes with a token. Without a token
 only the public checks run: the report says «Incomplete», never «Conformant».

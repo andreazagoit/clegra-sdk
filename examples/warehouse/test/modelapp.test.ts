@@ -133,6 +133,24 @@ describe("purchase cost (products.cost)", () => {
   })
 })
 
+describe("kinds (product, order)", () => {
+  test("products and orders say their kind; a product is found by its GTIN exactly, in SQL", async () => {
+    const manifest = app.manifest()
+    assert.deepEqual(manifest.entities.map((e) => [e.name, e.kind ?? null]), [["product", "product"], ["movement", null], ["order", "order"]])
+    const all = rows(await ada.call("product_list", { limit: 100 })).rows
+    const screws = all.find((r) => r.sku === "SCR-440")!
+    assert.match(String(screws.gtin), /^20010{7}\d{2}$/, "an invented GTIN in the restricted range")
+    // Spaces are taken out before the handler; the filter is exact.
+    const spaced = String(screws.gtin).replace(/^(\d{4})(\d{4})/, "$1 $2 ")
+    assert.deepEqual(rows(await ada.call("product_list", { gtin: spaced })).rows.map((r) => r.id), [screws.id])
+    assert.deepEqual(rows(await ada.call("product_list", { gtin: String(screws.gtin).slice(0, 12) })).rows, [], "no prefix matching")
+    assert.equal(errorOf(await ada.call("product_list", { gtin: "SCR-440" }))?.code, "invalid_input")
+    const tools = new Map((await ada.listTools()).map((t) => [t.name, t]))
+    assert.ok(tools.get("order_list")!.description!.endsWith(" Kind: order."))
+    assert.deepEqual(tools.get("product_get")!._meta!.modelapp, { entity: "product", kind: "product" })
+  })
+})
+
 describe("lists: filters, sort, search, cursor", () => {
   test("filters by value, by range and by status", async () => {
     assert.equal(rows(await ada.call("product_list", { category: "tools" })).total, 5)
@@ -299,6 +317,7 @@ describe("MCP authorization (better-auth tokens, verified by the app)", () => {
     assert.ok(listed.tools.some((t) => t.name === "product_list"))
     const report = await checkApp({ url: SITE, token, fetch: (r) => route[r.method as "GET"](r) })
     assert.ok(report.ok && report.complete, formatReport(report))
+    for (const id of ["kinds.known", "kinds.properties", "kinds.tools", "kinds.keys", "kinds.values"]) assert.ok(report.checks.some((c) => c.id === id && c.ok && !c.skipped), `${id} ran: ${formatReport(report)}`)
   })
 
   test("the organization comes from the token only, never from arguments", async () => {

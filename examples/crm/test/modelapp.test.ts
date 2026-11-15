@@ -129,6 +129,20 @@ test("names typed in from outside reach a model as data: deals, companies, conta
   assert.ok(company.includes("<untrusted>Hartley Engineering</untrusted>") && company.includes("<untrusted>Manchester</untrusted>"))
 })
 
+test("contacts are people, companies organizations: found by email and VAT number exactly, in SQL", async () => {
+  const c = await testClient(app, { person: "alice", permissions: "all", installation: "kinds" })
+  const byEmail = await c.call("contact_list", { email: "GRACE@Hartley-Engineering.EXAMPLE" })
+  assert.deepEqual((byEmail.structuredContent as { rows: { id: string }[] }).rows.map((r) => r.id), ["ct1"])
+  assert.deepEqual(((await c.call("contact_list", { email: "grace@hartley" })).structuredContent as { rows: unknown[] }).rows, [], "exact, never a prefix")
+  const byVat = await c.call("company_list", { vatId: "gb 000 000 001" })
+  assert.deepEqual((byVat.structuredContent as { rows: { id: string; website?: string }[] }).rows.map((r) => [r.id, r.website]), [["co1", "https://hartley-engineering.example"]])
+  const people = await c.call("search", { query: "a", kind: "person" })
+  const results = (people.structuredContent as { results: { id: string; kind: string }[] }).results
+  assert.ok(results.length > 0 && results.every((r) => r.kind === "person" && r.id.startsWith("modelapp://crm/contact/")), JSON.stringify(results))
+  const manifest = app.manifest()
+  assert.deepEqual(manifest.entities.map((e) => [e.name, e.kind ?? null]), [["company", "organization"], ["contact", "person"], ["deal", null]])
+})
+
 test("deal owners reach hosts and models by name, never as person ids", async () => {
   const c = await testClient(app, { person: "ben", permissions: "all", installation: "names" })
   const r = await c.call("deal_list", {})

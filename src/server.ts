@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks"
 
 import { createMcpHandler, inputRequired, inputResponse, McpServer, type CallToolResult, type Icon, type ServerContext } from "@modelcontextprotocol/server"
+import { entityKindProblems, keyOf, kindDefinitionProblems, kindOfRecord, kindSentence, kindsOf, normaliseKey, type KindDef, type KindField, type Normalisation } from "../spec/src/kinds"
 import { META_KEY, OAUTH_SCOPE, PROTOCOL_ID, RESOLVE_TOOL, URI_SCHEME, uriPrefix } from "../spec/src/protocol"
 import { z } from "zod"
 
@@ -21,6 +22,7 @@ import type {
   Filter,
   FragmentConfig,
   FragmentInstance,
+  KindConfig,
   Notification,
   PageConfig,
   PermissionConfig,
@@ -109,7 +111,8 @@ export class AppError extends Error {
 }
 
 type ToolName = { name: string; plain: boolean }
-type EntityRecord = { name: string; config: EntityConfig<z.ZodObject>; fields: FieldInfo[]; handle: EntityHandle; tools: { list: ToolName; get: ToolName } }
+/** `keys`: the fields that hold a key of the entity's kind (spec §3.1 rule 5), with how their values compare. */
+type EntityRecord = { name: string; config: EntityConfig<z.ZodObject>; fields: FieldInfo[]; handle: EntityHandle; tools: { list: ToolName; get: ToolName }; keys: Map<string, { property: string; how: Normalisation }> }
 type ActionRecord = { name: string; tool: string; entity?: EntityRecord; config: ActionConfig<z.ZodObject, EntityHandle | undefined>; input: z.ZodObject; handler: ActionHandler<z.ZodObject, EntityHandle | undefined>; write: boolean; confirm: "always" | "optional" | "never"; plain: boolean }
 type PageRecord = { name: string; config: PageConfig; derived?: boolean; tool: ToolName }
 type FragmentRecord = { type: string; config: FragmentConfig<z.ZodObject, Template>; tool: ToolName }
@@ -119,6 +122,16 @@ const IDENT = /^[a-z][a-z0-9_]{0,39}$/
 const PERMISSION = /^[a-z][a-z0-9_-]{0,39}\.[a-z][a-z0-9_-]{0,39}$/
 const RESERVED_PARAMS = new Set(["query", "sort", "dir", "cursor", "limit", "id"])
 const RESERVED_TOOLS = new Set(["search", "fetch", RESOLVE_TOOL])
+
+/** JSON Schema formats of key properties (spec §6: a key filter carries `format` where JSON Schema has one). */
+const KEY_FORMATS: Record<string, string> = { email: "email" }
+
+/** A field as the kind rules read it (spec/src/kinds.ts): its meaning, and an array's item type. */
+function kindField(f: FieldInfo): KindField {
+  const items = f.schema.items as { type?: unknown } | undefined
+  const itemType = f.type === "array" && items && typeof items.type === "string" ? items.type : undefined
+  return { name: f.name, type: f.type, required: f.required, ...(f.enum ? { enum: f.enum } : {}), ...(f.permission ? { permission: f.permission } : {}), ...(f.as !== undefined ? { as: f.as } : {}), ...(f.filter ? { filter: true } : {}), ...(f.currency ? { currency: f.currency } : {}), ...(itemType ? { itemType } : {}) }
+}
 
 const b64url = (s: string) => Buffer.from(s, "utf8").toString("base64url")
 const unb64url = (s: string) => Buffer.from(s, "base64url").toString("utf8")
@@ -224,6 +237,7 @@ export class AppServer {
   readonly #agents = new Map<string, AgentConfig>()
   readonly #permissions = new Map<string, PermissionConfig>()
   readonly #settings = new Map<string, SettingConfig>()
+  #kinds: Record<string, KindConfig> = {}
   #manifest: Manifest | null = null
   #devReady: Promise<void> | null = null
   readonly #path: string
@@ -275,17 +289,35 @@ export class AppServer {
     }
   }
 
+  /** The namespaced kinds this app defines (spec §3.1), before any entity that uses them. */
+  defineKinds(kinds: Record<string, KindConfig>): void {
+    if (this.#entities.size) throw new Error("kinds: define them before the entities")
+    const problems = kindDefinitionProblems(kinds as unknown as Record<string, KindDef>)
+    if (problems.length) throw new Error(problems.join("; "))
+    this.#kinds = { ...kinds }
+    this.#changed()
+  }
+
   /** An entity (spec §4): a Zod object with `.meta()` meaning, and its reads. */
   registerEntity<S extends z.ZodObject>(name: string, config: EntityConfig<S>): EntityHandle<S> {
     if (!IDENT.test(name)) throw new Error(`entity "${name}": lowercase letters, digits and _, starting with a letter`)
     this.#taken(name)
     const fields = fieldsOf(name, config.schema)
     for (const f of fields) if ((f.filter || f.sort) && RESERVED_PARAMS.has(f.name) && f.name !== "id") throw new Error(`entity "${name}": field "${f.name}" can't be a filter or sort (reserved parameter name)`)
+    // Kinds (spec §3.1): what `as` says must hold for the entity's kind, or the definition fails here, not at a host.
+    const own = this.#kinds as unknown as Record<string, KindDef>
+    const problems = entityKindProblems(`entity "${name}"`, config.kind, fields.map(kindField), own)
+    if (problems.length) throw new Error(problems.join("; "))
+    const keys = new Map<string, { property: string; how: Normalisation }>()
+    for (const f of fields) {
+      const how = f.as ? keyOf(f.as, kindsOf(config.kind), own) : null
+      if (how) keys.set(f.name, { property: f.as!, how })
+    }
     const handle: EntityHandle<S> = { kind: "entity", name, schema: config.schema, fields, uri: (id) => this.uri(name, id) }
     const plain = config.expose?.plain !== false
     const tools = { list: { name: config.expose?.list ?? `${name}_list`, plain }, get: { name: config.expose?.get ?? `${name}_get`, plain } }
     this.#claimTools(tools.list.name, tools.get.name)
-    this.#entities.set(name, { name, config: config as unknown as EntityConfig<z.ZodObject>, fields, handle: handle as unknown as EntityHandle, tools })
+    this.#entities.set(name, { name, config: config as unknown as EntityConfig<z.ZodObject>, fields, handle: handle as unknown as EntityHandle, tools, keys })
     this.#changed()
     return handle
   }
@@ -608,6 +640,20 @@ export class AppServer {
       const f = visible.find((x) => x.name === k)
       if (!f || !f.filter) throw new AppError("invalid_input", `"${k}" can't be filtered on`)
     }
+    // A key filter is exact on the normalised value (spec §3.1 rule 5): the handler gets it normalised (an email lower-cased).
+    for (const [k, key] of entity.keys) {
+      const f = filters[k]
+      if (f === undefined) continue
+      const norm = (v: unknown) => {
+        if (typeof v !== "string") throw new AppError("invalid_input", `"${k}" is an exact ${key.property}: give a string`)
+        const n = normaliseKey(v, key.how)
+        if (n === null) throw new AppError("invalid_input", `"${k}": ${JSON.stringify(v)} is not a ${key.property}`)
+        return n
+      }
+      if (f !== null && typeof f === "object" && "in" in f && Array.isArray(f.in)) filters[k] = { in: f.in.map(norm) }
+      else if (f !== null && typeof f === "object") throw new AppError("invalid_input", `"${k}" is an exact ${key.property}: give a value or { in: [...] }, not a range`)
+      else filters[k] = norm(f)
+    }
     const sortField = typeof args.sort === "string" ? args.sort : base?.sort?.field
     if (sortField !== undefined && !visible.some((f) => f.name === sortField && f.sort)) throw new AppError("invalid_input", `"${sortField}" can't be sorted by`)
     const limit = typeof args.limit === "number" ? Math.max(1, Math.min(100, Math.floor(args.limit))) : 25
@@ -626,8 +672,28 @@ export class AppServer {
 
   async #list(entity: EntityRecord, caller: Caller, ctx: Context, query: Query) {
     const result = await entity.config.list(query, ctx)
+    this.#exact(entity, query, (result.rows ?? []) as Record<string, unknown>[])
     const rows = (result.rows ?? []).slice(0, query.limit).map((r) => this.#strip(entity, r as Record<string, unknown>, caller))
     return { rows, ...(result.next ? { next: result.next } : {}), ...(typeof result.total === "number" ? { total: result.total } : {}) }
+  }
+
+  /**
+   * A handler that answered an exact key filter with a row that doesn't hold the value (spec §3.1 rule 5) fails
+   * the call, clearly: a host matches records by these filters, and a wrong row would be a wrong match.
+   */
+  #exact(entity: EntityRecord, query: Query, rows: Record<string, unknown>[]): void {
+    for (const [k, key] of entity.keys) {
+      const f = query.filters[k]
+      if (f === undefined) continue
+      const wanted = typeof f === "string" ? [f] : f && typeof f === "object" && "in" in f ? f.in.map(String) : []
+      for (const row of rows) {
+        const values = Array.isArray(row[k]) ? (row[k] as unknown[]) : [row[k]]
+        if (values.some((v) => typeof v === "string" && wanted.includes(normaliseKey(v, key.how) ?? "\u0000"))) continue
+        const why = `${entity.tools.list.name}: the app's list returned ${entity.name} ${String(row.id)}, whose ${k} doesn't hold the exact ${key.property} asked for (${wanted.join(", ")}). A key filter is exact on the normalised value (spec §3.1).`
+        console.error(`[${PROTOCOL_ID}] ${why}`)
+        throw new AppError("internal", why)
+      }
+    }
   }
 
   /**
@@ -723,11 +789,20 @@ export class AppServer {
     const shape: Record<string, z.ZodType> = {}
     for (const f of this.#visibleFields(entity, caller)) {
       if (!f.filter) continue
+      // Descriptions are in the app's locale, the same for every caller (spec §6 rule 2); a field with `as` names its property.
+      const label = say(f.label ?? f.name, this.locale, this.locale)
+      const key = entity.keys.get(f.name)
+      if (key) {
+        // A key is matched exactly (spec §3.1 rule 5): a value or a set of values, never a range.
+        const value = KEY_FORMATS[key.property] ? z.string().meta({ format: KEY_FORMATS[key.property] }) : z.string()
+        shape[f.name] = z.union([value, z.object({ in: z.array(value) })]).optional().describe(`${label}: exact ${key.property}; a value or { in: [...] }`)
+        continue
+      }
       const value: z.ZodType = f.enum ? z.enum(f.enum as [string, ...string[]]) : f.type === "number" || f.type === "integer" ? z.number() : f.type === "boolean" ? z.boolean() : z.string()
       shape[f.name] = z
         .union([value, z.object({ in: z.array(value) }), z.object({ gte: value.optional(), lte: value.optional() })])
         .optional()
-        .describe(`${this.#t(caller, f.label ?? f.name)}: a value, { in: [...] }, or a range { gte, lte }`)
+        .describe(`${label}${f.as ? ` (${f.as})` : ""}: a value, { in: [...] }, or a range { gte, lte }`)
     }
     if (this.#visibleFields(entity, caller).some((f) => f.search)) shape.query = z.string().max(200).optional().describe("Text to search for")
     const sortable = this.#visibleFields(entity, caller).filter((f) => f.sort).map((f) => f.name)
@@ -973,14 +1048,17 @@ export class AppServer {
       const label = t(e.config.label)
       const plural = t(e.config.plural ?? e.config.label)
       const columns = () => this.#visibleFields(e, caller).filter((f) => f.name !== "id" && (f.role || f.filter)).slice(0, 6).map((f) => this.#column(f, caller))
+      // What the entity is, for every client: the kind's fixed sentence ends both descriptions; hosts read `_meta.modelapp` (spec §6).
+      const kindText = e.config.kind !== undefined ? ` ${kindSentence(e.config.kind)}` : ""
+      const entityMeta = { [META_KEY]: { entity: e.name, ...(e.config.kind !== undefined ? { kind: e.config.kind } : {}) } }
       reg(
         e.tools.list.name,
         {
           title: plural,
-          description: `${t(e.config.description) || plural}. Lists ${plural.toLowerCase()} with filters, sort and paging (pass \`cursor\` from the previous result's \`next\`).`,
+          description: `${t(e.config.description) || plural}. Lists ${plural.toLowerCase()} with filters, sort and paging (pass \`cursor\` from the previous result's \`next\`).${kindText}`,
           inputSchema: z.strictObject({ ...this.#listFiltersShape(e, caller), cursor: z.string().optional(), limit: z.number().int().min(1).max(100).optional() }),
           annotations: { title: plural, ...read },
-          _meta: this.#ui(this.#viewUri()),
+          _meta: { ...this.#ui(this.#viewUri()), ...entityMeta },
         },
         guard(e.tools.list.name, async (args, mctx) => {
           const ctx = ctxOf(mctx)
@@ -1001,10 +1079,10 @@ export class AppServer {
         e.tools.get.name,
         {
           title: label,
-          description: `One ${label.toLowerCase()} by id, with the actions available on it.`,
+          description: `One ${label.toLowerCase()} by id, with the actions available on it.${kindText}`,
           inputSchema: z.object({ id: z.string().describe(`The ${label.toLowerCase()}'s id`) }),
           annotations: { title: label, ...read },
-          _meta: this.#ui(e.config.view ? this.#entityViewUri(e.name) : this.#viewUri()),
+          _meta: { ...this.#ui(e.config.view ? this.#entityViewUri(e.name) : this.#viewUri()), ...entityMeta },
         },
         guard(e.tools.get.name, async (args, mctx) => {
           const ctx = ctxOf(mctx)
@@ -1026,30 +1104,41 @@ export class AppServer {
 
     // search and fetch (ChatGPT's conventions), over searchable entities.
     const searchable = [...this.#entities.values()].filter((e) => this.#canSee(e, caller) && this.#visibleFields(e, caller).some((f) => f.search))
+    // The kinds search can be limited to (spec §6): those of the searchable entities.
+    const searchKinds = [...new Set(searchable.flatMap((e) => kindsOf(e.config.kind)))]
     if (searchable.length) {
       reg(
         "search",
         {
           title: t({ en: "Search", it: "Cerca" }),
-          description: `Searches ${searchable.map((e) => t(e.config.plural ?? e.config.label)).join(", ")} by text. Returns ids (URIs) to pass to fetch.`,
-          inputSchema: z.object({ query: z.string().min(1).max(200), limit: z.number().int().min(1).max(50).optional() }),
+          description: `Searches ${searchable.map((e) => t(e.config.plural ?? e.config.label)).join(", ")} by text. Returns ids (URIs) to pass to fetch.${searchKinds.length ? ` \`kind\` limits it to records of one kind; each result says its kind.` : ""}`,
+          inputSchema: z.object({
+            query: z.string().min(1).max(200),
+            ...(searchKinds.length ? { kind: z.enum(searchKinds as [string, ...string[]]).optional().describe("Only records of this kind") } : {}),
+            limit: z.number().int().min(1).max(50).optional(),
+          }),
           annotations: { ...read },
           _meta: this.#ui(this.#viewUri()),
         },
         guard("search", async (args, mctx) => {
           const ctx = ctxOf(mctx)
           const limit = typeof args.limit === "number" ? args.limit : 10
+          const only = typeof args.kind === "string" ? args.kind : undefined
           const results: Record<string, unknown>[] = []
           const forModel: Record<string, unknown>[] = []
           const pointers: string[] = []
           for (const e of searchable) {
+            if (only && !kindsOf(e.config.kind).includes(only)) continue
             const out = await this.#list(e, caller, ctx, this.#queryOf(e, caller, { query: String(args.query), limit }))
             for (const row of out.rows) {
+              // One kind per record: the record's own (its `by` field has no permission, so the caller sees it).
+              const kind = kindOfRecord(e.config.kind, row)
+              if (only && kind !== only) continue
               const uri = this.uri(e.name, String(row.id))
               const card = this.#recordCard(e, row, caller)
               const marked = this.#markCard(e, card, `/results/${results.length}`, pointers)
-              results.push({ id: uri, entity: e.name, entityLabel: this.#t(caller, e.config.label), ...card, url: uri })
-              forModel.push({ id: uri, title: marked.title, url: uri })
+              results.push({ id: uri, entity: e.name, entityLabel: this.#t(caller, e.config.label), ...(kind ? { kind } : {}), ...card, url: uri })
+              forModel.push({ id: uri, title: marked.title, url: uri, ...(kind ? { kind } : {}) })
             }
           }
           return { content: text(JSON.stringify({ results: forModel })), structuredContent: { results, view: { kind: "search" } }, ...this.#marks(pointers) }
@@ -1076,8 +1165,9 @@ export class AppServer {
           const refs = entity ? await this.#refs(entity, [record], caller, ctx, pointers) : {}
           const marked = entity ? this.#named(entity, this.#markRow(entity, record, "/record", pointers), refs) : this.#markResolved(r, "", pointers)
           const title = "title" in r ? r.title : ""
+          const kind = entity ? kindOfRecord(entity.config.kind, record) : null
           return {
-            content: text(JSON.stringify({ id: r.uri, title: entity ? this.#markCard(entity, { title }, "", []).title : title, text: JSON.stringify(marked), url: r.uri, metadata: { type: parsed.type } })),
+            content: text(JSON.stringify({ id: r.uri, title: entity ? this.#markCard(entity, { title }, "", []).title : title, text: JSON.stringify(marked), url: r.uri, metadata: { type: parsed.type, ...(kind ? { kind } : {}) } })),
             structuredContent: entity ? { entity: entity.name, uri: r.uri, record, refs, view: r.template === "record" ? { ...("view" in r ? r.view : {}), title: this.#t(caller, entity.config.label) } : undefined } : { ...r, view: { kind: "fragment", title } },
             ...this.#marks(pointers),
           }
@@ -1270,6 +1360,7 @@ export class AppServer {
         ...(f.enum ? { enum: f.enum } : {}),
         ...(f.role ? { role: f.role } : {}),
         label: L(f.label ?? f.name)!,
+        ...(f.as !== undefined ? { as: f.as } : {}),
         ...(f.ref ? { ref: f.ref } : {}),
         ...(f.permission ? { permission: f.permission } : {}),
         ...(f.filter ? { filter: true } : {}),
@@ -1286,6 +1377,7 @@ export class AppServer {
         plural: L(e.config.plural ?? e.config.label)!,
         ...(e.config.description ? { description: L(e.config.description) } : {}),
         ...(e.config.icon ? { icon: e.config.icon } : {}),
+        ...(e.config.kind !== undefined ? { kind: e.config.kind } : {}),
         ...perm(e.config.permission, `entity "${e.name}"`),
         schema: plainSchema(jsonSchemaOf(e.config.schema)) as Record<string, unknown>,
         fields,
@@ -1373,6 +1465,7 @@ export class AppServer {
       view: this.#viewUri(),
       resolveTool: RESOLVE_TOOL,
       ...([...this.#entities.values()].some((e) => e.fields.some((f) => f.search)) ? { searchTool: "search" } : {}),
+      ...(Object.keys(this.#kinds).length ? { kinds: Object.fromEntries(Object.entries(this.#kinds).map(([k, d]) => [k, { label: L(d.label)!, properties: d.properties }])) } : {}),
       entities,
       actions,
       pages,

@@ -47,13 +47,17 @@ const companySchema = z.object({
     filter: true,
     labels: { manufacturing: { en: "Manufacturing", it: "Manifattura" }, retail: { en: "Retail", it: "Commercio" }, services: { en: "Services", it: "Servizi" }, software: "Software" },
   }),
+  // What other apps can find the company by (kind organization): its VAT number, an exact filter, and its website.
+  vatId: z.string().optional().meta({ as: "vatID", label: { en: "VAT number", it: "Partita IVA" }, filter: true }),
+  website: z.string().optional().meta({ as: "url", label: { en: "Website", it: "Sito web" } }),
 })
 
 const contactSchema = z.object({
   id: z.string(),
   name: z.string().meta({ role: "title", label: { en: "Name", it: "Nome" }, search: true, sort: true, untrusted: true }),
-  email: z.string().meta({ role: "subtitle", label: "Email", search: true, untrusted: true }),
-  company: ref("company").meta({ label: { en: "Company", it: "Azienda" }, filter: true }),
+  // Kind person: the email is its key, an exact filter (hosts find the same person in other apps by it).
+  email: z.string().meta({ role: "subtitle", as: "email", label: "Email", filter: true, search: true, untrusted: true }),
+  company: ref("company").meta({ as: "worksFor", label: { en: "Company", it: "Azienda" }, filter: true }),
   lastCall: z.string().optional().meta({ role: "date", label: { en: "Last call", it: "Ultima chiamata" }, sort: true }),
   lastNote: z.string().optional().meta({ label: { en: "Last note", it: "Ultima nota" }, untrusted: true }),
 })
@@ -127,6 +131,7 @@ export function createCrmApp({ auth, store = new SqlStore((text, params) => data
         plural: { en: "Companies", it: "Aziende" },
         description: { en: "A customer or prospect company", it: "Un'azienda cliente o potenziale" },
         icon: "building-2",
+        kind: "organization",
         schema: companySchema,
         get: async (id, ctx) => getCompany(await tenant(ctx), id),
         list: async (q, ctx) => listCompanies(await tenant(ctx), q),
@@ -136,6 +141,7 @@ export function createCrmApp({ auth, store = new SqlStore((text, params) => data
         plural: { en: "Contacts", it: "Contatti" },
         description: { en: "A person at a company", it: "Una persona di un'azienda" },
         icon: "user",
+        kind: "person",
         schema: contactSchema,
         get: async (id, ctx) => getContact(await tenant(ctx), id),
         list: async (q, ctx) => listContacts(await tenant(ctx), q),

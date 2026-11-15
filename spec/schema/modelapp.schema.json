@@ -106,6 +106,65 @@
     "searchTool": {
       "type": "string"
     },
+    "kinds": {
+      "description": "The namespaced kinds (with a dot) this app defines (spec §3.1)",
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "A label per locale (BCP 47 → text)"
+          },
+          "properties": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "date",
+                    "address",
+                    "money"
+                  ]
+                },
+                "many": {
+                  "type": "boolean"
+                },
+                "key": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "label",
+          "properties"
+        ],
+        "additionalProperties": false
+      }
+    },
     "entities": {
       "type": "array",
       "items": {
@@ -147,6 +206,38 @@
           },
           "icon": {
             "type": "string"
+          },
+          "kind": {
+            "description": "What the entity is (spec §3.1): a kind, or one per record by an enum field",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "by": {
+                    "type": "string",
+                    "description": "A required enum field"
+                  },
+                  "map": {
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "description": "A kind for each of its values"
+                  }
+                },
+                "required": [
+                  "by",
+                  "map"
+                ],
+                "additionalProperties": false
+              }
+            ]
           },
           "permission": {
             "type": "string"
@@ -207,6 +298,10 @@
                     "type": "string"
                   },
                   "description": "A label per locale (BCP 47 → text)"
+                },
+                "as": {
+                  "description": "The property of the entity's kind this field holds (spec §3.1)",
+                  "type": "string"
                 },
                 "ref": {
                   "description": "The entity whose record id this field holds",

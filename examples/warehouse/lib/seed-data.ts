@@ -12,9 +12,20 @@ type ProductRow = [string, string, Category, Unit, number, number, number, numbe
 /** [number suffix, customer (typed in from outside), status, days ago, lines: sku×quantity …] */
 type OrderRow = [number, string, OrderStatus, number, string]
 
-export type CompanyData = { products: ProductRow[]; adjustments: [string, number, number, string][]; restocks: [string, number, number][]; orders: OrderRow[] }
+/**
+ * A product's GTIN-13 in the restricted-circulation range (GS1 prefix 20–29: in-store numbers, never a real
+ * product's): `prefix` (4 digits, one per company), the product's position, and the check digit.
+ */
+export function demoGtin(prefix: string, index: number): string {
+  const body = `${prefix}${String(index + 1).padStart(8, "0")}`
+  const sum = [...body].reduce((total, d, i) => total + Number(d) * (i % 2 ? 3 : 1), 0)
+  return `${body}${(10 - (sum % 10)) % 10}`
+}
+
+export type CompanyData = { gtinPrefix: string; products: ProductRow[]; adjustments: [string, number, number, string][]; restocks: [string, number, number][]; orders: OrderRow[] }
 
 export const AURORA: CompanyData = {
+  gtinPrefix: "2001",
   products: [
     ["SCR-440", "Wood screws 4×40 mm (box of 200)", "fasteners", "box", 6.9, 3.1, 15, 60, "38:32"],
     ["SCR-660", "Wood screws 6×60 mm (box of 100)", "fasteners", "box", 8.5, 3.9, 10, 15, ""],
@@ -72,6 +83,7 @@ export const AURORA: CompanyData = {
 }
 
 export const HUMMINGBIRD: CompanyData = {
+  gtinPrefix: "2002",
   products: [
     ["CND-LAV", "Soy candle, lavender", "household", "pcs", 14, 5.5, 10, 30, "20:6 9:8"],
     ["SOP-OLV", "Olive oil soap bar", "household", "pcs", 5.5, 1.9, 20, 60, "25:12 11:15 3:10"],

@@ -36,13 +36,15 @@ import {
 const productSchema = z.object({
   id: z.string(),
   name: z.string().meta({ role: "title", label: { en: "Name", it: "Nome" }, search: true, sort: true }),
-  sku: z.string().meta({ role: "subtitle", label: "SKU", search: true, sort: true }),
+  // Kind product: the SKU, the GTIN (its key: other apps find the same product by it, an exact filter), the price.
+  sku: z.string().meta({ role: "subtitle", as: "sku", label: "SKU", search: true, sort: true }),
+  gtin: z.string().optional().meta({ as: "gtin", label: "GTIN", filter: true }),
   category: z.enum(CATEGORIES).meta({ label: { en: "Category", it: "Categoria" }, filter: true, labels: CATEGORY_LABELS }),
   unit: z.enum(UNITS).meta({ label: { en: "Unit", it: "Unità" }, labels: UNIT_LABELS }),
   stock: z.number().int().meta({ label: { en: "In stock", it: "Giacenza" }, sort: true, filter: true }),
   reorderLevel: z.number().int().meta({ label: { en: "Reorder level", it: "Scorta minima" } }),
   stockStatus: z.enum(STOCK_STATUSES).meta({ role: "status", label: { en: "Stock", it: "Disponibilità" }, filter: true, labels: STOCK_STATUS_LABELS, tones: { ok: "success", low: "warning", out: "danger" } }),
-  salePrice: z.number().meta({ role: "amount", currency: "EUR", label: { en: "Sale price", it: "Prezzo di vendita" }, sort: true }),
+  salePrice: z.number().meta({ role: "amount", as: "price", currency: "EUR", label: { en: "Sale price", it: "Prezzo di vendita" }, sort: true }),
   // What the shop pays: admins only, everywhere (rows, records, filters, sorts, search).
   purchaseCost: z.number().meta({ currency: "EUR", label: { en: "Purchase cost", it: "Costo d'acquisto" }, sort: true, filter: true, permission: "products.cost" }),
 })
@@ -63,12 +65,13 @@ const movementSchema = z.object({
 
 const orderSchema = z.object({
   id: z.string(),
-  number: z.string().meta({ role: "title", label: { en: "Number", it: "Numero" }, search: true, sort: true }),
+  // Kind order: number, date, customer and total are its orderNumber, orderDate, customer and totalPrice.
+  number: z.string().meta({ role: "title", as: "orderNumber", label: { en: "Number", it: "Numero" }, search: true, sort: true }),
   // Typed in from outside (a phone call, an email): data, never instructions.
-  customer: z.string().meta({ role: "subtitle", label: { en: "Customer", it: "Cliente" }, search: true, sort: true, untrusted: true }),
+  customer: z.string().meta({ role: "subtitle", as: "customer", label: { en: "Customer", it: "Cliente" }, search: true, sort: true, untrusted: true }),
   status: z.enum(ORDER_STATUSES).meta({ role: "status", label: { en: "Status", it: "Stato" }, filter: true, labels: ORDER_STATUS_LABELS, tones: { draft: "neutral", confirmed: "info", shipped: "success", cancelled: "danger" } }),
-  date: z.string().meta({ role: "date", label: { en: "Date", it: "Data" }, sort: true, filter: true }),
-  total: z.number().meta({ role: "amount", currency: "EUR", label: { en: "Total", it: "Totale" }, sort: true }),
+  date: z.string().meta({ role: "date", as: "orderDate", label: { en: "Date", it: "Data" }, sort: true, filter: true }),
+  total: z.number().meta({ role: "amount", as: "totalPrice", currency: "EUR", label: { en: "Total", it: "Totale" }, sort: true }),
   lineCount: z.number().int().meta({ label: { en: "Lines", it: "Righe" } }),
   confirmedAt: z.string().optional().meta({ label: { en: "Goods out", it: "Merce uscita" } }),
   lines: z
@@ -140,6 +143,7 @@ export function createWarehouseApp({ auth, store = new SqlStore((text, params) =
         plural: { en: "Products", it: "Prodotti" },
         description: { en: "An article the shop keeps in stock", it: "Un articolo che il negozio tiene a magazzino" },
         icon: "package",
+        kind: "product",
         schema: productSchema,
         permission: "products.view",
         get: (id, ctx) => getProduct(org(ctx), id),
@@ -160,6 +164,7 @@ export function createWarehouseApp({ auth, store = new SqlStore((text, params) =
         plural: { en: "Orders", it: "Ordini" },
         description: { en: "A customer's order: draft, confirmed (goods out), shipped or cancelled", it: "L'ordine di un cliente: bozza, confermato (merce uscita), spedito o annullato" },
         icon: "receipt",
+        kind: "order",
         schema: orderSchema,
         permission: "orders.view",
         get: (id, ctx) => getOrder(org(ctx), id),

@@ -3,7 +3,7 @@
     {
       "name": "company_list",
       "title": "Companies",
-      "description": "A customer or prospect company. Lists companies with filters, sort and paging (pass `cursor` from the previous result's `next`).",
+      "description": "A customer or prospect company. Lists companies with filters, sort and paging (pass `cursor` from the previous result's `next`). Kind: organization.",
       "annotations": {
         "title": "Companies",
         "readOnlyHint": true,
@@ -106,6 +106,28 @@
               }
             ]
           },
+          "vatId": {
+            "description": "VAT number: exact vatID; a value or { in: [...] }",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "in": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "in"
+                ]
+              }
+            ]
+          },
           "query": {
             "description": "Text to search for",
             "type": "string",
@@ -140,7 +162,7 @@
     {
       "name": "company_get",
       "title": "Company",
-      "description": "One company by id, with the actions available on it.",
+      "description": "One company by id, with the actions available on it. Kind: organization.",
       "annotations": {
         "title": "Company",
         "readOnlyHint": true,
@@ -166,7 +188,7 @@
     {
       "name": "contact_list",
       "title": "Contacts",
-      "description": "A person at a company. Lists contacts with filters, sort and paging (pass `cursor` from the previous result's `next`).",
+      "description": "A person at a company. Lists contacts with filters, sort and paging (pass `cursor` from the previous result's `next`). Kind: person.",
       "annotations": {
         "title": "Contacts",
         "readOnlyHint": true,
@@ -179,8 +201,32 @@
         "type": "object",
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
+          "email": {
+            "description": "Email: exact email; a value or { in: [...] }",
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "email"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "in": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "format": "email"
+                    }
+                  }
+                },
+                "required": [
+                  "in"
+                ]
+              }
+            ]
+          },
           "company": {
-            "description": "Company: a value, { in: [...] }, or a range { gte, lte }",
+            "description": "Company (worksFor): a value, { in: [...] }, or a range { gte, lte }",
             "anyOf": [
               {
                 "type": "string"
@@ -247,7 +293,7 @@
     {
       "name": "contact_get",
       "title": "Contact",
-      "description": "One contact by id, with the actions available on it.",
+      "description": "One contact by id, with the actions available on it. Kind: person.",
       "annotations": {
         "title": "Contact",
         "readOnlyHint": true,
@@ -474,7 +520,7 @@
     {
       "name": "search",
       "title": "Search",
-      "description": "Searches Companies, Contacts, Deals by text. Returns ids (URIs) to pass to fetch.",
+      "description": "Searches Companies, Contacts, Deals by text. Returns ids (URIs) to pass to fetch. `kind` limits it to records of one kind; each result says its kind.",
       "annotations": {
         "readOnlyHint": true,
         "idempotentHint": true,
@@ -490,6 +536,14 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 200
+          },
+          "kind": {
+            "description": "Only records of this kind",
+            "type": "string",
+            "enum": [
+              "organization",
+              "person"
+            ]
           },
           "limit": {
             "type": "integer",
@@ -987,6 +1041,28 @@
               }
             ]
           },
+          "vatId": {
+            "description": "VAT number: exact vatID; a value or { in: [...] }",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "in": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "in"
+                ]
+              }
+            ]
+          },
           "query": {
             "description": "Text to search for",
             "type": "string",
@@ -1034,8 +1110,32 @@
         "type": "object",
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
+          "email": {
+            "description": "Email: exact email; a value or { in: [...] }",
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "email"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "in": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "format": "email"
+                    }
+                  }
+                },
+                "required": [
+                  "in"
+                ]
+              }
+            ]
+          },
           "company": {
-            "description": "Company: a value, { in: [...] }, or a range { gte, lte }",
+            "description": "Company (worksFor): a value, { in: [...] }, or a range { gte, lte }",
             "anyOf": [
               {
                 "type": "string"
@@ -1281,6 +1381,7 @@
           "it": "Un'azienda cliente o potenziale"
         },
         "icon": "building-2",
+        "kind": "organization",
         "schema": {
           "type": "object",
           "properties": {
@@ -1301,6 +1402,12 @@
                 "services",
                 "software"
               ]
+            },
+            "vatId": {
+              "type": "string"
+            },
+            "website": {
+              "type": "string"
             }
           },
           "required": [
@@ -1377,6 +1484,27 @@
                 "en": "Software"
               }
             }
+          },
+          {
+            "name": "vatId",
+            "type": "string",
+            "required": false,
+            "label": {
+              "en": "VAT number",
+              "it": "Partita IVA"
+            },
+            "as": "vatID",
+            "filter": true
+          },
+          {
+            "name": "website",
+            "type": "string",
+            "required": false,
+            "label": {
+              "en": "Website",
+              "it": "Sito web"
+            },
+            "as": "url"
           }
         ],
         "tools": {
@@ -1406,6 +1534,7 @@
           "it": "Una persona di un'azienda"
         },
         "icon": "user",
+        "kind": "person",
         "schema": {
           "type": "object",
           "properties": {
@@ -1467,6 +1596,8 @@
             "label": {
               "en": "Email"
             },
+            "as": "email",
+            "filter": true,
             "search": true,
             "untrusted": true
           },
@@ -1478,6 +1609,7 @@
               "en": "Company",
               "it": "Azienda"
             },
+            "as": "worksFor",
             "ref": "company",
             "filter": true
           },
@@ -2178,6 +2310,28 @@
                 }
               ]
             },
+            "vatId": {
+              "description": "VAT number: exact vatID; a value or { in: [...] }",
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "in": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "in"
+                  ]
+                }
+              ]
+            },
             "query": {
               "description": "Text to search for",
               "type": "string",
@@ -2222,8 +2376,32 @@
         "params": {
           "type": "object",
           "properties": {
+            "email": {
+              "description": "Email: exact email; a value or { in: [...] }",
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "email"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "in": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "format": "email"
+                      }
+                    }
+                  },
+                  "required": [
+                    "in"
+                  ]
+                }
+              ]
+            },
             "company": {
-              "description": "Company: a value, { in: [...] }, or a range { gte, lte }",
+              "description": "Company (worksFor): a value, { in: [...] }, or a range { gte, lte }",
               "anyOf": [
                 {
                   "type": "string"

@@ -2,7 +2,8 @@ import { readFileSync } from "node:fs"
 
 import { Ajv2020 } from "ajv/dist/2020.js"
 
-import { MANIFEST_PATH, PROTOCOL_ID, URI_SCHEME } from "./protocol"
+import { entityKindProblems, keyOf, kindDefinitionProblems, kindNameProblem, kindOfRecord, kindSentence, kindsOf, normaliseKey, propertyOf, valueProblem, type EntityKind, type KindDef, type KindField } from "./kinds"
+import { MANIFEST_PATH, META_KEY, PROTOCOL_ID, URI_SCHEME } from "./protocol"
 
 /**
  * CONFORMANCE (spec §8): what any app must do, checked from outside over
@@ -32,6 +33,7 @@ export type Options = {
 
 type Tool = { name: string; title?: string; description?: string; inputSchema?: Record<string, unknown>; annotations?: Record<string, unknown>; _meta?: Record<string, unknown> }
 type ToolRef = { name: string; plain: boolean }
+type ManifestField = { name: string; type: string; required: boolean; enum?: string[]; ref?: string; permission?: string; role?: string; sort?: boolean; filter?: boolean; search?: boolean; as?: string; currency?: string }
 type Manifest = {
   specVersion: string
   name: string
@@ -39,7 +41,8 @@ type Manifest = {
   auth: { resource?: string; authorizationServers: string[] }
   resolveTool: string
   searchTool?: string
-  entities: { name: string; permission?: string; fields: { name: string; ref?: string; permission?: string; role?: string; sort?: boolean }[]; tools: { list: ToolRef; get: ToolRef } }[]
+  kinds?: Record<string, KindDef>
+  entities: { name: string; kind?: EntityKind; permission?: string; schema: { properties?: Record<string, { items?: { type?: unknown } }> }; fields: ManifestField[]; tools: { list: ToolRef; get: ToolRef }; searchable: boolean }[]
   actions: { name: string; entity?: string; readOnly: boolean; confirm: string; permission?: string; tool: ToolRef }[]
   pages: { name: string; kind: string; entity?: string; columns?: string[]; permission?: string; tool: ToolRef; view?: string; url?: string }[]
   fragments: { type: string; entity?: string; template?: string; view?: string; permission?: string; tool: ToolRef; actions?: string[] }[]
@@ -48,6 +51,27 @@ type Manifest = {
 }
 
 const TOOL_NAME = /^[a-zA-Z0-9_.-]{1,64}$/
+
+/** A field as the kind rules read it, from the manifest (an array's item type from the entity's JSON Schema). */
+const kindField = (f: ManifestField, schema: Manifest["entities"][number]["schema"]): KindField => {
+  const items = schema?.properties?.[f.name]?.items?.type
+  return { name: f.name, type: f.type, required: f.required, ...(f.enum ? { enum: f.enum } : {}), ...(f.permission ? { permission: f.permission } : {}), ...(f.as !== undefined ? { as: f.as } : {}), ...(f.filter ? { filter: true } : {}), ...(f.currency ? { currency: f.currency } : {}), ...(f.type === "array" && typeof items === "string" ? { itemType: items } : {}) }
+}
+
+/** JSON with keys sorted at every depth: two values compared whatever their key order. */
+const canonical = (v: unknown): string => JSON.stringify(v, (_k, x) => (x && typeof x === "object" && !Array.isArray(x) ? Object.fromEntries(Object.entries(x).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) : x))
+
+const UNTRUSTED = /^<untrusted>([\s\S]*)<\/untrusted>$/
+/** A value of a result's text as the app sent it: outsiders' text unwrapped (spec §7 says exactly how it is wrapped). */
+function unwrap(value: unknown): unknown {
+  if (typeof value === "string") {
+    const m = UNTRUSTED.exec(value)
+    return m ? m[1]!.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&") : value
+  }
+  if (Array.isArray(value)) return value.map(unwrap)
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, unwrap(v)]))
+  return value
+}
 
 export async function checkApp(options: Options): Promise<Report> {
   const doFetch = options.fetch ?? ((r: Request) => fetch(r))
@@ -131,6 +155,24 @@ export async function checkApp(options: Options): Promise<Report> {
   for (const a of manifest.agents) for (const t of a.tools) if (!known.has(t)) problems.push(`agent ${a.name}: unknown tool ${t}`)
   for (const r of refs) if (r.kind === "write" && r.tool.plain && !manifest.actions.find((a) => a.tool.name === r.tool.name)) problems.push(`${r.where}: only actions write`)
   check("manifest.references", "names in the manifest refer to things it declares; tool names are unique and valid", problems)
+
+  // 2b. Kinds (spec §3.1): neutral for an app that declares none.
+  const kinded = manifest.entities.filter((e) => e.kind !== undefined || e.fields.some((f) => f.as !== undefined))
+  const noKinds = !kinded.length && !Object.keys(manifest.kinds ?? {}).length
+  if (noKinds) {
+    skip("kinds.known", "every kind is one of this specification's or a well-formed namespaced kind", "the app declares no kinds")
+    skip("kinds.properties", "every `as` is a property of the entity's kind with a matching type; single-valued ones appear once; required ones exist", "the app declares no kinds")
+  } else {
+    const known: string[] = kindDefinitionProblems(manifest.kinds).filter((p) => p.includes("not a namespaced kind"))
+    for (const e of manifest.entities) for (const k of e.kind === undefined ? [] : typeof e.kind === "string" ? [e.kind] : Object.values(e.kind.map ?? {})) {
+      const p = kindNameProblem(k)
+      if (p) known.push(`entity ${e.name}: ${p}`)
+    }
+    check("kinds.known", "every kind is one of this specification's or a well-formed namespaced kind", [...new Set(known)])
+    const props: string[] = kindDefinitionProblems(manifest.kinds).filter((p) => !p.includes("not a namespaced kind"))
+    for (const e of manifest.entities) props.push(...entityKindProblems(`entity ${e.name}`, e.kind, e.fields.map((f) => kindField(f, e.schema)), manifest.kinds, { names: false }))
+    check("kinds.properties", "every `as` is a property of the entity's kind with a matching type; single-valued ones appear once; required ones exist", props)
+  }
 
   // 3. MCP authorization: no parallel sign-in.
   const mcpUrl = new URL(manifest.mcp.url, `${origin}/`).toString()
@@ -216,6 +258,132 @@ export async function checkApp(options: Options): Promise<Report> {
     if (!refused.error && refused.result?.isError !== true) sortProblems.push(`${tool.name}: accepted a sort key that is not a sortable field`)
   }
   check("mcp.sort", "a list sorts only by the fields the manifest declares sortable", sortProblems)
+
+  // 4c. Kinds over MCP (spec §3.1, §6): neutral for an app without kinds.
+  /** A tool call's text, parsed, outsiders' text unwrapped (what a model reads, as the app meant it). */
+  const call = async (name: string, args: Record<string, unknown>): Promise<{ error?: string; data?: Record<string, unknown>; result?: Record<string, unknown> }> => {
+    const r = await rpc("tools/call", { name, arguments: args }, token)
+    if (r.error) return { error: r.error.message }
+    const result = r.result ?? {}
+    const content = (result.content as { type: string; text?: string }[] | undefined)?.[0]?.text ?? ""
+    if (result.isError) return { error: content || "isError", result }
+    try {
+      return { data: unwrap(JSON.parse(content)) as Record<string, unknown>, result }
+    } catch {
+      return { error: `${name}: the result's text is not JSON`, result }
+    }
+  }
+  const rowsOf = async (e: Manifest["entities"][number], args: Record<string, unknown> = {}) => {
+    const r = await call(e.tools.list.name, { limit: 25, ...args })
+    return { error: r.error, rows: ((r.data?.rows ?? []) as Record<string, unknown>[]).filter((x) => x && typeof x === "object") }
+  }
+  const kindTools = manifest.entities.filter((e) => e.kind !== undefined)
+  if (!kindTools.length) skip("kinds.tools", "entity tools name their kind (description, _meta); search takes `kind` and filters by it", "no entity has a kind")
+  else {
+    const p: string[] = []
+    for (const e of kindTools) {
+      for (const ref of [e.tools.list, e.tools.get]) {
+        const t = byName.get(ref.name)
+        if (!t) continue
+        if (!(t.description ?? "").endsWith(kindSentence(e.kind!))) p.push(`${t.name}: the description doesn't end with «${kindSentence(e.kind!)}»`)
+        if (canonical(t._meta?.[META_KEY]) !== canonical({ entity: e.name, kind: e.kind })) p.push(`${t.name}: _meta.${META_KEY} is not { entity: "${e.name}", kind }`)
+      }
+    }
+    const search = manifest.searchTool ? byName.get(manifest.searchTool) : undefined
+    const searchable = kindTools.filter((e) => e.searchable && byName.has(e.tools.list.name))
+    if (search && searchable.length) {
+      const offered = ((search.inputSchema?.properties as Record<string, { enum?: unknown[] }> | undefined)?.kind?.enum ?? []).map(String)
+      for (const k of new Set(searchable.flatMap((e) => kindsOf(e.kind)))) if (!offered.includes(k)) p.push(`${search.name}: \`kind\` doesn't offer ${k}`)
+      for (const e of searchable) {
+        const title = e.fields.find((f) => f.role === "title")
+        const { rows } = await rowsOf(e, { limit: 5 })
+        const row = rows.find((r) => typeof r[title?.name ?? ""] === "string" && (r[title!.name] as string).trim())
+        const kind = row ? kindOfRecord(e.kind, row) : null
+        if (!row || !kind) continue
+        const query = String(row[title!.name]).trim().slice(0, 200)
+        const found = await call(search.name, { query, kind })
+        if (found.error) {
+          p.push(`${search.name} with kind ${kind}: ${found.error}`)
+          continue
+        }
+        const results = (found.data?.results ?? []) as { id?: string; kind?: string }[]
+        for (const r of results) if (r.kind !== kind) p.push(`${search.name} with kind ${kind}: result ${r.id} has kind ${String(r.kind)}`)
+        if (title?.search && !results.some((r) => r.id === row.uri)) p.push(`${search.name} with kind ${kind}: «${query}» doesn't find ${String(row.uri)}`)
+        const all = await call(search.name, { query })
+        for (const r of (all.data?.results ?? []) as { id?: string; kind?: string }[]) {
+          const owner = manifest.entities.find((x) => typeof r.id === "string" && r.id.startsWith(`${URI_SCHEME}://${manifest.name}/${x.name}/`))
+          if (owner?.kind !== undefined && !kindsOf(owner.kind).includes(String(r.kind))) p.push(`${search.name}: result ${r.id} doesn't say its kind`)
+        }
+      }
+    }
+    check("kinds.tools", "entity tools name their kind (description, _meta); search takes `kind` and filters by it", p)
+  }
+
+  const keyed = manifest.entities.flatMap((e) => e.fields.flatMap((f) => {
+    const how = f.as ? keyOf(f.as, kindsOf(e.kind), manifest.kinds) : null
+    return how ? [{ e, f, how }] : []
+  }))
+  if (!keyed.length) skip("kinds.keys", "a key is an exact list filter, compared normalised", "no field holds a key of its kind")
+  else {
+    const p: string[] = []
+    let tried = 0
+    for (const { e, f, how } of keyed) {
+      if (!f.filter) {
+        p.push(`${e.name}.${f.name}: a key (${f.as}) that is not a list filter`)
+        continue
+      }
+      const tool = byName.get(e.tools.list.name)
+      if (!tool) continue
+      if (!(tool.inputSchema?.properties as Record<string, unknown> | undefined)?.[f.name]) continue // a field this caller can't see
+      const { rows, error } = await rowsOf(e)
+      if (error) {
+        p.push(`${tool.name}: ${error}`)
+        continue
+      }
+      const values = (r: Record<string, unknown>) => (Array.isArray(r[f.name]) ? (r[f.name] as unknown[]) : [r[f.name]]).filter((v): v is string => typeof v === "string" && v !== "")
+      const row = rows.find((r) => values(r).some((v) => normaliseKey(v, how) !== null))
+      if (!row) continue
+      const value = values(row).find((v) => normaliseKey(v, how) !== null)!
+      const wanted = normaliseKey(value, how)!
+      // In another letter case where case doesn't count (email, vatID): the app must still find it.
+      const asked = how === "lowercase" ? value.toUpperCase() : how === "uppercase-no-spaces" ? value.toLowerCase() : value
+      tried++
+      const found = await rowsOf(e, { [f.name]: asked })
+      if (found.error) {
+        p.push(`${tool.name} { ${f.name}: ${JSON.stringify(asked)} }: ${found.error}`)
+        continue
+      }
+      if (!found.rows.some((r) => r.uri === row.uri)) p.push(`${tool.name} { ${f.name}: ${JSON.stringify(asked)} }: ${String(row.uri)} is not found by its own ${f.as}`)
+      for (const r of found.rows) if (!values(r).some((v) => normaliseKey(v, how) === wanted)) p.push(`${tool.name} { ${f.name}: ${JSON.stringify(asked)} }: ${String(r.uri)} holds another ${f.as}`)
+    }
+    if (!tried && !p.length) skip("kinds.keys", "a key is an exact list filter, compared normalised", "no listed record holds a key value to try")
+    else check("kinds.keys", "a key is an exact list filter, compared normalised", p)
+  }
+
+  const described = manifest.entities.filter((e) => e.fields.some((f) => f.as !== undefined))
+  if (!described.length) skip("kinds.values", "sampled records hold values of the stated form (email, vatID, gtin, dates, address, numbers)", "no field says which property it holds")
+  else {
+    const p: string[] = []
+    for (const e of described) {
+      if (!byName.has(e.tools.list.name)) continue
+      const { rows, error } = await rowsOf(e)
+      if (error) {
+        p.push(`${e.tools.list.name}: ${error}`)
+        continue
+      }
+      for (const f of e.fields) {
+        const def = f.as ? propertyOf(f.as, kindsOf(e.kind), manifest.kinds) : undefined
+        if (!def) continue
+        for (const r of rows) for (const raw of Array.isArray(r[f.name]) && f.type === "array" ? (r[f.name] as unknown[]) : [r[f.name]]) {
+          // A reference reads as { id, title } (a person as { id, name }): its value is the id.
+          const v = f.type !== "object" && raw && typeof raw === "object" && !Array.isArray(raw) && "id" in raw ? (raw as { id: unknown }).id : raw
+          const why = valueProblem(f.as!, def, v)
+          if (why) p.push(`${String(r.uri)} ${f.name} (${f.as}): ${JSON.stringify(v)} is ${why}`)
+        }
+      }
+    }
+    check("kinds.values", "sampled records hold values of the stated form (email, vatID, gtin, dates, address, numbers)", p)
+  }
 
   // 5. Views: every ui:// a tool names is an MCP Apps document.
   const viewProblems: string[] = []

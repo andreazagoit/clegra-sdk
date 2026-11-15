@@ -1,7 +1,7 @@
 import { getAuth } from "./auth"
 import { sql, transaction, type Sql } from "./db"
 import { COMPANIES, DEMO_USERS, demoPassword, type CompanySlug } from "./demo"
-import { AURORA, HUMMINGBIRD, type CompanyData } from "./seed-data"
+import { AURORA, demoGtin, HUMMINGBIRD, type CompanyData } from "./seed-data"
 
 /**
  * The demo data, idempotent: run it as often as you like (`npm run db:seed`).
@@ -34,11 +34,11 @@ export async function seedCompany(orgId: string, code: string, data: CompanyData
         [id, orgId, productId(code, sku), kind, quantity, occurredAt, note, user, order],
       )
 
-    for (const [sku, name, category, unit, sale, cost, reorder, opening, outs] of data.products) {
+    for (const [index, [sku, name, category, unit, sale, cost, reorder, opening, outs]] of data.products.entries()) {
       price.set(sku, sale)
       await tx(
-        `INSERT INTO product (id, organization_id, sku, name, category, unit, sale_price, purchase_cost, reorder_level) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT DO NOTHING`,
-        [productId(code, sku), orgId, sku, name, category, unit, sale, cost, reorder],
+        `INSERT INTO product (id, organization_id, sku, name, category, unit, sale_price, purchase_cost, reorder_level, gtin) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT DO NOTHING`,
+        [productId(code, sku), orgId, sku, name, category, unit, sale, cost, reorder, demoGtin(data.gtinPrefix, index)],
       )
       await move(`mv_${code}_open_${keyOf(sku)}`, sku, "in", opening, at(63, n++), "Opening stock", people.admin)
       let i = 0

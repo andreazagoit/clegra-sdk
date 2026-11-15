@@ -18,6 +18,8 @@ export type Tone = (typeof TONES)[number]
 export type FieldMeta = {
   role?: Role
   label?: Label
+  /** The property of the entity's kind this field holds (spec §3.1): `email`, `vatID`, `startDate`… */
+  as?: string
   ref?: string
   permission?: string
   filter?: boolean
@@ -41,7 +43,7 @@ export type FieldInfo = {
   schema: Record<string, unknown>
 } & FieldMeta
 
-const META_KEYS = ["role", "label", "ref", "permission", "filter", "sort", "search", "labels", "tones", "currency", "untrusted"] as const
+const META_KEYS = ["role", "label", "as", "ref", "permission", "filter", "sort", "search", "labels", "tones", "currency", "untrusted"] as const
 
 /** A string field holding the id of another entity's record of this app: `ref("company")`. */
 export function ref(entity: string) {

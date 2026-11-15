@@ -1,5 +1,6 @@
 import type { z } from "zod"
 
+import type { EntityKind, PropertyDef } from "../spec/src/kinds"
 import type { Caller, Person } from "./auth"
 import type { Label } from "./labels"
 import type { FieldInfo } from "./meaning"
@@ -51,6 +52,8 @@ export type EntityConfig<S extends z.ZodObject> = {
   description?: Label
   /** A lucide icon name. */
   icon?: string
+  /** What the entity is (spec §3.1): a kind, or `{ by, map }` for one kind per record. */
+  kind?: EntityKind
   schema: S
   /** Who may see records of this entity at all. */
   permission?: string
@@ -156,6 +159,9 @@ export type AgentConfig = {
   tier?: "fast" | "standard" | "strong"
   starters?: Label[]
 }
+
+/** A namespaced kind an app defines (spec §3.1): `com.example.shipment`. */
+export type KindConfig = { label: Label; properties: Record<string, PropertyDef> }
 
 export type PermissionConfig = { label: Label; description?: Label; default?: boolean }
 

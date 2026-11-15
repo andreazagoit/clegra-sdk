@@ -16,7 +16,7 @@ export type Stage = (typeof STAGES)[number]
 export type Industry = (typeof INDUSTRIES)[number]
 export const OPEN_STAGES = ["lead", "qualified", "proposal"] as const satisfies readonly Stage[]
 
-export type Company = { id: string; name: string; city: string; industry: Industry }
+export type Company = { id: string; name: string; city: string; industry: Industry; vatId?: string; website?: string }
 export type Contact = { id: string; name: string; email: string; company: string; lastCall?: string; lastNote?: string }
 export type Deal = { id: string; name: string; company: string; stage: Stage; value: number; closeDate: string; owner: string; wonNote?: string }
 export type Call = { id: string; contact: string; person: string; note?: string; calledOn: string }
@@ -52,7 +52,8 @@ export type ListQuery = {
 }
 export type ListPage<Row> = { rows: Row[]; total: number; next?: string }
 
-type ListSpec = { orgId: PgColumn; id: PgColumn; order: PgColumn; fields: Record<string, PgColumn> }
+/** `keys`: fields compared on a normalised value (MAP kinds' keys: an email without regard to case), as SQL over the column. The filter value arrives normalised. */
+type ListSpec = { orgId: PgColumn; id: PgColumn; order: PgColumn; fields: Record<string, PgColumn>; keys?: Record<string, SQL> }
 
 const escapeLike = (text: string) => text.replace(/[\\%_]/g, (c) => `\\${c}`)
 
@@ -67,7 +68,13 @@ function listParts(spec: ListSpec, orgId: string, q: ListQuery) {
   const where: SQL[] = [eq(spec.orgId, orgId)]
   for (const [field, f] of Object.entries(q.filters ?? {})) {
     const column = columnOf(spec, field)
-    if (f !== null && typeof f === "object" && "in" in f) where.push(f.in.length ? inArray(column, f.in) : sql`false`)
+    const key = spec.keys?.[field]
+    if (key) {
+      // A key: a value or a set of values (the SDK refuses ranges), compared on the normalised column.
+      if (f !== null && typeof f === "object" && "in" in f) where.push(f.in.length ? inArray(key, f.in) : sql`false`)
+      else if (f === null || typeof f !== "object") where.push(eq(key, f))
+      else throw new CrmError("invalid", `"${field}" is matched exactly`)
+    } else if (f !== null && typeof f === "object" && "in" in f) where.push(f.in.length ? inArray(column, f.in) : sql`false`)
     else if (f !== null && typeof f === "object") {
       if (f.gte !== undefined) where.push(gte(column, f.gte))
       if (f.lte !== undefined) where.push(lte(column, f.lte))
@@ -96,8 +103,11 @@ const page = <Row>(rows: Row[], total: number, offset: number, limit: number): L
 
 // ------------------------------------------------------------------ companies
 
-const companyFields = { id: companies.id, name: companies.name, city: companies.city, industry: companies.industry }
-const companySpec: ListSpec = { orgId: companies.orgId, id: companies.id, order: companies.createdAt, fields: companyFields }
+const companyFields = { id: companies.id, name: companies.name, city: companies.city, industry: companies.industry, vatId: companies.vatId, website: companies.website }
+// A VAT number is matched upper-cased and without spaces, whatever was typed in.
+const companySpec: ListSpec = { orgId: companies.orgId, id: companies.id, order: companies.createdAt, fields: companyFields, keys: { vatId: sql`upper(replace(${companies.vatId}, ' ', ''))` } }
+type CompanyRow = { id: string; name: string; city: string; industry: Industry; vatId: string | null; website: string | null }
+const toCompany = ({ vatId, website, ...rest }: CompanyRow): Company => ({ ...rest, ...(vatId ? { vatId } : {}), ...(website ? { website } : {}) })
 
 export async function listCompanies(orgId: string, q: ListQuery): Promise<ListPage<Company>> {
   const { where, order, offset, limit } = listParts(companySpec, orgId, q)
@@ -105,12 +115,12 @@ export async function listCompanies(orgId: string, q: ListQuery): Promise<ListPa
     db().select(companyFields).from(companies).where(where).orderBy(...order).limit(limit).offset(offset),
     db().select({ n: count() }).from(companies).where(where),
   ])
-  return page(rows, total?.n ?? 0, offset, limit)
+  return page(rows.map(toCompany), total?.n ?? 0, offset, limit)
 }
 
 export async function getCompany(orgId: string, id: string): Promise<Company | null> {
   const [row] = await db().select(companyFields).from(companies).where(and(eq(companies.orgId, orgId), eq(companies.id, id)))
-  return row ?? null
+  return row ? toCompany(row) : null
 }
 
 /** Company names by id, for showing references. */
@@ -123,7 +133,8 @@ export async function companyNames(orgId: string, ids: string[]): Promise<Record
 // ------------------------------------------------------------------ contacts
 
 const contactFields = { id: contacts.id, name: contacts.name, email: contacts.email, company: contacts.companyId, lastCall: contacts.lastCallOn, lastNote: contacts.lastNote }
-const contactSpec: ListSpec = { orgId: contacts.orgId, id: contacts.id, order: contacts.createdAt, fields: contactFields }
+// An email is matched without regard to case.
+const contactSpec: ListSpec = { orgId: contacts.orgId, id: contacts.id, order: contacts.createdAt, fields: contactFields, keys: { email: sql`lower(${contacts.email})` } }
 type ContactRow = { id: string; name: string; email: string; company: string; lastCall: string | null; lastNote: string | null }
 const toContact = ({ lastCall, lastNote, ...rest }: ContactRow): Contact => ({ ...rest, ...(lastCall ? { lastCall } : {}), ...(lastNote ? { lastNote } : {}) })
 

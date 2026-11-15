@@ -24,6 +24,8 @@ export type OrderStatus = (typeof ORDER_STATUSES)[number]
 export type Product = {
   id: string
   sku: string
+  /** The barcode digits (GTIN-8/12/13/14), when the product has one. */
+  gtin?: string
   name: string
   category: Category
   unit: Unit
@@ -89,6 +91,7 @@ const PRODUCT_SPEC = (orgId: string): ListSpec => ({
   columns: {
     id: "p.id",
     sku: "p.sku",
+    gtin: "p.gtin",
     name: "p.name",
     category: "p.category",
     unit: "p.unit",
@@ -106,6 +109,7 @@ const PRODUCT_SPEC = (orgId: string): ListSpec => ({
 const toProduct = (r: Row): Product => ({
   id: String(r.id),
   sku: String(r.sku),
+  ...(r.gtin ? { gtin: String(r.gtin) } : {}),
   name: String(r.name),
   category: r.category as Category,
   unit: r.unit as Unit,

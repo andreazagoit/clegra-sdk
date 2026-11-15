@@ -5,7 +5,7 @@ import type { INDUSTRIES, STAGES } from "@/db/schema"
 export type OwnerKey = "alice" | "ben" | "emma"
 
 export type DemoData = {
-  companies: { id: string; name: string; city: string; industry: (typeof INDUSTRIES)[number] }[]
+  companies: { id: string; name: string; city: string; industry: (typeof INDUSTRIES)[number]; vatId?: string; website?: string }[]
   contacts: { id: string; name: string; email: string; company: string; lastCall?: string; lastNote?: string }[]
   deals: { id: string; name: string; company: string; stage: (typeof STAGES)[number]; value: number; closeDate: string; owner: OwnerKey }[]
 }
@@ -13,10 +13,11 @@ export type DemoData = {
 /** The main organization's pipeline; also every new workspace-host installation's starting copy. */
 export const SALES_TEAM_DATA: DemoData = {
   companies: [
-    { id: "co1", name: "Hartley Engineering", city: "Manchester", industry: "manufacturing" },
-    { id: "co2", name: "Greenfield Retail", city: "London", industry: "retail" },
-    { id: "co3", name: "Lane Studio", city: "Bristol", industry: "services" },
-    { id: "co4", name: "Pixel Lab", city: "Cambridge", industry: "software" },
+    // VAT numbers are invented (GB000…): no real company has them.
+    { id: "co1", name: "Hartley Engineering", city: "Manchester", industry: "manufacturing", vatId: "GB000000001", website: "https://hartley-engineering.example" },
+    { id: "co2", name: "Greenfield Retail", city: "London", industry: "retail", vatId: "GB000000002", website: "https://greenfield-retail.example" },
+    { id: "co3", name: "Lane Studio", city: "Bristol", industry: "services", website: "https://lane-studio.example" },
+    { id: "co4", name: "Pixel Lab", city: "Cambridge", industry: "software", vatId: "GB000000004", website: "https://pixellab.example" },
   ],
   contacts: [
     { id: "ct1", name: "Grace Hartley", email: "grace@hartley-engineering.example", company: "co1", lastCall: "2026-11-03", lastNote: "Wants a quote for 40 seats." },
@@ -35,7 +36,7 @@ export const SALES_TEAM_DATA: DemoData = {
 
 /** The second organization: small, to show that tenants never see each other's records. */
 export const DESIGN_STUDIO_DATA: DemoData = {
-  companies: [{ id: "co1", name: "Rosewood Bakery", city: "York", industry: "retail" }],
+  companies: [{ id: "co1", name: "Rosewood Bakery", city: "York", industry: "retail", vatId: "GB000000101", website: "https://rosewood-bakery.example" }],
   contacts: [{ id: "ct1", name: "Paul Rose", email: "paul@rosewood-bakery.example", company: "co1" }],
   deals: [{ id: "d1", name: "Rosewood Bakery — new brand", company: "co1", stage: "proposal", value: 3500, closeDate: "2026-12-05", owner: "emma" }],
 }

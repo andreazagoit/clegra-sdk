@@ -1,11 +1,12 @@
 import type { Icon, McpServer } from "@modelcontextprotocol/server"
 import type { z } from "zod"
 
+import type { EntityKind } from "../spec/src/kinds"
 import type { AuthOptions, Caller } from "./auth"
 import type { Label } from "./labels"
 import { AppServer, type PeopleResolver } from "./server"
 import type { IdempotencyStore } from "./store"
-import type { ActionHandle, ActionResult, Confirm, Context, EntityHandle, Exposure, FragmentInstance, ListResult, PageConfig, PermissionConfig, Query, SettingConfig, TemplateData, ViewSource } from "./types"
+import type { ActionHandle, ActionResult, Confirm, Context, EntityHandle, Exposure, FragmentInstance, KindConfig, ListResult, PageConfig, PermissionConfig, Query, SettingConfig, TemplateData, ViewSource } from "./types"
 
 /**
  * defineApp: THE authoring API (spec §1). One typed object holds the whole
@@ -23,7 +24,14 @@ export type EntityDef<S extends z.ZodObject, P extends string = string> = {
   description?: Label
   /** A lucide icon name. */
   icon?: string
-  /** A Zod object; fields carry their meaning with `.meta({ role, label, filter, … })`. Needs a string `id` and one `role: "title"`. */
+  /**
+   * What the entity is, the same in every app (spec §3.1): `"person"`, `"organization"`, `"event"`, `"task"`,
+   * `"document"`, `"product"`, `"order"`, or a namespaced kind (`"com.example.shipment"`). Or one kind per record:
+   * `{ by: "type", map: { company: "organization", private: "person" } }` over a required enum field. Fields say
+   * which property of the kind they hold with `.meta({ as: "email" })`. Leave it out for the app's own entities (a deal).
+   */
+  kind?: EntityKind
+  /** A Zod object; fields carry their meaning with `.meta({ role, label, filter, as, … })`. Needs a string `id` and one `role: "title"`. */
   schema: S
   /** Who may see records of this entity at all. */
   permission?: P
@@ -138,6 +146,8 @@ export type AppDefinition<E extends Schemas, A extends Schemas, F extends Schema
   path?: string
   permissions?: Record<P, PermissionConfig>
   settings?: Record<string, SettingConfig>
+  /** Namespaced kinds this app defines (spec §3.1), by name with a dot: `{ "com.example.shipment": { label, properties: { trackingNumber: { type: "string", key: true } } } }`. */
+  kinds?: Record<string, KindConfig>
   entities: { [K in keyof E]: EntityDef<E[K], NoInfer<P>> }
   actions?: { [K in keyof A]: ActionDef<A[K], E, NoInfer<P>> }
   fragments?: { [K in keyof F]: FragmentDef<F[K], NoInfer<P>, keyof A & string> }
@@ -161,8 +171,9 @@ export type App = Pick<AppServer, "name" | "locale" | "manifest" | "fetch" | "st
 const confirmOf = (c: boolean | Confirm | undefined): Confirm | undefined => (c === true ? "always" : c === false ? "never" : c)
 
 export function defineApp<E extends Schemas, A extends Schemas = Schemas, F extends Schemas = Schemas, P extends string = string>(def: AppDefinition<E, A, F, P>): App {
-  const { permissions, settings, entities, actions, fragments, pages, agents, ...options } = def
+  const { permissions, settings, kinds, entities, actions, fragments, pages, agents, ...options } = def
   const app = new AppServer(options)
+  if (kinds) app.defineKinds(kinds)
   for (const [id, p] of Object.entries(permissions ?? {})) app.registerPermission(id, p as PermissionConfig)
   for (const [id, s] of Object.entries(settings ?? {})) app.registerSetting(id, s)
 
