@@ -18,20 +18,24 @@ const text = (form: FormData, key: string) => {
   return typeof v === "string" ? v.trim() : ""
 }
 
+/** The typed fields, to give back with a refusal (never a password). */
+const typed = (form: FormData): Record<string, string> =>
+  Object.fromEntries([...form.entries()].flatMap(([k, v]) => (typeof v === "string" && k !== "password" && !k.startsWith("$ACTION") ? [[k, v]] : [])))
+
 /** A refusal the person can act on, as the form's message; anything else is a bug and stays an error. */
-function refusal(error: unknown): ActionState {
-  if (error instanceof WarehouseError) return { error: error.message }
+function refusal(error: unknown, form: FormData): ActionState {
+  if (error instanceof WarehouseError) return { error: error.message, values: typed(form) }
   throw error
 }
 
 export async function signInAction(_state: ActionState, form: FormData): Promise<ActionState> {
   const email = text(form, "email").toLowerCase()
   const password = typeof form.get("password") === "string" ? (form.get("password") as string) : ""
-  if (!email || !password) return { error: "Give your email and password." }
+  if (!email || !password) return { error: "Give your email and password.", values: typed(form) }
   try {
     await (await getAuth()).api.signInEmail({ body: { email, password }, headers: await headers() })
   } catch (error) {
-    if (isAPIError(error)) return { error: "Wrong email or password." }
+    if (isAPIError(error)) return { error: "Wrong email or password.", values: typed(form) }
     throw error
   }
   redirect("/")
@@ -59,14 +63,14 @@ export async function signOutAction(): Promise<void> {
 export async function registerMovementAction(_state: ActionState, form: FormData): Promise<ActionState> {
   const viewer = await requirePermission("stock.move")
   const kind = text(form, "kind") as MovementKind
-  if (!MOVEMENT_KINDS.includes(kind)) return { error: "Choose in, out or adjustment." }
+  if (!MOVEMENT_KINDS.includes(kind)) return { error: "Choose in, out or adjustment.", values: typed(form) }
   const quantity = Number(text(form, "quantity"))
   try {
     const { movement, stock } = await registerMovement(viewer.orgId, viewer.userId, { productId: text(form, "productId"), kind, quantity, note: text(form, "note") || undefined })
     revalidatePath("/", "layout")
     return { ok: `Registered ${movement.summary}. Now ${stock} in stock.` }
   } catch (error) {
-    return refusal(error)
+    return refusal(error, form)
   }
 }
 
@@ -77,7 +81,7 @@ export async function confirmOrderAction(_state: ActionState, form: FormData): P
     revalidatePath("/", "layout")
     return { ok: `Order ${order.number} confirmed: the goods left the warehouse.` }
   } catch (error) {
-    return refusal(error)
+    return refusal(error, form)
   }
 }
 
@@ -88,6 +92,6 @@ export async function cancelOrderAction(_state: ActionState, form: FormData): Pr
     revalidatePath("/", "layout")
     return { ok: `Order ${order.number} cancelled.` }
   } catch (error) {
-    return refusal(error)
+    return refusal(error, form)
   }
 }

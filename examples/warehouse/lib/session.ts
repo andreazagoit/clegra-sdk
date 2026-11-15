@@ -22,8 +22,9 @@ export type Viewer = {
 
 /** The viewer of this request, or null when nobody is signed in (or the person belongs to no organization any more). */
 export const getViewer = cache(async (): Promise<Viewer | null> => {
-  const auth = await getAuth()
-  const session = await auth.api.getSession({ headers: await headers() })
+  // The request's headers first: this makes every page that asks dynamic, before the database is touched.
+  const requestHeaders = await headers()
+  const session = await (await getAuth()).api.getSession({ headers: requestHeaders })
   const orgId = session?.session.activeOrganizationId
   if (!session || !orgId) return null
   // The membership is read on every request: a removed member or a changed role counts at once.

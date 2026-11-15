@@ -41,7 +41,7 @@ const commandOf = (text: string) => /^\s*(?:with\b[\s\S]*?\)\s*)?([a-z]+)/i.exec
 /** PGlite is one connection: handed out to one user at a time, so a transaction never interleaves with other queries. */
 export async function pglitePool(dataDir: string): Promise<{ pool: Pool; exec(script: string): Promise<void> }> {
   const { PGlite } = await import("@electric-sql/pglite")
-  const db = dataDir === "memory://" ? new PGlite() : new PGlite(resolve(process.cwd(), dataDir))
+  const db = dataDir === "memory://" ? new PGlite() : new PGlite(resolve(/* turbopackIgnore: true */ process.cwd(), dataDir))
   let tail: Promise<void> = Promise.resolve()
   const lock = async (): Promise<() => void> => {
     let release!: () => void
