@@ -273,8 +273,23 @@ For a URL `client_id`:
   `.`/`..` segment. A query is accepted.
 - The document is a JSON object whose `client_id` is that URL, the same
   string, with a non-empty `redirect_uris`. `client_name` is shown on the
-  sign-in page. Only public clients: `token_endpoint_auth_method` is `none`
-  or absent, and there is no `client_secret`.
+  sign-in page. There is never a `client_secret`; `token_endpoint_auth_method`
+  is `none` or absent (a public client) or `private_key_jwt` (RFC 7523, as the
+  MCP authorization spec allows for metadata-document clients). Client secrets
+  are refused.
+- A `private_key_jwt` client names its keys with exactly one of `jwks_uri`
+  (fetched with the same protections as the document, kept 5 minutes; an
+  unknown `kid` fetches it again, at most every 10 seconds) or inline `jwks`
+  (public keys only), and may name `token_endpoint_auth_signing_alg`: `RS256`
+  (default), `ES256` or `PS256`; never `none` or HMAC. At the token endpoint,
+  on both grants, it MUST send `client_assertion_type`
+  `urn:ietf:params:oauth:client-assertion-type:jwt-bearer` and a
+  `client_assertion` signed with that algorithm, with `iss` = `sub` = its
+  `client_id`, `aud` the token endpoint or the issuer, `exp` at most 5 minutes
+  ahead (30 seconds of clock skew), and a `jti` used once. Otherwise the answer
+  is `401 invalid_client`. The metadata lists
+  `token_endpoint_auth_methods_supported: ["none", "private_key_jwt"]` and
+  `token_endpoint_auth_signing_alg_values_supported`.
 - `redirect_uri` MUST be one of `redirect_uris`, exactly. One exception
   (RFC 8252): for `http://127.0.0.1`, `http://localhost` and `http://[::1]`
   the port may differ. A request that fails any of these gets an error page;
@@ -313,8 +328,8 @@ its authorization server needs:
 - Client registration, in this order of preference:
   1. Client ID Metadata Documents: `client_id_metadata_document_supported:
      true`, the document fetched with the protections above (and the
-     connection pinned), `redirect_uri` matched exactly, no secrets for
-     public clients.
+     connection pinned), `redirect_uri` matched exactly, no secrets;
+     `private_key_jwt` for clients that sign with a key pair (ChatGPT does).
   2. Dynamic Client Registration (RFC 7591), optional, for clients that
      don't send a metadata document yet.
   3. Clients registered by hand, where the server can do neither.

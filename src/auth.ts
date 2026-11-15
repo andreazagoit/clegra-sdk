@@ -7,6 +7,7 @@ import {
   createLocalJWKSet,
   createRemoteJWKSet,
   decodeJwt,
+  decodeProtectedHeader,
   exportJWK,
   generateKeyPair,
   importJWK,
@@ -312,8 +313,34 @@ const html = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "
  * that refuses an address is there for that.
  */
 
-/** What the dev authorization server keeps of a client's metadata document. */
-export type ClientMetadata = { client_id: string; client_name?: string; redirect_uris: string[] }
+/** How a client with a key pair may sign its `client_assertion` (RFC 7523): asymmetric only, never `none` or a shared-secret HMAC. */
+export const CLIENT_ASSERTION_ALGS = ["RS256", "ES256", "PS256"] as const
+export type ClientAssertionAlg = (typeof CLIENT_ASSERTION_ALGS)[number]
+/** The `client_assertion_type` of a signed-JWT client authentication (RFC 7523 §2.2). */
+export const CLIENT_ASSERTION_TYPE = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
+/** How long a client assertion may live (exp − now, and exp − iat), and the clock skew allowed on top. */
+export const CLIENT_ASSERTION_MAX_SECONDS = 300
+const CLIENT_ASSERTION_SKEW_SECONDS = 30
+const CLIENT_JWKS_MAX_KEYS = 20
+/** A fetched client key set is kept this long; an unknown `kid` fetches it again, but not more often than every 10 seconds. */
+const CLIENT_JWKS_CACHE_SECONDS = 300
+const CLIENT_JWKS_REFETCH_MS = 10_000
+
+/**
+ * What the dev authorization server keeps of a client's metadata document. A
+ * public client has only the first three; a client that authenticates with a
+ * key pair (`private_key_jwt`, RFC 7523) also has its signing algorithm and
+ * its keys, as a `jwks_uri` or inline `jwks`.
+ */
+export type ClientMetadata = {
+  client_id: string
+  client_name?: string
+  redirect_uris: string[]
+  token_endpoint_auth_method?: "private_key_jwt"
+  token_endpoint_auth_signing_alg?: ClientAssertionAlg
+  jwks_uri?: string
+  jwks?: { keys: JWK[] }
+}
 
 /** Why a client's metadata document, or its address, is refused. */
 export class ClientMetadataError extends Error {
@@ -416,7 +443,18 @@ export function clientMetadataUrlProblem(clientId: string): string | null {
 
 export const isClientMetadataUrl = (clientId: string) => clientMetadataUrlProblem(clientId) === null
 
-/** A fetched metadata document, checked: it must be the document of exactly this `client_id`, of a public client. Throws ClientMetadataError. */
+/** A client's key set, checked: 1–20 public keys (no private or symmetric key material). Throws ClientMetadataError. */
+export function validateClientJwks(value: unknown, where = "jwks"): { keys: JWK[] } {
+  const keys = value && typeof value === "object" && !Array.isArray(value) ? (value as { keys?: unknown }).keys : undefined
+  if (!Array.isArray(keys) || !keys.length || keys.length > CLIENT_JWKS_MAX_KEYS) throw new ClientMetadataError(`the client's ${where} must be a key set ({ "keys": [...] }) with 1 to ${CLIENT_JWKS_MAX_KEYS} keys`)
+  for (const key of keys) {
+    if (!key || typeof key !== "object" || Array.isArray(key) || typeof (key as JWK).kty !== "string") throw new ClientMetadataError(`a key of the client's ${where} is not a JWK`)
+    if ((key as JWK).kty === "oct" || ["d", "p", "q", "dp", "dq", "qi", "k"].some((f) => f in key)) throw new ClientMetadataError(`the client's ${where} must hold public keys only`)
+  }
+  return { keys: keys as JWK[] }
+}
+
+/** A fetched metadata document, checked: it must be the document of exactly this `client_id`, of a public client or of one that signs with a key pair (`private_key_jwt`). Throws ClientMetadataError. */
 export function validateClientMetadata(clientId: string, document: unknown): ClientMetadata {
   if (!document || typeof document !== "object" || Array.isArray(document)) throw new ClientMetadataError("the metadata document is not a JSON object")
   const d = document as Record<string, unknown>
@@ -432,10 +470,23 @@ export function validateClientMetadata(clientId: string, document: unknown): Cli
     if (uri.includes("#") || /^(javascript|data|vbscript|file|blob|about):$/.test(scheme)) throw new ClientMetadataError("a redirect_uri of the metadata document has a fragment or a scheme a browser must not be sent to")
   }
   if (d.client_name !== undefined && typeof d.client_name !== "string") throw new ClientMetadataError("the metadata document's client_name must be a string")
-  // A document anyone can read cannot hold a shared secret (the draft forbids it); a client with a key pair is a kind this server does not do.
+  // A document anyone can read cannot hold a shared secret (the draft forbids it); a client may prove itself with a key pair instead (private_key_jwt).
   if ("client_secret" in d || "client_secret_expires_at" in d) throw new ClientMetadataError("the metadata document must not carry client_secret or client_secret_expires_at")
-  if (d.token_endpoint_auth_method !== undefined && d.token_endpoint_auth_method !== "none") throw new ClientMetadataError(`the dev authorization server supports public clients only: token_endpoint_auth_method must be "none" or absent (private_key_jwt and client secrets are not supported)`)
-  return { client_id: clientId, redirect_uris: [...(d.redirect_uris as string[])], ...(typeof d.client_name === "string" && d.client_name.trim() ? { client_name: d.client_name.trim() } : {}) }
+  const method = d.token_endpoint_auth_method
+  if (method !== undefined && method !== "none" && method !== "private_key_jwt") throw new ClientMetadataError(`token_endpoint_auth_method must be "none" (a public client), "private_key_jwt" (with jwks_uri or jwks) or absent: client secrets are not supported`)
+  const base: ClientMetadata = { client_id: clientId, redirect_uris: [...(d.redirect_uris as string[])], ...(typeof d.client_name === "string" && d.client_name.trim() ? { client_name: d.client_name.trim() } : {}) }
+  if (method !== "private_key_jwt") return base
+  const alg = d.token_endpoint_auth_signing_alg ?? "RS256"
+  if (!(CLIENT_ASSERTION_ALGS as readonly unknown[]).includes(alg)) throw new ClientMetadataError(`token_endpoint_auth_signing_alg must be one of ${CLIENT_ASSERTION_ALGS.join(", ")} (default RS256)`)
+  if ((d.jwks_uri === undefined) === (d.jwks === undefined)) throw new ClientMetadataError("a private_key_jwt client needs its keys: jwks_uri or jwks (exactly one of them)")
+  const keys: Pick<ClientMetadata, "jwks_uri" | "jwks"> = {}
+  if (d.jwks_uri !== undefined) {
+    // Fetched like the document itself: https, a public host, no fragment, no user name.
+    const problem = typeof d.jwks_uri === "string" ? clientMetadataUrlProblem(d.jwks_uri) : "it is not a string"
+    if (problem) throw new ClientMetadataError(`the metadata document's jwks_uri is not a valid key set URL: ${problem}`)
+    keys.jwks_uri = d.jwks_uri as string
+  } else keys.jwks = validateClientJwks(d.jwks, "jwks")
+  return { ...base, token_endpoint_auth_method: "private_key_jwt", token_endpoint_auth_signing_alg: alg as ClientAssertionAlg, ...keys }
 }
 
 const LOOPBACK_REDIRECT = /^(127\.0\.0\.1|localhost|\[::1\])$/
@@ -497,7 +548,21 @@ const systemLookup = async (host: string) => (await dnsLookup(host, { all: true 
 export async function fetchClientMetadata(clientId: string, transport: ClientMetadataTransport = {}): Promise<{ metadata: ClientMetadata; cacheSeconds: number }> {
   const problem = clientMetadataUrlProblem(clientId)
   if (problem) throw new ClientMetadataError(`client_id is not a valid metadata document URL: ${problem}`)
-  const host = new URL(clientId).hostname.replace(/^\[|\]$/g, "")
+  const { value, cacheSeconds } = await fetchPublicJson(clientId, transport, "metadata document")
+  return { metadata: validateClientMetadata(clientId, value), cacheSeconds }
+}
+
+/** Fetches and checks the key set of a `private_key_jwt` client from its `jwks_uri`, with the same protections as the metadata document. Throws ClientMetadataError. */
+export async function fetchClientJwks(jwksUri: string, transport: ClientMetadataTransport = {}): Promise<{ jwks: { keys: JWK[] }; cacheSeconds: number }> {
+  const problem = clientMetadataUrlProblem(jwksUri)
+  if (problem) throw new ClientMetadataError(`jwks_uri is not a valid key set URL: ${problem}`)
+  const { value, cacheSeconds } = await fetchPublicJson(jwksUri, transport, "key set (jwks_uri)")
+  return { jwks: validateClientJwks(value, "key set (jwks_uri)"), cacheSeconds }
+}
+
+/** A JSON document at a checked https URL `address`, fetched only when every address of its host is public (see fetchClientMetadata). `what` names it in errors. */
+async function fetchPublicJson(address: string, transport: ClientMetadataTransport, what: string): Promise<{ value: unknown; cacheSeconds: number }> {
+  const host = new URL(address).hostname.replace(/^\[|\]$/g, "")
   if (!isIP(host)) {
     let addresses: string[]
     try {
@@ -513,33 +578,33 @@ export async function fetchClientMetadata(clientId: string, transport: ClientMet
   let response: Response
   let text: string
   try {
-    response = await (transport.fetch ?? fetch)(clientId, { method: "GET", redirect: "error", credentials: "omit", headers: { accept: "application/json" }, signal: AbortSignal.timeout(CLIENT_METADATA_TIMEOUT_MS) })
+    response = await (transport.fetch ?? fetch)(address, { method: "GET", redirect: "error", credentials: "omit", headers: { accept: "application/json" }, signal: AbortSignal.timeout(CLIENT_METADATA_TIMEOUT_MS) })
     // A redirect could lead inside the network after the host was checked. `redirect: "error"` already refuses it; this is for a fetch that does not.
     if (response.redirected || response.status !== 200) {
       void response.body?.cancel().catch(() => {})
-      throw new ClientMetadataError(`the client's metadata document answered ${response.redirected ? "with a redirect" : response.status} (it must answer 200, without redirects)`)
+      throw new ClientMetadataError(`the client's ${what} answered ${response.redirected ? "with a redirect" : response.status} (it must answer 200, without redirects)`)
     }
     if (!/^application\/([\w.!#$&^-]+\+)?json\s*(;|$)/i.test(response.headers.get("content-type") ?? "")) {
       void response.body?.cancel().catch(() => {})
-      throw new ClientMetadataError("the client's metadata document is not served as JSON (content-type application/json)")
+      throw new ClientMetadataError(`the client's ${what} is not served as JSON (content-type application/json)`)
     }
-    text = await readCapped(response, CLIENT_METADATA_MAX_BYTES)
+    text = await readCapped(response, CLIENT_METADATA_MAX_BYTES, what)
   } catch (error) {
     if (error instanceof ClientMetadataError) throw error
-    throw new ClientMetadataError(`the client's metadata document could not be fetched (${error instanceof Error && error.name === "TimeoutError" ? "no answer in time" : "network error or redirect"})`)
+    throw new ClientMetadataError(`the client's ${what} could not be fetched (${error instanceof Error && error.name === "TimeoutError" ? "no answer in time" : "network error or redirect"})`)
   }
   let document: unknown
   try {
     document = JSON.parse(text)
   } catch {
-    throw new ClientMetadataError("the client's metadata document is not valid JSON")
+    throw new ClientMetadataError(`the client's ${what} is not valid JSON`)
   }
-  return { metadata: validateClientMetadata(clientId, document), cacheSeconds: clientMetadataCacheSeconds(response.headers.get("cache-control")) }
+  return { value: document, cacheSeconds: clientMetadataCacheSeconds(response.headers.get("cache-control")) }
 }
 
 /** The body as text, read piece by piece and dropped as soon as it passes `max` bytes (a Content-Length can lie, so the bytes are counted). */
-async function readCapped(response: Response, max: number): Promise<string> {
-  const tooLarge = () => new ClientMetadataError(`the client's metadata document is larger than ${max / 1024} KB`)
+async function readCapped(response: Response, max: number, what: string): Promise<string> {
+  const tooLarge = () => new ClientMetadataError(`the client's ${what} is larger than ${max / 1024} KB`)
   if (Number(response.headers.get("content-length") ?? 0) > max) {
     void response.body?.cancel().catch(() => {})
     throw tooLarge()
@@ -583,6 +648,10 @@ export class DevAuthority {
   readonly #origins = new Set<string>([DEV_ISSUER])
   /** Client documents by client_id, oldest first; a failed fetch is kept too, briefly, so a broken client cannot make this server hammer a host. */
   readonly #clients = new Map<string, { until: number; result: Promise<ClientMetadata> }>()
+  /** Key sets of private_key_jwt clients by jwks_uri, oldest first (a failure is kept briefly too). */
+  readonly #keySets = new Map<string, { fetchedAt: number; until: number; result: Promise<{ keys: JWK[] }> }>()
+  /** Client assertion ids already used, until their expiry (ms): an assertion is good for one request. */
+  readonly #usedAssertions = new Map<string, number>()
 
   constructor(readonly options: DevOptions, private readonly app: { name: string; title: string; allPermissions: () => string[] }) {
     this.code = options.code ?? randomBytes(4).toString("hex").toUpperCase()
@@ -657,6 +726,74 @@ export class DevAuthority {
     return entry.result
   }
 
+  /** The key set of a private_key_jwt client: inline, or from its jwks_uri (kept a few minutes; `fresh` fetches again unless it was fetched in the last 10 seconds). */
+  #clientKeys(client: ClientMetadata, fresh = false): Promise<{ keys: JWK[] }> {
+    if (client.jwks) return Promise.resolve(client.jwks)
+    const uri = client.jwks_uri!
+    const now = Date.now()
+    const kept = this.#keySets.get(uri)
+    if (kept && (fresh ? now - kept.fetchedAt < CLIENT_JWKS_REFETCH_MS : kept.until > now)) return kept.result
+    this.#keySets.delete(uri)
+    while (this.#keySets.size >= CLIENT_CACHE_ENTRIES) this.#keySets.delete(this.#keySets.keys().next().value!)
+    const entry = { fetchedAt: now, until: now + CLIENT_CACHE_FAILED_SECONDS * 1000, result: Promise.resolve({ keys: [] as JWK[] }) }
+    entry.result = fetchClientJwks(uri, this.options.clientMetadata).then(({ jwks, cacheSeconds }) => {
+      entry.until = Date.now() + Math.min(cacheSeconds, CLIENT_JWKS_CACHE_SECONDS) * 1000
+      return jwks
+    })
+    entry.result.catch(() => {})
+    this.#keySets.set(uri, entry)
+    return entry.result
+  }
+
+  /** Whether an assertion id is new (and from now on used, until `untilMs`). */
+  #firstUse(key: string, untilMs: number): boolean {
+    const now = Date.now()
+    for (const [k, until] of this.#usedAssertions) if (until <= now) this.#usedAssertions.delete(k)
+    if (this.#usedAssertions.has(key)) return false
+    this.#usedAssertions.set(key, untilMs)
+    return true
+  }
+
+  /**
+   * Client authentication with a signed JWT (RFC 7523 §2.2, `private_key_jwt`):
+   * signed with the client's algorithm by a key of its key set, `iss` = `sub`
+   * = its client_id, `aud` this server's token endpoint or issuer, short-lived,
+   * with a `jti` that is used once. Returns why not, or null when it holds.
+   */
+  async #authenticate(client: ClientMetadata, form: URLSearchParams, origin: string): Promise<string | null> {
+    const assertion = form.get("client_assertion") ?? ""
+    if (!assertion) return "this client authenticates with private_key_jwt: client_assertion is required"
+    if (form.get("client_assertion_type") !== CLIENT_ASSERTION_TYPE) return `client_assertion_type must be ${CLIENT_ASSERTION_TYPE}`
+    const alg = client.token_endpoint_auth_signing_alg ?? "RS256"
+    let header: ReturnType<typeof decodeProtectedHeader>
+    try {
+      header = decodeProtectedHeader(assertion)
+    } catch {
+      return "client_assertion is not a JWT"
+    }
+    if (header.alg !== alg) return `client_assertion must be signed with ${alg} (the client's token_endpoint_auth_signing_alg)`
+    const options = { algorithms: [alg], issuer: client.client_id, subject: client.client_id, audience: [`${origin}/oauth/token`, origin], clockTolerance: CLIENT_ASSERTION_SKEW_SECONDS, requiredClaims: ["exp", "jti"] }
+    let payload: JWTPayload
+    try {
+      try {
+        ;({ payload } = await jwtVerify(assertion, createLocalJWKSet(await this.#clientKeys(client)), options))
+      } catch (error) {
+        // A key the cached set does not have: the client may have rotated its keys, so its jwks_uri is asked once more.
+        if (!client.jwks_uri || (error as { code?: string }).code !== "ERR_JWKS_NO_MATCHING_KEY") throw error
+        ;({ payload } = await jwtVerify(assertion, createLocalJWKSet(await this.#clientKeys(client, true)), options))
+      }
+    } catch (error) {
+      if (error instanceof ClientMetadataError) return error.message
+      return `client_assertion: ${(error as { code?: string }).code === "ERR_JWKS_NO_MATCHING_KEY" ? "no key of the client's key set matches it" : error instanceof Error ? error.message : "invalid"}`
+    }
+    const now = Math.floor(Date.now() / 1000)
+    const exp = payload.exp!
+    if (exp - now > CLIENT_ASSERTION_MAX_SECONDS + CLIENT_ASSERTION_SKEW_SECONDS || (typeof payload.iat === "number" && exp - payload.iat > CLIENT_ASSERTION_MAX_SECONDS)) return `a client_assertion lives ${CLIENT_ASSERTION_MAX_SECONDS / 60} minutes at most`
+    if (typeof payload.jti !== "string" || !payload.jti) return "client_assertion needs a jti"
+    if (!this.#firstUse(`${client.client_id}\n${payload.jti}`, (exp + CLIENT_ASSERTION_SKEW_SECONDS) * 1000)) return "this client_assertion was already used (its jti is for one request)"
+    return null
+  }
+
   /** Answers the authorization server's paths; null for any other path. */
   async handle(request: Request, origin: string, resource: string): Promise<Response | null> {
     const url = new URL(request.url)
@@ -674,7 +811,9 @@ export class DevAuthority {
         response_types_supported: ["code"],
         grant_types_supported: ["authorization_code", "refresh_token"],
         code_challenge_methods_supported: ["S256"],
-        token_endpoint_auth_methods_supported: ["none"],
+        // Public clients, and metadata-document clients that sign a client assertion with a key pair (RFC 7523).
+        token_endpoint_auth_methods_supported: ["none", "private_key_jwt"],
+        token_endpoint_auth_signing_alg_values_supported: [...CLIENT_ASSERTION_ALGS],
         scopes_supported: [OAUTH_SCOPE],
       })
     }
@@ -755,7 +894,18 @@ export class DevAuthority {
     const fail = (error: string, description: string) => json({ error, error_description: description }, 400)
     let person: string
     let client = ""
-    const sent = form.get("client_id") ?? ""
+    /** The redirect address a code was issued for (authorization_code only). */
+    let redirect: string | null = null
+    let sent = form.get("client_id") ?? ""
+    // A client that authenticates with a signed JWT may leave client_id out (RFC 7523 §3): the assertion names it, and is checked below.
+    if (!sent && form.get("client_assertion")) {
+      try {
+        const sub = decodeJwt(form.get("client_assertion")!).sub
+        if (typeof sub === "string") sent = sub
+      } catch {
+        // Refused below, as an assertion that does not verify.
+      }
+    }
     if (form.get("grant_type") === "authorization_code") {
       let claims: JWTPayload
       try {
@@ -769,15 +919,8 @@ export class DevAuthority {
       // A code is for the client it was given to. A client known by its metadata document must say who it is; others may leave client_id out, as before.
       client = typeof claims.client === "string" ? claims.client : ""
       if (sent ? sent !== client : claimsUrl(client)) return fail("invalid_grant", sent ? "the code was issued to another client_id" : "client_id is required")
-      if (claimsUrl(client)) {
-        try {
-          const metadata = await this.#client(client)
-          if (!redirectUriAllowed(String(claims.redirect ?? ""), metadata.redirect_uris)) return fail("invalid_grant", "redirect_uri is no longer one of the client's redirect_uris")
-        } catch (error) {
-          return fail("invalid_client", error instanceof ClientMetadataError ? error.message : "the client's metadata document could not be read")
-        }
-      }
       person = String(claims.person)
+      redirect = String(claims.redirect ?? "")
     } else if (form.get("grant_type") === "refresh_token") {
       try {
         const { payload } = await jwtVerify(form.get("refresh_token") ?? "", this.publicKey, { typ: DEV_REFRESH_TYPE, audience: `${PROTOCOL_ID}-dev-refresh` })
@@ -789,6 +932,20 @@ export class DevAuthority {
       // A refresh token stays with the metadata-document client it was issued to.
       if (claimsUrl(client) && sent !== client) return fail("invalid_grant", "the refresh token was issued to another client_id")
     } else return fail("unsupported_grant_type", "authorization_code or refresh_token")
+    if (claimsUrl(client)) {
+      let metadata: ClientMetadata
+      try {
+        metadata = await this.#client(client)
+      } catch (error) {
+        return fail("invalid_client", error instanceof ClientMetadataError ? error.message : "the client's metadata document could not be read")
+      }
+      if (redirect !== null && !redirectUriAllowed(redirect, metadata.redirect_uris)) return fail("invalid_grant", "redirect_uri is no longer one of the client's redirect_uris")
+      // A client with a key pair proves it is itself on every grant; a public client has nothing to prove.
+      if (metadata.token_endpoint_auth_method === "private_key_jwt") {
+        const why = await this.#authenticate(metadata, form, origin)
+        if (why) return json({ error: "invalid_client", error_description: why }, 401)
+      }
+    }
     const who = this.people.find((x) => x.id === person)
     if (!who) return fail("invalid_grant", "unknown person")
     this.#origins.add(origin)

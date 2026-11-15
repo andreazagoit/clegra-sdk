@@ -5,9 +5,10 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { after, describe, test } from "node:test"
 
+import { exportJWK, generateKeyPair, SignJWT, type CryptoKey, type JWK } from "jose"
 import { z } from "zod"
 
-import { CLIENT_METADATA_MAX_BYTES, clientMetadataCacheSeconds, clientMetadataUrlProblem, fetchClientMetadata, isClientMetadataUrl, isPublicAddress, redirectUriAllowed, validateClientMetadata } from "./auth"
+import { CLIENT_ASSERTION_TYPE, CLIENT_METADATA_MAX_BYTES, clientMetadataCacheSeconds, clientMetadataUrlProblem, fetchClientMetadata, isClientMetadataUrl, isPublicAddress, redirectUriAllowed, validateClientMetadata } from "./auth"
 import { defineApp } from "./index"
 
 /** Requests of these tests come from this machine (dev sign-in answers nobody else). */
@@ -15,6 +16,7 @@ const local = { remoteAddress: "127.0.0.1" }
 const base = "http://127.0.0.1:3920"
 const CLIENT = "https://client.example/oauth/metadata.json"
 const CALLBACK = "https://client.example/callback"
+const KEYS = "https://client.example/oauth/jwks.json"
 /** A public address for the fake resolver. */
 const PUBLIC = "93.184.215.14"
 
@@ -131,12 +133,24 @@ describe("client id metadata documents: the pure checks", () => {
       [doc({ redirect_uris: ["javascript:alert(1)"] }), /scheme/],
       [doc({ redirect_uris: [`${CALLBACK}#x`] }), /fragment/],
       [doc({ client_name: 5 }), /client_name/],
-      [doc({ token_endpoint_auth_method: "private_key_jwt" }), /public clients only.*private_key_jwt/],
-      [doc({ token_endpoint_auth_method: "client_secret_basic" }), /public clients only/],
+      [doc({ token_endpoint_auth_method: "private_key_jwt" }), /private_key_jwt client needs its keys/],
+      [doc({ token_endpoint_auth_method: "private_key_jwt", jwks_uri: KEYS, jwks: { keys: [{ kty: "RSA", n: "x", e: "AQAB" }] } }), /exactly one/],
+      [doc({ token_endpoint_auth_method: "private_key_jwt", jwks_uri: "http://client.example/jwks.json" }), /jwks_uri is not a valid key set URL: it must be an https URL/],
+      [doc({ token_endpoint_auth_method: "private_key_jwt", jwks_uri: "https://10.0.0.1/jwks.json" }), /jwks_uri.*not a public address/],
+      [doc({ token_endpoint_auth_method: "private_key_jwt", jwks: { keys: [] } }), /1 to 20 keys/],
+      [doc({ token_endpoint_auth_method: "private_key_jwt", jwks: { keys: [{ kty: "oct", k: "c2VjcmV0" }] } }), /public keys only/],
+      [doc({ token_endpoint_auth_method: "private_key_jwt", jwks: { keys: [{ kty: "RSA", n: "x", e: "AQAB", d: "y" }] } }), /public keys only/],
+      [doc({ token_endpoint_auth_method: "private_key_jwt", jwks_uri: KEYS, token_endpoint_auth_signing_alg: "HS256" }), /token_endpoint_auth_signing_alg must be one of RS256, ES256, PS256/],
+      [doc({ token_endpoint_auth_method: "private_key_jwt", jwks_uri: KEYS, token_endpoint_auth_signing_alg: "none" }), /token_endpoint_auth_signing_alg/],
+      [doc({ token_endpoint_auth_method: "client_secret_basic" }), /client secrets are not supported/],
+      [doc({ token_endpoint_auth_method: "client_secret_post", jwks_uri: KEYS }), /client secrets are not supported/],
       [doc({ client_secret: "x" }), /client_secret/],
       [doc({ client_secret_expires_at: 0 }), /client_secret/],
     ]
     for (const [document, why] of refused) assert.throws(() => validateClientMetadata(CLIENT, document), why)
+    // A client with a key pair: its algorithm (RS256 by default) and its keys are kept.
+    assert.deepEqual(validateClientMetadata(CLIENT, doc({ token_endpoint_auth_method: "private_key_jwt", jwks_uri: KEYS })), { client_id: CLIENT, client_name: "Example <b>Client</b>", redirect_uris: [CALLBACK], token_endpoint_auth_method: "private_key_jwt", token_endpoint_auth_signing_alg: "RS256", jwks_uri: KEYS })
+    assert.equal(validateClientMetadata(CLIENT, doc({ token_endpoint_auth_method: "private_key_jwt", token_endpoint_auth_signing_alg: "ES256", jwks: { keys: [{ kty: "EC", crv: "P-256", x: "a", y: "b" }] } })).token_endpoint_auth_signing_alg, "ES256")
   })
 
   test("a redirect_uri matches exactly; only a loopback address may change port", () => {
@@ -207,7 +221,7 @@ describe("client id metadata documents: fetching", () => {
     await assert.rejects(fetchClientMetadata(at("lies"), transport), /larger than 64 KB/)
     await assert.rejects(fetchClientMetadata(at("broken"), transport), /not valid JSON/)
     await assert.rejects(fetchClientMetadata(at("other"), transport), /client_id is not the URL/)
-    await assert.rejects(fetchClientMetadata(at("secret"), transport), /public clients only/)
+    await assert.rejects(fetchClientMetadata(at("secret"), transport), /client secrets are not supported/)
     assert.equal(fetched.length, 12)
     // A fetch that fails (as the real one does on a redirect, with `redirect: "error"`) or runs out of time is a refusal too.
     await assert.rejects(fetchClientMetadata(at("ok"), { ...transport, fetch: async () => Promise.reject(new TypeError("fetch failed")) }), /could not be fetched/)
@@ -224,7 +238,8 @@ describe("client id metadata documents: the dev authorization server", () => {
     const meta = (await (await app.fetch(new Request(`${base}/.well-known/oauth-authorization-server`), local)).json()) as Record<string, unknown>
     assert.equal(meta.client_id_metadata_document_supported, true)
     assert.equal(meta.registration_endpoint, `${base}/oauth/register`)
-    assert.deepEqual(meta.token_endpoint_auth_methods_supported, ["none"])
+    assert.deepEqual(meta.token_endpoint_auth_methods_supported, ["none", "private_key_jwt"])
+    assert.deepEqual(meta.token_endpoint_auth_signing_alg_values_supported, ["RS256", "ES256", "PS256"])
   })
 
   test("authorize → token with a metadata-document client; the page says who is asking", async () => {
@@ -296,6 +311,7 @@ describe("client id metadata documents: the dev authorization server", () => {
       {
         [at("other")]: { body: doc() },
         [at("confidential")]: { body: { client_id: at("confidential"), redirect_uris: [CALLBACK], token_endpoint_auth_method: "private_key_jwt" } },
+        [at("secret")]: { body: { client_id: at("secret"), redirect_uris: [CALLBACK], token_endpoint_auth_method: "client_secret_basic" } },
         [at("moved")]: { status: 301, headers: { location: CLIENT }, raw: "" },
         [at("html")]: { raw: "<html>", headers: { "content-type": "text/html" } },
         [at("big")]: { raw: `{"pad":"${"x".repeat(CLIENT_METADATA_MAX_BYTES)}"}` },
@@ -303,13 +319,14 @@ describe("client id metadata documents: the dev authorization server", () => {
       { "inside.example": ["192.168.1.20"] },
     )
     await assertRefused(await authorizePage(app, at("other")), /client_id is not the URL it was fetched from/)
-    await assertRefused(await authorizePage(app, at("confidential")), /public clients only/)
+    await assertRefused(await authorizePage(app, at("confidential")), /private_key_jwt client needs its keys/)
+    await assertRefused(await authorizePage(app, at("secret")), /client secrets are not supported/)
     await assertRefused(await authorizePage(app, at("moved")), /answered 301/)
     await assertRefused(await authorizePage(app, at("html")), /not served as JSON/)
     await assertRefused(await authorizePage(app, at("big")), /larger than 64 KB/)
     await assertRefused(await signIn(app, at("missing")), /answered 404/)
     const before = fetched.length
-    assert.equal(before, 6)
+    assert.equal(before, 7)
     for (const id of ["http://client.example/meta.json", "https://client.example", "https://127.0.0.1/meta.json", "https://[::1]/meta.json", "https://169.254.169.254/latest", "https://localhost/meta.json", "https://inside.example/meta.json", "https://client.example/a/../meta.json", "https://client.example/meta.json#f"]) {
       await assertRefused(await authorizePage(app, id), /This client cannot sign in/)
       await assertRefused(await signIn(app, id), /This client cannot sign in/)
@@ -381,5 +398,147 @@ describe("client id metadata documents: the dev authorization server", () => {
     assert.equal((await token(app, { grant_type: "authorization_code", code: third, code_verifier: verifier, client_id: "another-client" })).status, 400)
     assert.deepEqual(fetched, [])
     assert.deepEqual(resolved, [])
+  })
+})
+
+describe("client id metadata documents: clients with a key pair (private_key_jwt)", () => {
+  /** A client like ChatGPT: its document names its keys by jwks_uri and says it signs with RS256. */
+  const SIGNER = "https://signer.example/oauth/client.json"
+  const SIGNER_KEYS = "https://signer.example/oauth/jwks.json"
+  const SIGNER_CALLBACK = "https://signer.example/connector/oauth/abc"
+  const signerDoc = { client_id: SIGNER, redirect_uris: [SIGNER_CALLBACK], token_endpoint_auth_method: "private_key_jwt", token_endpoint_auth_methods_supported: ["none", "private_key_jwt"], grant_types: ["authorization_code", "refresh_token"], response_types: ["code"], client_name: "Signer", token_endpoint_auth_signing_alg: "RS256", jwks_uri: SIGNER_KEYS }
+  const now = () => Math.floor(Date.now() / 1000)
+
+  async function rsaKey(kid: string) {
+    const { privateKey, publicKey } = await generateKeyPair("RS256", { extractable: true })
+    return { privateKey, publicJwk: { ...(await exportJWK(publicKey)), kid, alg: "RS256", use: "sig" } as JWK }
+  }
+
+  type Claims = { iss?: string; sub?: string; aud?: string | string[]; exp?: number; iat?: number; jti?: string | null; alg?: string; kid?: string }
+  const assertion = (key: CryptoKey | Uint8Array, c: Claims = {}) => {
+    const jwt = new SignJWT({})
+      .setProtectedHeader({ alg: c.alg ?? "RS256", kid: c.kid ?? "k1" })
+      .setIssuer(c.iss ?? SIGNER)
+      .setSubject(c.sub ?? SIGNER)
+      .setAudience(c.aud ?? `${base}/oauth/token`)
+      .setIssuedAt(c.iat ?? now())
+      .setExpirationTime(c.exp ?? now() + 60)
+    if (c.jti !== null) jwt.setJti(c.jti ?? randomUUID())
+    return jwt.sign(key)
+  }
+  const authFields = (jwt: string) => ({ client_assertion_type: CLIENT_ASSERTION_TYPE, client_assertion: jwt })
+
+  async function setup() {
+    const k1 = await rsaKey("k1")
+    let keys = { keys: [k1.publicJwk] }
+    const { app, fetched } = world({ [SIGNER]: { body: signerDoc }, [SIGNER_KEYS]: () => ({ body: keys, headers: { "content-type": "application/jwk-set+json" } }) })
+    const code = async () => new URL((await signIn(app, SIGNER, SIGNER_CALLBACK)).headers.get("location")!).searchParams.get("code")!
+    const grant = async (extra: Record<string, string>) => token(app, { grant_type: "authorization_code", code: await code(), code_verifier: verifier, redirect_uri: SIGNER_CALLBACK, client_id: SIGNER, ...extra })
+    return { app, fetched, k1, grant, setKeys: (k: JWK[]) => (keys = { keys: k }) }
+  }
+
+  async function assertInvalidClient(response: Response, why: RegExp) {
+    assert.equal(response.status, 401)
+    const body = (await response.json()) as { error: string; error_description: string }
+    assert.equal(body.error, "invalid_client")
+    assert.match(body.error_description, why)
+  }
+
+  test("sign-in, then code and refresh with a signed assertion; aud may be the token endpoint or the issuer", async () => {
+    const { app, fetched, k1, grant } = await setup()
+    assert.equal((await authorizePage(app, SIGNER, SIGNER_CALLBACK)).status, 200)
+    const tok = await grant(authFields(await assertion(k1.privateKey)))
+    assert.equal(tok.status, 200)
+    const { access_token, refresh_token } = (await tok.json()) as { access_token: string; refresh_token: string }
+    assert.ok(access_token)
+    assert.equal((await token(app, { grant_type: "refresh_token", refresh_token, client_id: SIGNER, ...authFields(await assertion(k1.privateKey, { aud: base })) })).status, 200)
+    // The assertion names the client: client_id may be left out.
+    assert.equal((await token(app, { grant_type: "refresh_token", refresh_token, ...authFields(await assertion(k1.privateKey, { aud: [base, "https://else.example"] })) })).status, 200)
+    // The refresh token still needs this client's proof.
+    await assertInvalidClient(await token(app, { grant_type: "refresh_token", refresh_token, client_id: SIGNER }), /client_assertion is required/)
+    // The document and the key set were each fetched once.
+    assert.deepEqual(fetched, [SIGNER, SIGNER_KEYS])
+  })
+
+  test("no assertion, or not a jwt-bearer one, is invalid_client (401)", async () => {
+    const { k1, grant } = await setup()
+    await assertInvalidClient(await grant({}), /client_assertion is required/)
+    await assertInvalidClient(await grant({ client_assertion: await assertion(k1.privateKey) }), /client_assertion_type must be urn:ietf:params:oauth:client-assertion-type:jwt-bearer/)
+    await assertInvalidClient(await grant({ ...authFields("not-a-jwt") }), /not a JWT/)
+  })
+
+  test("wrong audience, issuer or subject, expired, too long-lived, without jti: refused", async () => {
+    const { k1, grant } = await setup()
+    await assertInvalidClient(await grant(authFields(await assertion(k1.privateKey, { aud: "https://other.example/oauth/token" }))), /"aud"/)
+    await assertInvalidClient(await grant(authFields(await assertion(k1.privateKey, { iss: "https://other.example/client.json" }))), /"iss"/)
+    await assertInvalidClient(await grant(authFields(await assertion(k1.privateKey, { sub: "https://other.example/client.json" }))), /"sub"/)
+    await assertInvalidClient(await grant(authFields(await assertion(k1.privateKey, { iat: now() - 400, exp: now() - 120 }))), /"exp"/)
+    await assertInvalidClient(await grant(authFields(await assertion(k1.privateKey, { exp: now() + 3600 }))), /5 minutes at most/)
+    await assertInvalidClient(await grant(authFields(await assertion(k1.privateKey, { iat: now() - 200, exp: now() + 200 }))), /5 minutes at most/)
+    await assertInvalidClient(await grant(authFields(await assertion(k1.privateKey, { jti: null }))), /"jti"/)
+  })
+
+  test("an assertion is used once", async () => {
+    const { k1, grant } = await setup()
+    const once = await assertion(k1.privateKey)
+    assert.equal((await grant(authFields(once))).status, 200)
+    await assertInvalidClient(await grant(authFields(once)), /already used/)
+    // Another jti from the same client is fine.
+    assert.equal((await grant(authFields(await assertion(k1.privateKey)))).status, 200)
+  })
+
+  test("HS256, none, another algorithm or another key: refused", async () => {
+    const { k1, grant } = await setup()
+    const secret = new TextEncoder().encode("a-shared-secret-of-thirty-two-bytes!")
+    await assertInvalidClient(await grant(authFields(await assertion(secret, { alg: "HS256" }))), /must be signed with RS256/)
+    const unsigned = `${Buffer.from(JSON.stringify({ alg: "none" })).toString("base64url")}.${Buffer.from(JSON.stringify({ iss: SIGNER, sub: SIGNER, aud: `${base}/oauth/token`, exp: now() + 60, jti: "x" })).toString("base64url")}.`
+    await assertInvalidClient(await grant(authFields(unsigned)), /must be signed with RS256/)
+    const { privateKey: ec } = await generateKeyPair("ES256")
+    await assertInvalidClient(await grant(authFields(await assertion(ec, { alg: "ES256" }))), /must be signed with RS256/)
+    const impostor = await rsaKey("k1")
+    await assertInvalidClient(await grant(authFields(await assertion(impostor.privateKey))), /signature verification failed/)
+    void k1
+  })
+
+  test("an unknown kid fetches the key set again, at most every 10 seconds", async () => {
+    const { fetched, k1, grant, setKeys } = await setup()
+    assert.equal((await grant(authFields(await assertion(k1.privateKey)))).status, 200)
+    const k2 = await rsaKey("k2")
+    setKeys([k1.publicJwk, k2.publicJwk])
+    const keyFetches = () => fetched.filter((u) => u === SIGNER_KEYS).length
+    // Just fetched: not asked again yet.
+    await assertInvalidClient(await grant(authFields(await assertion(k2.privateKey, { kid: "k2" }))), /no key of the client's key set matches/)
+    assert.equal(keyFetches(), 1)
+    const realNow = Date.now
+    Date.now = () => realNow() + 11_000
+    try {
+      assert.equal((await grant(authFields(await assertion(k2.privateKey, { kid: "k2" })))).status, 200)
+    } finally {
+      Date.now = realNow
+    }
+    assert.equal(keyFetches(), 2)
+  })
+
+  test("inline jwks with ES256; a key set that cannot be fetched safely is refused", async () => {
+    const INLINE = "https://inline.example/client.json"
+    const BAD = "https://bad.example/client.json"
+    const { privateKey, publicKey } = await generateKeyPair("ES256", { extractable: true })
+    const jwk = { ...(await exportJWK(publicKey)), kid: "e1" }
+    const { app, fetched } = world(
+      {
+        [INLINE]: { body: { client_id: INLINE, redirect_uris: [CALLBACK], token_endpoint_auth_method: "private_key_jwt", token_endpoint_auth_signing_alg: "ES256", jwks: { keys: [jwk] } } },
+        [BAD]: { body: { client_id: BAD, redirect_uris: [CALLBACK], token_endpoint_auth_method: "private_key_jwt", jwks_uri: "https://keys.bad.example/jwks.json" } },
+      },
+      { "keys.bad.example": ["10.1.1.1"] },
+    )
+    const grant = async (client: string, jwt: string) => {
+      const code = new URL((await signIn(app, client)).headers.get("location")!).searchParams.get("code")!
+      return token(app, { grant_type: "authorization_code", code, code_verifier: verifier, redirect_uri: CALLBACK, client_id: client, ...authFields(jwt) })
+    }
+    const sign = (iss: string, key: CryptoKey, alg: string, kid: string) => new SignJWT({}).setProtectedHeader({ alg, kid }).setIssuer(iss).setSubject(iss).setAudience(base).setIssuedAt().setExpirationTime("1m").setJti(randomUUID()).sign(key)
+    assert.equal((await grant(INLINE, await sign(INLINE, privateKey, "ES256", "e1"))).status, 200)
+    const k = await rsaKey("k1")
+    await assertInvalidClient(await grant(BAD, await sign(BAD, k.privateKey, "RS256", "k1")), /resolves to 10\.1\.1\.1/)
+    assert.ok(!fetched.includes("https://keys.bad.example/jwks.json"))
   })
 })
