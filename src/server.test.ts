@@ -13,6 +13,7 @@ import type { McpServer } from "@modelcontextprotocol/server"
 import { AppError, defineApp, generateSigningKey, manifestJsonSchema, manifestSchema, ref, signAccessToken, signConfirmation, type AuthOptions } from "./index"
 import { checkApp, formatReport } from "@modelapp/spec"
 
+import { listen } from "./node"
 import { testClient } from "./testing"
 import { viewHtml } from "./view"
 
@@ -489,7 +490,7 @@ describe("auth", () => {
   })
 
   test("dev auth refuses a non-loopback listen", async () => {
-    await assert.rejects(makeApp().listen({ host: "0.0.0.0", port: 0, log: false }), /loopback/)
+    await assert.rejects(listen(makeApp(), { host: "0.0.0.0", port: 0, log: false }), /loopback/)
   })
 
   test("a plain MCP server: no extension is announced; the manifest is a resource and a well-known file", async () => {

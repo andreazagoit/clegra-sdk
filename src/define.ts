@@ -129,8 +129,13 @@ export type AppDefinition<E extends Schemas, A extends Schemas, F extends Schema
   /** MCP `instructions` for models. */
   instructions?: string
   websiteUrl?: string
-  /** MCP authorization: trusted token issuers with this server's public MCP address (`resource`), or `dev` locally. */
+  /**
+   * MCP authorization (spec §7): `resolve` for the app's own tokens (its users, from its auth library), `issuers`
+   * for workspace hosts, with this server's public MCP address (`resource`); or `dev` locally.
+   */
   auth?: AuthOptions
+  /** Where the app's own routes live on its public address (default none: MCP at `/mcp`). */
+  path?: string
   permissions?: Record<P, PermissionConfig>
   settings?: Record<string, SettingConfig>
   entities: { [K in keyof E]: EntityDef<E[K], NoInfer<P>> }
@@ -151,7 +156,7 @@ export type AppDefinition<E extends Schemas, A extends Schemas, F extends Schema
 }
 
 /** What defineApp returns: the app, ready to serve. */
-export type App = Pick<AppServer, "name" | "locale" | "manifest" | "fetch" | "listen" | "uri" | "fragmentUri" | "parseUri" | "createMcpServer" | "devToken" | "devConfirmation">
+export type App = Pick<AppServer, "name" | "locale" | "manifest" | "fetch" | "start" | "devMode" | "uri" | "fragmentUri" | "parseUri" | "createMcpServer" | "devToken" | "devConfirmation">
 
 const confirmOf = (c: boolean | Confirm | undefined): Confirm | undefined => (c === true ? "always" : c === false ? "never" : c)
 

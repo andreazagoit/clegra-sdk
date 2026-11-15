@@ -11,6 +11,7 @@
   "sideEffects": false,
   "exports": {
     ".": "./src/index.ts",
+    "./node": "./src/node.ts",
     "./testing": "./src/testing.ts"
   },
   "scripts": {
@@ -25,5 +26,8 @@
   },
   "peerDependencies": {
     "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.5.16"
   }
 }

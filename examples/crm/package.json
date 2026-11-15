@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Reference app: a small CRM (companies, contacts, deals) in memory, per installation \u2014 one defineApp object. Invented data.",
+  "description": "Reference app: a small CRM (companies, contacts, deals) in memory, per installation — one defineApp object. Invented data.",
   "scripts": {
     "dev": "MODELAPP_DEV=1 tsx watch src/main.ts",
     "start": "tsx src/main.ts",
@@ -11,12 +11,12 @@
     "typecheck": "tsc --noEmit -p ."
   },
   "dependencies": {
-    "@modelapp/server": "file:../../../packages/modelapp",
+    "@modelapp/server": "*",
     "zod": "^4.0.0"
   },
   "devDependencies": {
     "tsx": "^4.23.15",
     "typescript": "^5",
-    "@modelapp/spec": "file:../../../packages/modelapp-spec"
+    "@modelapp/spec": "*"
   }
 }

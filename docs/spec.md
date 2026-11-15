@@ -31,7 +31,7 @@ JSON Schema: [`packages/modelapp-spec/schema/modelapp.schema.json`](../../packag
 |---|---|
 | `specVersion` | `"1.0"` |
 | `name`, `title`, `version`, `description?`, `icons?`, `locale` | Identity. `name` is the app id: `[a-z][a-z0-9-]{1,39}` |
-| `mcp` | `{ url }`: the MCP endpoint (Streamable HTTP), relative to the manifest |
+| `mcp` | `{ url }`: the MCP endpoint (Streamable HTTP), relative to the manifest (`/mcp`, or under the app's path, `/api/modelapp/mcp`). The manifest and the OAuth metadata are always under `/.well-known/` at the root |
 | `auth` | `{ resource?, authorizationServers }` (§7). `resource` is the app's own public MCP address: the only token audience it accepts |
 | `view` | The generated `ui://` view that draws lists, records, dashboards, fragments |
 | `resolveTool`, `searchTool?` | Tools a host uses to resolve URIs and to search |
@@ -114,7 +114,7 @@ A **page** is `{ name, kind, title, icon?, permission?, params, tool, … }`:
 | `list` | `entity`, `columns` | Natively, from the list tool's rows |
 | `record` | `entity`, `sections?` | Natively. Every entity has one (`derived: true` unless declared) |
 | `dashboard` | `view` | Fragments on a grid |
-| `custom` | `view`, or `view` + `url` | The developer's MCP Apps document, or their site in an isolated frame |
+| `custom` | `view`, or `view` + `url` | The developer's MCP Apps document, or their site in an isolated frame. `url` is https, or a path on the app's own site (`/embed/pipeline`), resolved against the app's public origin |
 
 A **fragment** is a small live piece of the app shown in answers and on
 dashboards: `{ type, title, description?, params, template?, view?, tool,
@@ -177,9 +177,18 @@ the resolver, dashboards, views), before any handler runs.
 
 **Authorization is MCP's.** OAuth bearer tokens, protected-resource metadata
 (RFC 9728), a `401` with `WWW-Authenticate: Bearer resource_metadata=…`.
-There is no second sign-in.
+There is no second sign-in. An app accepts two kinds of token:
 
-- A token is a JWT with `typ: at+jwt`, `exp` and `sub`, from an issuer the
+1. **Its own** (a web app with its own users): issued by the app's own
+   authorization server to an MCP client (ChatGPT, Claude, Clegra connect the
+   same way, as OAuth clients; each person links their account of the app
+   once). The app verifies them itself and names the caller (below, «The
+   app's own tokens»). No `modelapp` claim is involved.
+2. **A workspace host's** (in-house apps a company installs into its own
+   host): the trusted-issuer mode, with the `modelapp` claim. The rest of this
+   list is about these.
+
+- A workspace host's token is a JWT with `typ: at+jwt`, `exp` and `sub`, from an issuer the
   app trusts, with one claim, `modelapp: { installation, person?,
   permissions?, locale?, host?: "workspace" | "plain" }`. `installation`
   matches `[A-Za-z0-9._:-]{1,128}`.
@@ -197,6 +206,37 @@ There is no second sign-in.
   MUST carry `jti` and `iat`, live 60 seconds at most, and is accepted once.
 - A call without a `person` has the permissions its token lists, like any
   other: none unless the token says so.
+
+**The app's own tokens.** The app verifies each one (signature, expiry, and
+`aud` = `auth.resource`, RFC 8707: a token issued for another resource is
+refused) and maps it to a caller: `{ installation, person, permissions,
+locale? }`. The SDK hook is `auth.resolve(token, request, { resource })`; it
+returns null for a token that is not the app's (a `401` follows) or throws
+with the reason.
+
+- `installation` is the app's own tenant (an organization, a workspace, an
+  account), taken from the verified token or the session behind it, never
+  from a request parameter. It matches `[A-Za-z0-9._:-]{1,128}`: no `@`, so it
+  can never equal a workspace host's `<installation>@<issuer>`.
+- `permissions` come from the app's own roles; ids the manifest does not
+  declare are dropped. The caller is a plain host (`host: "plain"`).
+- A token that is a JWT from a configured issuer (or the development
+  authority) is never handed to `auth.resolve`.
+- The protected-resource metadata names the app's authorization server
+  (`auth.authorizationServers`). Paths the authorization server needs outside
+  its own mount (RFC 8414 metadata under `/.well-known/`) MAY be answered by
+  the same routes (`auth.serve`).
+- In production `auth.resource` is required with `resolve` or `issuers`:
+  without it every request fails with a clear `500 misconfigured`, never with
+  an address guessed from request headers.
+
+**Clegra and third-party apps.** Clegra connects to an app it does not host
+exactly as ChatGPT does: as an OAuth client with a Client ID Metadata
+Document, the person signs in to the app and consents once, and Clegra keeps
+the refresh token on the person's behalf. It then also reads the manifest to
+draw the app natively. Confirmations to such an app follow MCP (annotations
+and elicitation, below); a workspace host's proof applies only to tokens of
+the trusted-issuer mode. (Clegra's side of this is not built yet.)
 
 **Permissions and visibility**
 
@@ -327,7 +367,9 @@ For a URL `client_id`:
 
 ### Production: an app with its own authorization server
 
-The SDK is not an authorization server outside development. For MCP clients
+The SDK is not an authorization server outside development, and ships none:
+an app uses an existing one (better-auth's MCP plugin, Clerk, WorkOS, Auth0, …)
+and verifies its tokens in `auth.resolve`. For MCP clients
 (ChatGPT, Claude, others) to connect to an app that signs people in itself,
 its authorization server needs:
 
@@ -348,12 +390,19 @@ its authorization server needs:
   2. Dynamic Client Registration (RFC 7591), optional, for clients that
      don't send a metadata document yet.
   3. Clients registered by hand, where the server can do neither.
-- Tokens the app can verify. The SDK accepts a signed JWT whose header has
-  `typ: at+jwt`, with `iss` exactly one of `auth.issuers`, `aud` =
-  `auth.resource`, `exp`, `sub`, and the `modelapp` claim with a valid
-  `installation` (above). The signature is checked against the issuer's key
-  set: `<issuer>/.well-known/jwks.json`, or the issuer's `jwksUri`. Clocks
-  may differ by 30 seconds. Opaque tokens are not accepted.
+- Tokens the app can verify, in `auth.resolve` (any format the app's
+  authorization server issues, audience-bound to `auth.resource`).
+- State shared by every instance: on serverless or several instances, the
+  store of write results and one-time token ids (§7, idempotency) is shared
+  (`SqlStore` in the app's Postgres, or another atomic store), never memory.
+- No key files: keys and secrets come from the environment.
+
+A workspace host's token, in the trusted-issuer mode, is a signed JWT whose
+header has `typ: at+jwt`, with `iss` exactly one of `auth.issuers`, `aud` =
+`auth.resource`, `exp`, `sub`, and the `modelapp` claim with a valid
+`installation` (above). The signature is checked against the issuer's key
+set: `<issuer>/.well-known/jwks.json`, or the issuer's `jwksUri`. Clocks may
+differ by 30 seconds. Opaque tokens are not accepted in this mode.
 
 ## 8. Conformance
 

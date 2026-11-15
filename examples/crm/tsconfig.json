@@ -9,7 +9,7 @@
     "noUncheckedIndexedAccess": true,
     "skipLibCheck": true,
     "noEmit": true,
-    "paths": { "@modelapp/server": ["../../../packages/modelapp/src/index.ts"], "@modelapp/server/testing": ["../../../packages/modelapp/src/testing.ts"] }
+    "paths": { "@modelapp/server": ["../../../packages/modelapp/src/index.ts"], "@modelapp/server/testing": ["../../../packages/modelapp/src/testing.ts"], "@modelapp/server/node": ["../../../packages/modelapp/src/node.ts"] }
   },
   "include": ["src/**/*.ts"]
 }

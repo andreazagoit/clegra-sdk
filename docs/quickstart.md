@@ -82,9 +82,10 @@ export default defineApp({
 ```
 
 ```ts
-// main.ts
+// main.ts: a standalone app on Node's HTTP server (a Next.js app serves app.fetch from its routes instead)
+import { listen } from "@modelapp/server/node"
 import app from "./app"
-await app.listen({ port: 3920 })   // MCP at /mcp, manifest at /.well-known/modelapp.json
+await listen(app, { port: 3920 })   // MCP at /mcp, manifest at /.well-known/modelapp.json
 ```
 
 `npx tsx main.ts` prints the dev sign-in code. A wrong name anywhere (a
@@ -139,6 +140,27 @@ npm run modelapp:check -- http://127.0.0.1:3920 --token <bearer>
 - `input` (actions) and `params` (fragments) are always given: `z.object({})` for none.
 - `on: "<entity>"` makes a record action; without it the action is global and `run` gets `(input, ctx)`.
 - Every handler scopes its data by `ctx.installation`.
+
+Your data layer is yours (any database, ORM or API). What the SDK guarantees without knowing it: the tenant
+(`ctx.installation`) and the person come from the verified caller, never from parameters; filters, sort, text and
+cursor reach `list` already checked against the fields' meaning and the caller's field permissions; fields the
+caller may not see are stripped from what your handler returns. A list handler over SQL:
+
+```ts
+list: async (q, ctx) => {
+  const where = ["org_id = $1"], params: unknown[] = [ctx.installation]          // the tenant, always
+  if (typeof q.filters.status === "string") where.push(`status = $${params.push(q.filters.status)}`)
+  if (q.text) where.push(`(${(q.textFields ?? []).map((f) => `${f} ILIKE $${params.push(`%${q.text}%`)}`).join(" OR ")})`)
+  const order = q.sort ? `${q.sort.field} ${q.sort.dir}` : "id"                     // q.sort.field is a declared sortable field
+  const offset = Number(q.cursor ?? 0)
+  const { rows } = await db.query(`SELECT * FROM notes WHERE ${where.join(" AND ")} ORDER BY ${order} LIMIT ${q.limit + 1} OFFSET ${offset}`, params)
+  return { rows: rows.slice(0, q.limit), ...(rows.length > q.limit ? { next: String(offset + q.limit) } : {}) }
+},
+```
+
+In production: `auth.resolve` verifies your own users' tokens (your auth library is the authorization server),
+`auth.resource` is your public MCP address, and `store: new SqlStore((text, params) => pool.query(text, params))`
+keeps idempotency and one-time token ids in your Postgres (`SqlStore.schema()` gives the table for a migration).
 
 - `mcp: (server, caller) => { … }` hands you the raw `McpServer` of each request for hand-written tools, resources and views.
 - `view: { html }` on an entity, a page or a fragment replaces the generated view; a page that is only `{ title, view }` or `{ title, url }` is fully yours.

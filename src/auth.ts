@@ -1,6 +1,5 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto"
 import { lookup as dnsLookup } from "node:dns/promises"
-import { existsSync, readFileSync, writeFileSync } from "node:fs"
 import { isIP } from "node:net"
 
 import {
@@ -21,8 +20,16 @@ import {
 import { CONFIRMATION_TYPE, OAUTH_SCOPE, PROTOCOL_ID, TOKEN_CLAIM } from "@modelapp/spec/protocol"
 
 /**
- * AUTH (spec §7): access tokens are JWTs (`typ: at+jwt`) from a trusted
- * issuer (the workspace host, or the app's own authorization server),
+ * AUTH (spec §7). Two kinds of access token reach an app:
+ *
+ * - **its own** (the common case: a web app with its own users): issued by
+ *   the app's own authorization server (better-auth, Clerk, …) to an MCP
+ *   client such as ChatGPT, Claude or Clegra. The SDK does not read them: the
+ *   app verifies them in `auth.resolve(token, request, { resource })` and says
+ *   who is calling (installation, person, permissions).
+ * - **a workspace host's** (in-house apps a company installs into its own
+ *   host): JWTs (`typ: at+jwt`) from a trusted issuer listed in
+ *   `auth.issuers`,
  * verified with the issuer's JWKS. Their audience is this server's own
  * public MCP address (`auth.resource`, RFC 8707): a token signed for another
  * app is refused whatever that app calls itself. The `modelapp` claim says
@@ -43,7 +50,7 @@ export const DEV_ISSUER = `${PROTOCOL_ID}-dev`
 export const ACCESS_TOKEN_TYPE = "at+jwt"
 /** How long a workspace host's access token may live: it is for one request. */
 export const HOST_TOKEN_SECONDS = 60
-const INSTALLATION = /^[A-Za-z0-9._:-]{1,128}$/
+export const INSTALLATION = /^[A-Za-z0-9._:-]{1,128}$/
 
 /** The tenant of a caller: the installation as its issuer names it, bound to that issuer. */
 export const tenantOf = (installation: string, issuer: string) => `${installation}@${issuer}`
@@ -83,8 +90,44 @@ export type Issuer = {
   jwks?: { keys: JWK[] }
 }
 
+/**
+ * Who a token of the app's own names, as `auth.resolve` says it. The tenant is
+ * the app's to say (an organization, a workspace, an account): never a value a
+ * request parameter carries.
+ */
+export type ResolvedCaller = {
+  /** The tenant handlers scope every read and write by: `[A-Za-z0-9._:-]{1,128}` (no `@`: a host's tenants are `<installation>@<issuer>`, so the two can never meet). */
+  installation: string
+  person: Person | null
+  /** What this person may do here, from the app's own roles. */
+  permissions: readonly string[] | "all"
+  locale?: string
+  /** A stable id of who is calling (default the person's id): idempotency is kept per subject. */
+  subject?: string
+}
+
+/** What `auth.resolve` is told about the request beside the token. */
+export type ResolveInfo = {
+  /** This server's public MCP address: the audience the token must have been issued for (RFC 8707). */
+  resource: string
+}
+
+/**
+ * Verifies a token of the app's own and names its caller: null when the token is not one (the request is
+ * refused with a 401 and the protected-resource metadata), or throws an `AuthError` with the reason. It MUST
+ * check the signature, the expiry and that the token's audience is `info.resource`.
+ */
+export type CallerResolver = (token: string, request: Request, info: ResolveInfo) => Promise<ResolvedCaller | null> | ResolvedCaller | null
+
 export type AuthOptions = {
-  /** The issuers whose tokens are accepted. With issuers, `resource` is required. */
+  /** The app's own access tokens (spec §7, «The app's own tokens»): verified by the app, mapped to a caller. */
+  resolve?: CallerResolver
+  /**
+   * Answers the app's authorization-server paths that live outside its auth library's mount (RFC 8414
+   * metadata under `/.well-known/…`), on the same routes as MCP: null for any other path.
+   */
+  serve?: (request: Request) => Promise<Response | null> | Response | null
+  /** Workspace hosts whose tokens (with the `modelapp` claim) are accepted. With issuers, `resource` is required. */
   issuers?: Issuer[]
   /**
    * This server's public MCP address, exactly as hosts and clients reach it
@@ -109,8 +152,11 @@ export type DevOptions = {
   people?: (Person & { permissions?: string[] | "all" })[]
   /** The installation dev tokens are for (default `dev`). */
   installation?: string
-  /** Where the dev key is kept so tokens survive a restart (default `.modelapp-dev-key.json` in the working directory). */
-  keyFile?: string
+  /**
+   * Where the dev key is kept so tokens survive a restart (default `.modelapp-dev-key.json` in the working
+   * directory); `false` keeps it in memory only. `MODELAPP_DEV_KEY` (a private JWK as JSON) wins over both.
+   */
+  keyFile?: string | false
   /** The one-time code the sign-in page asks for (default: random, printed on start). */
   code?: string
   /** For tests: how a client's metadata document is fetched and its host resolved (default: the global `fetch` and the system resolver). */
@@ -177,6 +223,17 @@ export class TokenVerifier {
 
   useDev(dev: DevAuthority) {
     this.#dev = dev
+  }
+
+  /** Whether a token is one this verifier answers for (a JWT whose `iss` is a configured issuer or the dev authority's), so it is never handed to `auth.resolve`. */
+  knows(token: string): boolean {
+    let iss: string | undefined
+    try {
+      iss = decodeJwt(token).iss
+    } catch {
+      return false
+    }
+    return Boolean(iss && (this.#issuers.has(iss) || this.#dev?.issues(iss)))
   }
 
   /** The keys and the audiences of an issuer for this request; why not, as an AuthError. */
@@ -660,16 +717,25 @@ export class DevAuthority {
   }
 
   async start(): Promise<void> {
-    const file = this.options.keyFile ?? `.${PROTOCOL_ID}-dev-key.json`
-    if (existsSync(file)) {
-      const jwk = JSON.parse(readFileSync(file, "utf8")) as JWK
+    const fromJwk = async (jwk: JWK) => {
       const privateKey = (await importJWK(jwk, "EdDSA")) as CryptoKey
       const { d: _d, ...pub } = jwk
-      this.#key = { privateKey, publicJwk: { ...pub, alg: "EdDSA", use: "sig" }, kid: String(jwk.kid) }
-    } else {
-      this.#key = await generateSigningKey()
-      const priv = await exportJWK(this.#key.privateKey)
-      writeFileSync(file, JSON.stringify({ ...priv, kid: this.#key.kid }), { mode: 0o600 })
+      const kid = String(jwk.kid ?? createHash("sha256").update(String(jwk.x)).digest("base64url").slice(0, 16))
+      return { privateKey, publicJwk: { ...pub, kid, alg: "EdDSA", use: "sig" }, kid }
+    }
+    const env = process.env.MODELAPP_DEV_KEY
+    const file = this.options.keyFile === false ? null : (this.options.keyFile ?? `.${PROTOCOL_ID}-dev-key.json`)
+    if (env) this.#key = await fromJwk(JSON.parse(env) as JWK)
+    else if (!file) this.#key = await generateSigningKey()
+    else {
+      // Loaded only here, in development on Node: nothing else in the SDK touches the disk.
+      const fs = await import("node:fs")
+      if (fs.existsSync(file)) this.#key = await fromJwk(JSON.parse(fs.readFileSync(file, "utf8")) as JWK)
+      else {
+        this.#key = await generateSigningKey()
+        const priv = await exportJWK(this.#key.privateKey)
+        fs.writeFileSync(file, JSON.stringify({ ...priv, kid: this.#key.kid }), { mode: 0o600 })
+      }
     }
     this.publicKey = (await importJWK(this.#key.publicJwk, "EdDSA")) as CryptoKey
   }

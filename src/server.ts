@@ -1,11 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks"
-import { createServer as createHttpServer, type IncomingMessage } from "node:http"
 
 import { createMcpHandler, inputRequired, inputResponse, McpServer, type CallToolResult, type Icon, type ServerContext } from "@modelcontextprotocol/server"
 import { META_KEY, OAUTH_SCOPE, PROTOCOL_ID, RESOLVE_TOOL, URI_SCHEME, uriPrefix } from "@modelapp/spec/protocol"
 import { z } from "zod"
 
-import { AuthError, canonicalJson, DEV_ISSUER, DevAuthority, isLoopback, signConfirmation, tenantOf, TokenVerifier, type AuthOptions, type Caller, type Person, type RequestTrust } from "./auth"
+import { AuthError, canonicalJson, DEV_ISSUER, DevAuthority, INSTALLATION, isLoopback, signConfirmation, tenantOf, TokenVerifier, type AuthOptions, type Caller, type Person, type RequestTrust } from "./auth"
 import { MANIFEST_PATH, manifestUri, SPEC_VERSION, type Manifest, type ManifestField } from "./manifest"
 import { isLabel, labelMap, localize, type Label } from "./labels"
 import { fieldsOf, jsonSchemaOf, plainSchema, type FieldInfo } from "./meaning"
@@ -48,7 +47,15 @@ import { MCP_APP_MIME_TYPE, urlPageHtml, viewHtml } from "./view"
  */
 
 /** What a request brings beside its caller: whether dev tokens count (a loopback caller), and each call's arguments as received. */
-export type RequestInfo = { trust: RequestTrust; received: ReadonlyMap<string | number, unknown> }
+export type RequestInfo = {
+  trust: RequestTrust
+  received: ReadonlyMap<string | number, unknown>
+  /** The public origin the request reached (what a same-site `url` page is resolved against), when known. */
+  origin?: string
+}
+
+/** The issuer name of callers named by the app's own `auth.resolve`. */
+export const OWN_ISSUER = "app"
 
 export type ServerOptions = {
   /** The app id: lowercase letters, digits, `-`; 2–40 characters. */
@@ -60,6 +67,11 @@ export type ServerOptions = {
   /** The locale of bare-string labels (default `en`). */
   locale?: string
   auth?: AuthOptions
+  /**
+   * Where the app's own routes live on its public address (default none): MCP at `<path>/mcp`, `<path>/health`.
+   * The manifest and the OAuth metadata stay where their standards put them, under `/.well-known/` at the root.
+   */
+  path?: string
   /** MCP `instructions` for models. */
   instructions?: string
   websiteUrl?: string
@@ -214,6 +226,8 @@ export class AppServer {
   readonly #settings = new Map<string, SettingConfig>()
   #manifest: Manifest | null = null
   #devReady: Promise<void> | null = null
+  readonly #path: string
+  #warnedStore = false
   readonly #handler = createMcpHandler(
     (ctx) => {
       const extra = ctx.authInfo?.extra as { caller?: Caller; request?: RequestInfo } | undefined
@@ -232,6 +246,9 @@ export class AppServer {
     this.locale = options.locale ?? "en"
     const auth = options.auth ?? {}
     if (auth.dev && process.env.NODE_ENV === "production") throw new Error("auth.dev is for development: it is refused when NODE_ENV is production")
+    const path = (options.path ?? "").replace(/\/+$/, "")
+    if (path && !/^(\/[A-Za-z0-9._~-]+)+$/.test(path)) throw new Error(`path "${options.path}": a URL path like /api/modelapp`)
+    this.#path = path
     this.#store = options.store ?? new MemoryStore()
     this.#verifier = new TokenVerifier(auth, (key, ttlMs) => this.#store.once(key, ttlMs))
     this.#dev = auth.dev ? new DevAuthority(auth.dev === true ? {} : auth.dev, { name: this.name, title: localize(options.title, this.locale, this.locale), allPermissions: () => [...this.#permissions.keys()] }) : null
@@ -301,7 +318,8 @@ export class AppServer {
       for (const c of config.columns) if (!fields.some((f) => f.name === c)) throw new Error(`page "${name}": column "${c}" is not a field of ${config.entity.name}`)
       if (config.params && !config.query) throw new Error(`page "${name}": with params, give query(params) too`)
     }
-    if (config.kind === "custom" && "url" in config && !/^https:\/\//.test(config.url) && !/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?\//.test(config.url)) throw new Error(`page "${name}": url must be https`)
+    if (config.kind === "custom" && "url" in config && !/^https:\/\//.test(config.url) && !/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?\//.test(config.url) && !/^\/(?!\/)[^\s\\]*$/.test(config.url))
+      throw new Error(`page "${name}": url must be https, or a path on the app's own site (/embed/…)`)
     const tool = config.kind === "record" ? this.#entities.get(config.entity.name)!.tools.get : { name: config.expose?.tool ?? `open_${name}`, plain: config.expose?.plain !== false }
     if (config.kind !== "record") this.#claimTools(tool.name)
     this.#pages.set(name, { name, config: config as unknown as PageConfig, tool })
@@ -913,11 +931,17 @@ export class AppServer {
       s.registerResource(title, uri, { mimeType: MCP_APP_MIME_TYPE, _meta: { ui } }, async () => ({ contents: [{ uri, mimeType: MCP_APP_MIME_TYPE, text: await html(), _meta: { ui } }] }))
     }
     view(this.#viewUri(), `${t(o.title)} view`, () => viewHtml(t(o.title)))
+    // A page on the app's own site (`/embed/…`) is framed at the address the request reached (or the configured one).
+    const origin = request.origin ?? (o.auth?.resource ? new URL(o.auth.resource).origin : null)
+    const absolute = (url: string) => (url.startsWith("/") ? (origin ? new URL(url, origin).href : null) : url)
     for (const p of this.#allPages()) {
       const c = p.config
       if (c.kind !== "custom" && c.view) view(this.#pageViewUri(p.name), t(c.title ?? p.name), () => (typeof c.view!.html === "function" ? c.view!.html() : c.view!.html), c.view)
       else if (c.kind === "dashboard") view(this.#pageViewUri(p.name), t(c.title), () => viewHtml(t(c.title), { tool: p.tool.name }))
-      if (c.kind === "custom" && "url" in c) view(this.#pageViewUri(p.name), t(c.title), () => urlPageHtml(t(c.title), c.url), { url: c.url })
+      if (c.kind === "custom" && "url" in c) {
+        const url = absolute(c.url)
+        if (url) view(this.#pageViewUri(p.name), t(c.title), () => urlPageHtml(t(c.title), url), { url })
+      }
       if (c.kind === "custom" && "view" in c) view(this.#pageViewUri(p.name), t(c.title), () => (typeof c.view.html === "function" ? c.view.html() : c.view.html), c.view)
     }
     for (const e of this.#entities.values()) if (e.config.view) view(this.#entityViewUri(e.name), t(e.config.label), () => (typeof e.config.view!.html === "function" ? e.config.view!.html() : e.config.view!.html), e.config.view)
@@ -1342,7 +1366,7 @@ export class AppServer {
       ...(this.options.description ? { description: L(this.options.description) } : {}),
       ...(this.options.icons ? { icons: this.options.icons } : {}),
       locale: this.locale,
-      mcp: { url: "/mcp" },
+      mcp: { url: `${this.#path}/mcp` },
       // The server's own address is what its tokens are for (never a name an app could claim): a host installs the app from it or not at all.
       auth: { ...(auth.resource ? { resource: auth.resource } : {}), authorizationServers: auth.authorizationServers ?? (auth.issuers ?? []).map((i) => i.issuer) },
       view: this.#viewUri(),
@@ -1415,14 +1439,56 @@ export class AppServer {
     }
     if (trust.dev) await this.#devStarted()
     try {
+      // A workspace host's token (or a dev token) is the SDK's to verify; any other is the app's own.
+      if (auth.resolve && !this.#verifier.knows(bearer)) return this.#resolved(await auth.resolve(bearer, request, { resource }))
       return await this.#verifier.verify(bearer, trust)
     } catch (error) {
+      if (!(error instanceof AuthError)) console.error(`[${PROTOCOL_ID}] auth`, error)
       return challenge(error instanceof AuthError ? error.message : "invalid token")
     }
   }
 
+  /** A caller the app's own `auth.resolve` named, checked: its tenant is the app's, never one of a host's. */
+  #resolved(r: Awaited<ReturnType<NonNullable<AuthOptions["resolve"]>>>): Caller {
+    if (!r) throw new AuthError("not a token of this app")
+    if (typeof r.installation !== "string" || !INSTALLATION.test(r.installation)) throw new AuthError("auth.resolve: installation must match [A-Za-z0-9._:-]{1,128}")
+    const person = r.person && typeof r.person.id === "string" && r.person.id ? { id: r.person.id, name: String(r.person.name ?? "") } : null
+    const known = new Set(this.#allPermissions())
+    const permissions = r.permissions === "all" ? known : new Set([...(r.permissions ?? [])].filter((p) => known.has(p)))
+    return { installation: r.installation, installationId: r.installation, person, permissions, ...(r.locale ? { locale: r.locale } : {}), host: "plain", issuer: OWN_ISSUER, subject: r.subject ?? person?.id ?? "anonymous" }
+  }
+
+  /** The app's own path of a request (its `path` taken off), or null when the request is outside it. */
+  #local(pathname: string): string | null {
+    const base = this.#path
+    if (pathname.startsWith("/.well-known/")) return pathname
+    if (!base) return pathname
+    if (pathname === base) return "/"
+    return pathname.startsWith(`${base}/`) ? pathname.slice(base.length) : null
+  }
+
   /**
-   * One HTTP request (Fetch API): MCP at `/mcp`, the manifest, OAuth metadata, the dev authority, `/health`.
+   * Readiness for serving (`listen` in `@modelapp/server/node`, a framework adapter): the manifest is built and
+   * checked, the dev authority started. Returns the dev sign-in code when dev sign-in is on.
+   */
+  async start(): Promise<{ devCode: string | null }> {
+    this.manifest()
+    if (this.#dev) await this.#devStarted()
+    const auth = this.options.auth ?? {}
+    if (!this.#dev && !auth.issuers?.length && !auth.resolve && !auth.anonymous) console.warn(`[${PROTOCOL_ID}] nobody can sign in: give auth.resolve (the app's own tokens) or auth.issuers (workspace hosts), or turn on auth.dev while developing`)
+    return { devCode: this.#dev?.code ?? null }
+  }
+
+  /** What is wrong with this configuration for production, said on every request instead of guessed around (no fallback). */
+  #productionProblem(): string | null {
+    if (process.env.NODE_ENV !== "production") return null
+    const auth = this.options.auth ?? {}
+    if ((auth.resolve || auth.issuers?.length) && !auth.resource) return "auth.resource is required in production: this server's public MCP address (https://…/mcp), the only audience its tokens are accepted for"
+    return null
+  }
+
+  /**
+   * One HTTP request (Fetch API): MCP at `<path>/mcp`, the manifest, OAuth metadata, the dev authority, `<path>/health`.
    * `info.remoteAddress`: the address the request came from. Dev sign-in and dev tokens count only when it is
    * a loopback address, checked on every request (`listen` passes the socket's; without it dev mode stays shut).
    */
@@ -1430,33 +1496,50 @@ export class AppServer {
     const url = new URL(request.url)
     const origin = this.#origin(request)
     const auth = this.options.auth ?? {}
+    const json = (body: unknown, status = 200, headers: Record<string, string> = {}) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", ...CORS, ...headers } })
+    const problem = this.#productionProblem()
+    if (problem) return json({ error: "misconfigured", error_description: problem }, 500)
+    const base = this.#path
     const devHere = Boolean(this.#dev) && isLoopback(info.remoteAddress)
     // In dev the server is whatever address the caller reached it by (a tunnel); otherwise only its configured one.
-    const requestResource = `${origin}/mcp`
+    const requestResource = `${origin}${base}/mcp`
     const resource = devHere ? requestResource : (auth.resource ?? requestResource)
     const trust: RequestTrust = { dev: devHere, requestResource: devHere ? requestResource : null }
-    const json = (body: unknown, status = 200, headers: Record<string, string> = {}) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", ...CORS, ...headers } })
     // Preflight: the headers the browser asks for are allowed as asked (MCP 2026-07-28 clients send mcp-method, mcp-name, Mcp-Param-*; no cookies are ever used).
     if (request.method === "OPTIONS") {
       const asked = request.headers.get("access-control-request-headers")
       return new Response(null, { status: 204, headers: { ...CORS, ...(asked && /^[\w\-, ]{1,2000}$/.test(asked) ? { "access-control-allow-headers": asked } : {}), "access-control-max-age": "600", vary: "access-control-request-headers" } })
     }
-    if (url.pathname === MANIFEST_PATH) return json(this.manifest(), 200, { "cache-control": "public, max-age=30" })
-    if (url.pathname === "/" && request.method === "GET" && (request.headers.get("accept") ?? "").includes("application/json")) return json({ name: this.name, manifest: MANIFEST_PATH, mcp: "/mcp" })
-    if (url.pathname === "/health") return json({ ok: true, name: this.name, version: this.options.version })
-    if (url.pathname === "/.well-known/oauth-protected-resource" || url.pathname === "/.well-known/oauth-protected-resource/mcp") {
+    const path = this.#local(url.pathname)
+    const notHere = () => new Response(`${localize(this.options.title, this.locale, this.locale)}: MCP at ${base}/mcp, manifest at ${MANIFEST_PATH}`, { status: 404, headers: { "content-type": "text/plain; charset=utf-8" } })
+    if (path === null) return notHere()
+    if (path === MANIFEST_PATH) return json(this.manifest(), 200, { "cache-control": "public, max-age=30" })
+    if (path === "/" && request.method === "GET" && (request.headers.get("accept") ?? "").includes("application/json")) return json({ name: this.name, manifest: MANIFEST_PATH, mcp: `${base}/mcp` })
+    if (path === "/health") return json({ ok: true, name: this.name, version: this.options.version })
+    if (path === "/.well-known/oauth-protected-resource" || path === `/.well-known/oauth-protected-resource${base}/mcp`) {
       // Where a client signs a person in. With dev sign-in on it is this server alone: trusted issuers that are hosts sign their own tokens, a client has nothing to ask them.
-      const servers = auth.authorizationServers ?? (devHere ? [origin] : (auth.issuers ?? []).map((i) => i.issuer))
+      const servers = auth.authorizationServers ?? (devHere ? [`${origin}${base}`] : (auth.issuers ?? []).map((i) => i.issuer))
       return json({ resource, authorization_servers: servers, bearer_methods_supported: ["header"], scopes_supported: [OAUTH_SCOPE], resource_name: localize(this.options.title, this.locale, this.locale) })
+    }
+    if (auth.serve) {
+      const answered = await auth.serve(request)
+      if (answered) return answered
     }
     if (devHere) {
       const dev = await this.#devStarted()
-      const answered = await dev.handle(request, origin, resource)
+      // The dev authority's paths are the app's own (under `path`), its metadata also at the RFC 8414 address for an issuer with a path.
+      const devPath = base && path.startsWith("/.well-known/") && path.endsWith(base) ? path.slice(0, -base.length) : path
+      const local = devPath === url.pathname ? request : new Request(new URL(devPath + url.search, url.origin), request)
+      const answered = await dev.handle(local, `${origin}${base}`, resource)
       if (answered) return answered
     }
-    if (url.pathname !== "/mcp") return new Response(`${localize(this.options.title, this.locale, this.locale)}: MCP at /mcp, manifest at ${MANIFEST_PATH}`, { status: 404, headers: { "content-type": "text/plain; charset=utf-8" } })
+    if (path !== "/mcp") return notHere()
     const caller = await this.#caller(request, resource, trust)
     if (caller instanceof Response) return caller
+    if (!this.options.store && !this.#warnedStore && process.env.NODE_ENV === "production") {
+      this.#warnedStore = true
+      console.warn(`[${PROTOCOL_ID}] store: idempotency and one-time tokens are kept in memory; on serverless or several instances give a shared store (SqlStore)`)
+    }
     // Each call's arguments as received (the MCP SDK hands tools the parsed ones): what a confirmation proof and the idempotency check cover.
     const received = new Map<string | number, unknown>()
     if (request.method === "POST") {
@@ -1468,46 +1551,15 @@ export class AppServer {
         }
       } catch {}
     }
-    const response = await this.#handler.fetch(request, { authInfo: { token: "verified", clientId: caller.issuer, scopes: [], extra: { caller, request: { trust, received } satisfies RequestInfo } } })
+    const response = await this.#handler.fetch(request, { authInfo: { token: "verified", clientId: caller.issuer, scopes: [], extra: { caller, request: { trust, received, origin } satisfies RequestInfo } } })
     const headers = new Headers(response.headers)
     for (const [k, v] of Object.entries(CORS)) headers.set(k, v)
     return new Response(response.body, { status: response.status, headers })
   }
 
-  /** Serves `fetch` on Node's HTTP server. Dev auth only on a loopback address. */
-  async listen(options: { port?: number; host?: string; log?: boolean } = {}): Promise<{ url: string; close: () => Promise<void> }> {
-    const port = options.port ?? 3000
-    const host = options.host ?? "127.0.0.1"
-    if (this.#dev && !isLoopback(host)) throw new Error(`auth.dev works only on a loopback address, not ${host}`)
-    this.manifest()
-    if (this.#dev) await this.#devStarted()
-    const auth = this.options.auth ?? {}
-    if (!this.#dev && !auth.issuers?.length && !auth.anonymous) console.warn(`[${PROTOCOL_ID}] nobody can sign in: give auth.issuers (with auth.resource), or turn on auth.dev while developing`)
-    const http = createHttpServer(async (req, res) => {
-      const started = Date.now()
-      try {
-        const response = await this.fetch(await toRequest(req), { remoteAddress: req.socket.remoteAddress ?? null })
-        const headers: Record<string, string> = {}
-        response.headers.forEach((v, k) => (headers[k] = v))
-        res.writeHead(response.status, headers)
-        if (response.body) {
-          const reader = response.body.getReader()
-          for (let r = await reader.read(); !r.done; r = await reader.read()) res.write(r.value)
-        }
-        res.end()
-      } catch (error) {
-        console.error(`[${PROTOCOL_ID} http]`, error)
-        if (!res.headersSent) res.writeHead(500).end()
-        else res.end()
-      } finally {
-        if (options.log !== false) console.log(`${new Date().toISOString()} ${req.method} ${req.url} ${res.statusCode} ${Date.now() - started}ms`)
-      }
-    })
-    await new Promise<void>((resolve) => http.listen(port, host, resolve))
-    const url = `http://${host}:${port}`
-    console.log(`${localize(this.options.title, this.locale, this.locale)} — MCP ${url}/mcp · manifest ${url}${MANIFEST_PATH}`)
-    if (this.#dev) console.log(`DEV AUTH ON (never in production) — sign-in code: ${this.#dev.code}`)
-    return { url, close: () => new Promise((resolve) => http.close(() => resolve())) }
+  /** Whether dev sign-in is on (it then answers loopback callers only). */
+  get devMode(): boolean {
+    return Boolean(this.#dev)
   }
 }
 
@@ -1516,13 +1568,4 @@ const CORS: Record<string, string> = {
   "access-control-allow-methods": "GET, POST, DELETE, OPTIONS",
   "access-control-allow-headers": "authorization, content-type, mcp-session-id, mcp-protocol-version, last-event-id",
   "access-control-expose-headers": "www-authenticate, mcp-session-id",
-}
-
-async function toRequest(req: IncomingMessage): Promise<Request> {
-  const chunks: Buffer[] = []
-  for await (const chunk of req) chunks.push(chunk as Buffer)
-  const headers = new Headers()
-  for (const [k, v] of Object.entries(req.headers)) if (v !== undefined) headers.set(k, Array.isArray(v) ? v.join(", ") : v)
-  const body = chunks.length && req.method !== "GET" && req.method !== "HEAD" ? Buffer.concat(chunks) : undefined
-  return new Request(`http://${req.headers.host ?? "localhost"}${req.url}`, { method: req.method, headers, ...(body ? { body } : {}) })
 }

@@ -27,7 +27,14 @@ export default defineApp({
   locale: "en",                      // language of bare strings and of tool names/descriptions (default "en")
   instructions: "…",                 // optional: MCP instructions for models
   websiteUrl: "https://…",           // optional
-  auth: { resource: "https://crm.example.com/mcp", issuers: [{ issuer: "https://host.example.com" }] },   // resource: this server's public MCP address (required with issuers); or { dev: true } locally
+  auth: {                            // or { dev: true } locally (loopback callers only, refused in production)
+    resource: "https://crm.example.com/mcp",                 // this server's public MCP address: the only token audience; required in production
+    resolve: async (token, request, { resource }) => ({ installation: "org_1", person: { id, name }, permissions: [...] }), // your own users' tokens: verify (signature, exp, aud === resource), map to a caller, or null
+    authorizationServers: ["https://crm.example.com/api/auth"], // your auth library's OAuth server, named in the protected-resource metadata
+    issuers: [{ issuer: "https://host.example.com" }],       // optional: workspace hosts (tokens with the modelapp claim)
+  },
+  path: "/api/modelapp",             // optional: where MCP lives (default /mcp at the root)
+  store: new SqlStore(query),        // optional: idempotency + one-time token ids in your Postgres (serverless, several instances)
 
   permissions: {                     // ids are "group.verb"
     "deals.view": { label: "See deals", default: true },
@@ -145,7 +152,8 @@ Labels given as `{ en, it }` maps reach the generated view in every locale: it d
 `invalid_input`, `confirmation_required`, `conflict`, `internal`, `unauthorized`.
 
 What `defineApp` returns: `manifest()`, `fetch(request)` (Fetch API handler),
-`listen({ port, host })`, `devToken()`, `devConfirmation()`, `uri()`.
+`start()`, `devToken()`, `devConfirmation()`, `uri()`. On Node alone:
+`listen(app, { port, host })` from `@modelapp/server/node`.
 
 ## Generated tools
 
@@ -166,8 +174,9 @@ record pages), `show_<fragment>`, `modelapp_resolve` (for hosts). Reads have
 8. Names (`entities`, `actions`, `fragments`, `pages`, `agents` keys) are `[a-z][a-z0-9_]*`. Entities and fragments share one namespace. Don't name a filter/sort field `query`, `sort`, `dir`, `cursor` or `limit`.
 9. A list page with `params` also needs `query: (params) => ({ filters, text, sort })`.
 10. Dev auth (`auth: { dev: true }`) is off unless you set it, refused when `NODE_ENV=production`, and answers only callers on a loopback address. In production trust issuers and give `auth.resource`: your server's public MCP address, the only audience tokens are accepted for.
-11. `ctx.installation` is the tenant: the host's installation bound to that host (`<installation>@<issuer>`). Use it as an opaque key.
+11. `ctx.installation` is the tenant: what `auth.resolve` said (your organization id), or a host's installation bound to that host (`<installation>@<issuer>`). Use it as an opaque key; never take a tenant from a parameter.
 12. In `list`, search `query.text` only in `query.textFields`; in a fragment's `data`, leave out values the caller may not see (`ctx.can`): template data are yours, the SDK only drops items whose `uri` is out of the caller's reach.
+13. Your data access is yours (any DB/ORM). Pages with `url` may be same-site paths (`/embed/pipeline`).
 
 ## Common mistakes
 
