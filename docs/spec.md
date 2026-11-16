@@ -253,6 +253,28 @@ checked before sending, a `ref` as a picker) and shows under each field what
 the server says is wrong with it (`error.fields`, §7). It asks nothing more
 before a write: confirming is the host's (§7).
 
+The generated view and the host (MCP Apps, `2026-01-26`):
+
+- It sends `ui/initialize`, then `ui/notifications/initialized`, and makes
+  no `tools/call` before the host answered. A host that answers is called
+  over that bridge (ChatGPT included). Only a host that refuses
+  `ui/initialize` and offers `window.openai.callTool` is called through it,
+  and an answer without the result's `structuredContent` is an error.
+- It draws the result of the call that opened it once: from
+  `ui/notifications/tool-result`, or from `window.openai.toolOutput` (its
+  `_meta` from `toolResponseMetadata`, the MCP result envelope) when that is
+  there first. Later tool-result notifications (hosts send them for the
+  view's own calls too) and `openai:set_globals` events never replace what
+  the person opened since; a new locale draws the same screen again.
+- Every click that calls a tool shows progress at once, then the result, or
+  what the app or the host said (a host's refusal in its own words, a host
+  that doesn't answer within 30 seconds), where the person is looking: a
+  status line kept at the top of the view. A click is never silent.
+- A record's action sends `id` and the record's title as `record_title`
+  (§6 rule 10). After a change made in the view it sends
+  `ui/update-model-context` with the result's text, so the model knows in
+  its next turn.
+
 ## 6. The generated MCP server
 
 Streamable HTTP at `mcp.url`. Tools, in this order of derivation:
@@ -273,10 +295,11 @@ Rules:
 3. Reads carry `readOnlyHint: true`. Writes carry `readOnlyHint: false` and `destructiveHint: true` exactly when `confirm` is `always`.
 4. A write is listed to plain MCP clients only when the developer opted in (`plain: true`). An entity, page or fragment MAY be hidden from them (`plain: false`).
 5. A tool the caller lacks the permission for is not listed.
-6. Tools with a view name it in `_meta.ui.resourceUri`; the data to draw is the result's `structuredContent`.
+6. Tools with a view name it in `_meta.ui.resourceUri`; the data to draw is the result's `structuredContent`. Every tool a view calls (lists, records, actions, pages) carries `_meta.ui.visibility` with `"app"` (ChatGPT also reads `openai/widgetAccessible: true`); a host refuses a view's call to any other tool.
 7. Hand-written tools, resources and views MAY be added to the same server; they are outside the manifest.
 8. Entity tools (`<entity>_list`, `<entity>_get`) carry `_meta.modelapp: { entity, kind? }`, `kind` as in the manifest. With a kind, their description ends with one fixed sentence: `Kind: person.`; with `{ by, map }`, the kinds in the map's order and the field: `Kind: organization or person (by type).`
 9. A list filter on a field with `as` names the property in its description (`Company (worksFor): …`); a key filter says it is exact (`Email: exact email; a value or { in: [...] }`) and carries `format` where JSON Schema has one (`email`).
+10. **Records are named by their title.** In the text a model reads, every record of a list, a get, `search` and `fetch` carries its `title` beside its `uri` (an outsider's title wrapped, §7). A tool of an action on a record takes `id` (required) and `record_title` (optional string, at most 300 characters): the record's title as the model read it, so a client that writes its own approval prompt from the arguments can name the record the person approves. Both descriptions tell the model to name the record by its title, never by its id. `record_title` is a display hint and never trusted: the app names the record from `id` in everything it shows or confirms, never passes the hint to the handler, and refuses the call with `invalid_input` (`fields.record_title`) when the hint names another record (compared without the untrusted wrapper, case, width, quotes and extra spaces). `record_title` is reserved: an action's `input` can't declare it.
 
 ## 7. Enforcement
 
@@ -369,6 +392,13 @@ the trusted-issuer mode. (Clegra's side of this is not built yet.)
   values as a person reads them (labels, titles of referenced records);
 - a plain client that can't elicit: the client's own approval applies, guided
   by the tool's annotations (`destructiveHint`); the server runs the call.
+
+What a person confirms names the record by the title the app reads from `id`
+(`error.confirm.record`, the elicitation's text), never by the model's
+`record_title`, and a host MUST NOT show that hint as the app's. A client's own
+approval prompt is written from the arguments: there the hint is the only
+title, and a hint that names another record stops the call (§6 rule 10), so
+the person can't approve one record and change another.
 
 **Decision (1.0): confirmations follow MCP.** A host that confirms on its own
 (ChatGPT, Claude) decides from the annotations; a client that supports
@@ -532,6 +562,8 @@ npx modelapp check https://crm.example.com --token <a plain caller's bearer>
 | `mcp.deterministic` | `tools/list` is the same on every call |
 | `mcp.sort` | a list tool offers to sort only by fields the manifest declares sortable, and refuses any other key |
 | `mcp.views` | every view a tool names is served as an MCP Apps document |
+| `mcp.titles` | each row of a list's text carries its `uri` and `title`, and the record's text from its get tool the same title; every action tool on a record takes a required string `id` and an optional string `record_title` |
+| `mcp.app-callable` | the tools a view calls (lists, records, actions, pages) don't leave `"app"` out of `_meta.ui.visibility` |
 | `mcp.manifest` | the manifest is one MCP resource, identical to the file |
 | `kinds.known` | every unprefixed kind is in `kinds.json` for the `specVersion`; every dotted kind is well-formed |
 | `kinds.properties` | every `as` belongs to the entity's kind (or is universal) with a matching type; single-valued properties appear once; required ones exist; keys are filters; `kinds` definitions are well-formed |

@@ -152,6 +152,25 @@ const XML: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", "\
  * open the wrapper, plainly, nested or already encoded.
  */
 export const untrustedText = (value: string) => `<untrusted>${value.replace(/[&<>\uFF1C\uFF1E\uFE64\uFE65]/g, (c) => XML[c]!)}</untrusted>`
+
+/**
+ * The key of a record action's display hint (spec §6 rule 10): the record's title as the model read it, for a client's
+ * own approval prompt. Never trusted: the app names the record from `id`; a hint that names another record stops the call.
+ */
+export const RECORD_TITLE_PARAM = "record_title"
+/** A title compared as a person reads it: the untrusted wrapper and its escapes undone, case, width, quotes and spaces ignored. */
+const comparableTitle = (value: string) =>
+  value
+    .replace(/<\/?untrusted>/g, "")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&")
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^["'«»“”‘’]+|["'«»“”‘’]+$/g, "")
+    .trim()
 const pointerKey = (k: string) => k.replace(/~/g, "~0").replace(/\//g, "~1")
 /** Every string inside `value` (at any depth) wrapped as untrusted, its JSON pointer noted. `skip`: keys left as they are. */
 function markAll(value: unknown, pointer: string, pointers: string[], skip?: ReadonlySet<string>): unknown {
@@ -336,6 +355,7 @@ export class AppServer {
     this.#claimTools(tool)
     const input = (config.input ?? z.object({})) as z.ZodObject
     if (entity && "id" in input.shape) throw new Error(`action "${name}": "id" is the record's id, given by the SDK; don't declare it in input`)
+    if (entity && RECORD_TITLE_PARAM in input.shape) throw new Error(`action "${name}": "${RECORD_TITLE_PARAM}" is the record's title hint, given by the SDK; don't declare it in input`)
     const write = config.readOnly !== true
     const confirm = write ? (config.confirm ?? "always") : "never"
     // Writes reach plain MCP clients only when the developer opts in (spec §6).
@@ -585,7 +605,8 @@ export class AppServer {
     const locale = caller.locale ?? this.locale
     const out: { label: string; value: string }[] = []
     for (const [k, v] of Object.entries(received)) {
-      if (v === undefined || v === null || v === "") continue
+      // The model's title hint is never shown as the app's: the record is named from its id.
+      if (v === undefined || v === null || v === "" || (a.entity && k === RECORD_TITLE_PARAM)) continue
       const p = raw.properties?.[k] ?? {}
       let label = isLabel(p.label) ? this.#t(caller, p.label) : k
       let value = typeof v === "string" ? v : JSON.stringify(v)
@@ -780,6 +801,12 @@ export class AppServer {
     return entity.fields.some((f) => f.role === "title" && f.untrusted)
   }
 
+  /** A record's title as a model reads it beside its URI (spec §6 rule 10): what it names the record by (an outsider's title wrapped). */
+  #modelTitle(entity: EntityRecord, row: Record<string, unknown>, caller: Caller): string {
+    const title = this.#recordCard(entity, row, caller).title
+    return this.#untrustedTitle(entity) ? untrustedText(title) : title
+  }
+
   /** A row as a model reads it, with the records it references named: `{ id, title }` in place of a bare id (an outsider's title wrapped). */
   #named(entity: EntityRecord, row: Record<string, unknown>, refs: Record<string, Record<string, string>>): Record<string, unknown> {
     const out = { ...row }
@@ -888,15 +915,25 @@ export class AppServer {
     const notes: Notification[] = []
     const ctx = this.#context(caller, meta, notes)
     if (!this.#mayUse(a, caller)) return failure("permission_denied", `You may not use ${this.#t(caller, a.config.title)}.`)
-    const { id, ...rest } = args
+    const { id, [RECORD_TITLE_PARAM]: hint, ...rest } = args
     const parsed = a.input.safeParse(a.entity ? rest : args, this.#zodLocale(caller))
     if (!parsed.success) return this.#invalid(a.input, parsed.error, caller)
     let record: Record<string, unknown> | undefined
     if (a.entity) {
       if (typeof id !== "string" || !id) return failure("invalid_input", "id: the record's id is required")
+      if (hint !== undefined && typeof hint !== "string") return failure("invalid_input", `${RECORD_TITLE_PARAM}: a string`, { fields: { [RECORD_TITLE_PARAM]: "a string" } })
       const row = await a.entity.config.get(id, ctx)
       if (!row) return failure("not_found", `${this.#t(caller, a.entity.config.label)} ${id} doesn't exist.`)
       record = row as Record<string, unknown>
+      // The hint is what a client's own approval prompt may have shown the person: one that names another record stops
+      // the call (the person approved something else). It never changes what runs, and is never shown as the app's.
+      const titleField = a.entity.fields.find((f) => f.role === "title" && (!f.permission || caller.permissions.has(f.permission)))
+      const real = titleField ? record[titleField.name] : undefined
+      if (typeof hint === "string" && hint.trim() && real !== undefined && real !== null && comparableTitle(hint) !== comparableTitle(String(real))) {
+        const label = this.#t(caller, a.entity.config.label).toLowerCase()
+        const why = `${RECORD_TITLE_PARAM} doesn't match the ${label} with id ${id}: read it again (${a.entity.tools.get.name}) and name the one the person means`
+        return failure("invalid_input", why, { fields: { [RECORD_TITLE_PARAM]: why } })
+      }
     }
     const received = (raw && typeof raw === "object" && !Array.isArray(raw) ? raw : args) as Record<string, unknown>
     // Per caller: a stored answer is only ever given back to who made the call.
@@ -1085,7 +1122,7 @@ export class AppServer {
           const marked = out.rows.map((r, i) => this.#markRow(e, r, `/rows/${i}`, pointers))
           const refs = await this.#refs(e, out.rows, caller, ctx, pointers)
           return {
-            content: text(JSON.stringify({ rows: marked.map((r, i) => ({ uri: uris[i], ...this.#named(e, r, refs) })), ...(out.next ? { next: out.next } : {}), ...(out.total !== undefined ? { total: out.total } : {}) })),
+            content: text(JSON.stringify({ rows: marked.map((r, i) => ({ uri: uris[i], title: this.#modelTitle(e, out.rows[i]!, caller), ...this.#named(e, r, refs) })), ...(out.next ? { next: out.next } : {}), ...(out.total !== undefined ? { total: out.total } : {}) })),
             structuredContent: { entity: e.name, ...out, uris, refs, view: { kind: "list", title: this.#t(caller, e.config.plural ?? e.config.label), columns: columns(), tool: e.tools.list.name, args, getTool: e.tools.get.name, ...(query.sort ? { sort: query.sort } : {}) } },
             ...this.#marks(pointers),
           }
@@ -1110,7 +1147,7 @@ export class AppServer {
           const uri = this.uri(e.name, String(record.id))
           const refs = await this.#refs(e, [record], caller, ctx, pointers)
           return {
-            content: text(JSON.stringify({ uri, ...this.#named(e, marked, refs) })),
+            content: text(JSON.stringify({ uri, title: this.#modelTitle(e, record, caller), ...this.#named(e, marked, refs) })),
             structuredContent: { entity: e.name, uri, record, refs, view: { kind: "record", title: this.#t(caller, e.config.label), tool: e.tools.get.name, fields: this.#visibleFields(e, caller).map((f) => this.#column(f, caller)), actions: this.#recordActions(e, caller) } },
             ...this.#marks(pointers),
           }
@@ -1241,13 +1278,22 @@ export class AppServer {
     for (const a of this.#actions.values()) {
       if (!this.#mayUse(a, caller)) continue
       const title = t(a.config.title)
-      const input = a.entity ? z.object({ id: z.string().describe(`The ${t(a.entity.config.label).toLowerCase()}'s id`), ...a.input.shape }) : a.input
+      // An action on a record: the id, and the record's title as a display hint, so a client's own approval prompt can
+      // name the record the person approves (spec §6 rule 10). Descriptions in the app's locale, like every tool's.
+      const one = a.entity ? t(a.entity.config.label).toLowerCase() : ""
+      const input = a.entity
+        ? z.object({
+            id: z.string().describe(`The ${one}'s id, from a list, search or get result. When you describe this action or ask the person to approve it, name the ${one} by its title, never by this id`),
+            [RECORD_TITLE_PARAM]: z.string().max(300).optional().describe(`The ${one}'s title as the list, search or get result gave it, so the person sees which ${one} they approve. Display only: the app names the ${one} from its id, and refuses the call if this names another one`),
+            ...a.input.shape,
+          })
+        : a.input
       const crossInput = Object.values(((jsonSchemaOf(a.input, "input") as { properties?: Record<string, Record<string, unknown>> }).properties ?? {})).some((p) => kindRef(p))
       reg(
         a.tool,
         {
           title,
-          description: `${t(a.config.description) || title}${a.write ? (a.confirm === "always" ? " (a change; the person confirms it first)" : " (a change)") : ""}.${crossInput ? ` ${CROSS_INPUT_HINT}` : ""}`,
+          description: `${t(a.config.description) || title}${a.write ? (a.confirm === "always" ? " (a change; the person confirms it first)" : " (a change)") : ""}.${a.entity ? ` On one ${one}: its \`id\`, and its title in \`${RECORD_TITLE_PARAM}\`.` : ""}${crossInput ? ` ${CROSS_INPUT_HINT}` : ""}`,
           inputSchema: listedOnly(input, t),
           annotations: { title, readOnlyHint: !a.write, destructiveHint: a.write && a.confirm === "always", idempotentHint: !a.write, openWorldHint: false },
           _meta: this.#callable(),

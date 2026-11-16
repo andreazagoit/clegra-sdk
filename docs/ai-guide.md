@@ -176,6 +176,12 @@ required/min/max/date are checked before sending, and an input the schema refuse
 (`error.fields`). Views add no confirmation of their own: confirming is the host's (annotations, elicitation, or a
 workspace host's proof).
 
+An action on a record (`on: "deal"`) is listed with `id` and an optional `record_title` that the SDK adds (don't
+declare either in `input`): the model passes the record's title so a client's own approval prompt names it
+(«Mark Hartley Engineering as won», not «d1»). Your handler never sees `record_title`; the SDK refuses a call whose
+hint names another record, and every confirmation the SDK words names the record from its id. Name the record in
+your `message` yourself (`${deal.name} marked as won.`).
+
 `people: (ids, ctx) => ({ [id]: name })` (optional, beside `entities`): the names of the people `role: "person"`
 fields hold. Hosts and models then see names (the caller's own comes from the token); an id it can't name shows as
 an unknown person, never as the id. Without it a person field must hold the name itself.
@@ -241,7 +247,16 @@ customer: { kind: { by: "type", map: { company: "organization", private: "person
 `search: true`), `<entity>_<action>` / `<action>`, `open_<page>` (not for
 record pages), `show_<fragment>`, `modelapp_resolve` (for hosts; `not_found` for another app's URI). Reads have
 `readOnlyHint: true`; writes `destructiveHint: true` when `confirm` is always. With a kind, entity tools end with
-`Kind: person.` and carry `_meta.modelapp: { entity, kind }`; `search` takes `kind`.
+`Kind: person.` and carry `_meta.modelapp: { entity, kind }`; `search` takes `kind`. What a model reads of a list,
+a get, `search` or `fetch` carries each record's `title` beside its `uri`. Every tool the generated view calls is
+callable from views (`_meta.ui.visibility` with `"app"`, `openai/widgetAccessible`).
+
+The generated view (ChatGPT, Claude, any MCP Apps host): rows open their record, «‹ back» returns, a record's
+actions run from it; progress, results and refusals appear in a status line at the top. It talks the MCP Apps bridge
+(ChatGPT included) and tells the model about a change made in it (`ui/update-model-context`). A custom view you
+write: finish `ui/initialize` before any `tools/call`, and draw the opening result once (hosts repeat
+`ui/notifications/tool-result` for your own calls, and ChatGPT's `openai:set_globals` fires on every layout or theme
+change).
 
 ## Rules
 

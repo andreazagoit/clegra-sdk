@@ -620,7 +620,7 @@
     {
       "name": "deal_mark_won",
       "title": "Mark as won",
-      "description": "Closes the deal as won. Only when the person says so (a change; the person confirms it first).",
+      "description": "Closes the deal as won. Only when the person says so (a change; the person confirms it first). On one deal: its `id`, and its title in `record_title`.",
       "annotations": {
         "title": "Mark as won",
         "readOnlyHint": false,
@@ -634,7 +634,12 @@
         "properties": {
           "id": {
             "type": "string",
-            "description": "The deal's id"
+            "description": "The deal's id, from a list, search or get result. When you describe this action or ask the person to approve it, name the deal by its title, never by this id"
+          },
+          "record_title": {
+            "description": "The deal's title as the list, search or get result gave it, so the person sees which deal they approve. Display only: the app names the deal from its id, and refuses the call if this names another one",
+            "type": "string",
+            "maxLength": 300
           },
           "note": {
             "type": "string",
@@ -650,7 +655,7 @@
     {
       "name": "deal_set_stage",
       "title": "Move to stage",
-      "description": "Moves an open deal to another open stage, or to lost (a change).",
+      "description": "Moves an open deal to another open stage, or to lost (a change). On one deal: its `id`, and its title in `record_title`.",
       "annotations": {
         "title": "Move to stage",
         "readOnlyHint": false,
@@ -664,7 +669,12 @@
         "properties": {
           "id": {
             "type": "string",
-            "description": "The deal's id"
+            "description": "The deal's id, from a list, search or get result. When you describe this action or ask the person to approve it, name the deal by its title, never by this id"
+          },
+          "record_title": {
+            "description": "The deal's title as the list, search or get result gave it, so the person sees which deal they approve. Display only: the app names the deal from its id, and refuses the call if this names another one",
+            "type": "string",
+            "maxLength": 300
           },
           "stage": {
             "type": "string",
@@ -686,7 +696,7 @@
     {
       "name": "contact_log_call",
       "title": "Log a call",
-      "description": "Records that we called this contact today, with a note (a change; the person confirms it first).",
+      "description": "Records that we called this contact today, with a note (a change; the person confirms it first). On one contact: its `id`, and its title in `record_title`.",
       "annotations": {
         "title": "Log a call",
         "readOnlyHint": false,
@@ -700,7 +710,12 @@
         "properties": {
           "id": {
             "type": "string",
-            "description": "The contact's id"
+            "description": "The contact's id, from a list, search or get result. When you describe this action or ask the person to approve it, name the contact by its title, never by this id"
+          },
+          "record_title": {
+            "description": "The contact's title as the list, search or get result gave it, so the person sees which contact they approve. Display only: the app names the contact from its id, and refuses the call if this names another one",
+            "type": "string",
+            "maxLength": 300
           },
           "note": {
             "type": "string",
@@ -718,7 +733,7 @@
     {
       "name": "company_link_erp_customer",
       "title": "Link to the ERP customer",
-      "description": "Records which customer of another app (the ERP) this company is (a change). An input that takes a record of another app takes its URI (modelapp://<app>/<entity>/<id>), as that app's search or lists give it.",
+      "description": "Records which customer of another app (the ERP) this company is (a change). On one company: its `id`, and its title in `record_title`. An input that takes a record of another app takes its URI (modelapp://<app>/<entity>/<id>), as that app's search or lists give it.",
       "annotations": {
         "title": "Link to the ERP customer",
         "readOnlyHint": false,
@@ -732,7 +747,12 @@
         "properties": {
           "id": {
             "type": "string",
-            "description": "The company's id"
+            "description": "The company's id, from a list, search or get result. When you describe this action or ask the person to approve it, name the company by its title, never by this id"
+          },
+          "record_title": {
+            "description": "The company's title as the list, search or get result gave it, so the person sees which company they approve. Display only: the app names the company from its id, and refuses the call if this names another one",
+            "type": "string",
+            "maxLength": 300
           },
           "customer": {
             "type": "string",

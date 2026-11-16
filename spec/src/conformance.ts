@@ -443,6 +443,46 @@ export async function checkApp(options: Options): Promise<Report> {
 
   check("mcp.views", "every view a tool names is served as an MCP Apps document", viewProblems)
 
+  // 4f. Records are named by their title (spec §6 rule 10): beside each URI in what a model reads, and in what an action
+  // on a record takes, so a client's own approval prompt can say which record (the app never trusts that hint).
+  {
+    const p: string[] = []
+    for (const e of manifest.entities) {
+      if (!byName.has(e.tools.list.name)) continue
+      const { error, rows } = await rowsOf(e)
+      if (error) p.push(`${e.tools.list.name}: ${error}`)
+      for (const row of rows) if (typeof row.uri !== "string" || typeof row.title !== "string") p.push(`${e.tools.list.name}: a row without its uri and title (${JSON.stringify(row).slice(0, 80)})`)
+      const first = rows[0]
+      if (first && typeof first.uri === "string" && byName.has(e.tools.get.name)) {
+        const id = first.uri.split("/").pop() ?? ""
+        const one = await call(e.tools.get.name, { id: decodeURIComponent(id) })
+        // Whether the listed record is found again is not this check's question; its text's title is.
+        if (!one.error && (typeof one.data?.title !== "string" || one.data.title !== first.title)) p.push(`${e.tools.get.name}: the record's text doesn't carry the title its list gave`)
+      }
+    }
+    for (const a of manifest.actions) {
+      const t = a.entity ? byName.get(a.tool.name) : undefined
+      if (!t) continue
+      const props = (t.inputSchema?.properties ?? {}) as Record<string, { type?: unknown; description?: unknown }>
+      const required = new Set((t.inputSchema?.required ?? []) as string[])
+      if (props.id?.type !== "string" || !required.has("id")) p.push(`${t.name}: the record's id is a required string`)
+      if (props.record_title?.type !== "string" || required.has("record_title")) p.push(`${t.name}: record_title is an optional string (the record's title, a display hint)`)
+    }
+    check("mcp.titles", "a model reads each record's title beside its URI; an action on a record takes id and an optional record_title", p)
+  }
+
+  // 4g. What the generated view calls is callable from a view (MCP Apps `_meta.ui.visibility` with "app", or omitted).
+  {
+    const p: string[] = []
+    const viewCalls = [...manifest.entities.flatMap((e) => [e.tools.list, e.tools.get]), ...manifest.actions.map((a) => a.tool), ...manifest.pages.filter((x) => x.kind !== "record").map((x) => x.tool)]
+    for (const ref of viewCalls) {
+      const t = byName.get(ref.name)
+      const visibility = (t?._meta?.ui as { visibility?: unknown } | undefined)?.visibility
+      if (t && visibility !== undefined && !(Array.isArray(visibility) && visibility.includes("app"))) p.push(`${t.name}: _meta.ui.visibility ${JSON.stringify(visibility)} leaves out "app": a view's call to it is refused`)
+    }
+    check("mcp.app-callable", "the tools a view calls (lists, records, actions, pages) are callable from views", p)
+  }
+
   // 6. The manifest is also one MCP resource, identical to the file.
   const resources = ((await rpc("resources/list", {}, token)).result?.resources ?? []) as { uri: string; mimeType?: string }[]
   const asResource = resources.find((r) => r.mimeType === "application/json" && r.uri === `${URI_SCHEME}://${manifest.name}`)
