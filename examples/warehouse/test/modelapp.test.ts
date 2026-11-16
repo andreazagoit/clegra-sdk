@@ -35,7 +35,7 @@ type Client = Awaited<ReturnType<typeof testClient>>
 type Rows = { rows: Record<string, unknown>[]; next?: string; total?: number }
 
 const auth = await getAuth()
-const app = createWarehouseApp({ auth: modelAppAuth(auth) })
+const app = createWarehouseApp({ auth: modelAppAuth(async () => auth) })
 const route = toNextHandlers(app, { publicUrl: SITE })
 const handler = (request: Request) => auth.handler(request)
 
@@ -263,7 +263,7 @@ describe("create_order", () => {
 // A workspace host on its own keys (a Clegra node): its public key given to the app as a local JWKS, its tokens signed here.
 const HOST = "https://node.test"
 const hostKey = await generateSigningKey()
-const hostApp = createWarehouseApp({ auth: { ...modelAppAuth(auth), issuers: [{ issuer: HOST, jwks: { keys: [hostKey.publicJwk] } }] } })
+const hostApp = createWarehouseApp({ auth: { ...modelAppAuth(async () => auth), issuers: [{ issuer: HOST, jwks: { keys: [hostKey.publicJwk] } }] } })
 
 describe("workspace hosts (MODELAPP_ISSUERS)", () => {
   /** A client of one installation of the host: a new one-request token for each call, as a workspace host signs them. */
@@ -275,7 +275,7 @@ describe("workspace hosts (MODELAPP_ISSUERS)", () => {
     assert.deepEqual(issuersFromEnv({}), [])
     assert.deepEqual(issuersFromEnv({ MODELAPP_ISSUERS: " https://node.test|https://node.test/keys , https://other.test " }), [{ issuer: "https://node.test", jwksUri: "https://node.test/keys" }, { issuer: "https://other.test" }])
     assert.throws(() => issuersFromEnv({ MODELAPP_ISSUERS: "|https://node.test/keys" }), /has no issuer/)
-    const options = modelAppAuth(auth, { MODELAPP_ISSUERS: "https://node.test" })
+    const options = modelAppAuth(async () => auth, { MODELAPP_ISSUERS: "https://node.test" })
     assert.deepEqual([options.issuers, options.resource], [[{ issuer: "https://node.test" }], RESOURCE])
   })
 

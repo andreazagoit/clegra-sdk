@@ -40,15 +40,19 @@ export function issuersFromEnv(env: Record<string, string | undefined> = process
  * verifies them here. Such a token counts only when it is a JWT (`typ: at+jwt`) signed by better-auth's own keys, from its issuer, for this
  * MCP server alone (`aud`), not expired (30 s of clock skew), not sender-bound (`cnf`), with the `modelapp` scope
  * and the organization (`org`) — and the person is still a member of that organization.
+ *
+ * better-auth is reached through `getAuth` only when one of its tokens or metadata requests arrives: a host's
+ * call never builds it (its mcp plugin accepts an http resource only on loopback, so a host in Docker that
+ * reaches the app at http://host.docker.internal:3930 can use the app while its own sign-in needs https).
  */
-export function modelAppAuth(auth: Auth, env: Record<string, string | undefined> = process.env): AuthOptions {
+export function modelAppAuth(getAuth: () => Promise<Auth>, env: Record<string, string | undefined> = process.env): AuthOptions {
   const issuer = `${publicUrl()}/api/auth`
   const resource = mcpResource()
 
   // better-auth's keys, read in-process and cached; read again (at most every 10 s) for a key id not in them (rotation).
   let keys: { set: ReturnType<typeof createLocalJWKSet>; at: number } | null = null
   const loadKeys = async () => {
-    const jwks = (await auth.api.getJwks()) as { keys: JWK[] }
+    const jwks = (await (await getAuth()).api.getJwks()) as { keys: JWK[] }
     keys = { set: createLocalJWKSet(jwks), at: Date.now() }
     return keys
   }
@@ -95,8 +99,10 @@ export function modelAppAuth(auth: Auth, env: Record<string, string | undefined>
     // better-auth's metadata (RFC 8414, OpenID discovery) where clients look for it: under /.well-known at the root.
     serve: async (request) => {
       const path = new URL(request.url).pathname
-      const metadata = path === "/.well-known/oauth-authorization-server/api/auth" ? oauthProviderAuthServerMetadata(auth) : path === "/.well-known/openid-configuration/api/auth" ? oauthProviderOpenIdConfigMetadata(auth) : null
-      if (!metadata) return null
+      const which = path === "/.well-known/oauth-authorization-server/api/auth" ? "oauth" : path === "/.well-known/openid-configuration/api/auth" ? "openid" : null
+      if (!which) return null
+      const auth = await getAuth()
+      const metadata = which === "oauth" ? oauthProviderAuthServerMetadata(auth) : oauthProviderOpenIdConfigMetadata(auth)
       if (request.method !== "GET" && request.method !== "HEAD") return new Response(null, { status: 405, headers: { allow: "GET, HEAD" } })
       return metadata(request)
     },
