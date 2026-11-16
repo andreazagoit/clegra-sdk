@@ -10,7 +10,7 @@ import { decodeJwt, decodeProtectedHeader, generateKeyPair, SignJWT } from "jose
 import { generateSigningKey, signAccessToken, SqlStore, type Person } from "clegra"
 import { embedProxy, toNextHandlers } from "clegra/next"
 import { checkApp, formatReport } from "clegra/spec"
-import { testClient } from "clegra/testing"
+import { installationClient, testClient } from "clegra/testing"
 
 process.env.PGLITE_DIR = "memory://"
 process.env.BETTER_AUTH_SECRET = randomBytes(32).toString("base64url")
@@ -338,6 +338,83 @@ describe("workspace hosts (CLEGRA_ISSUERS)", () => {
   })
 })
 
+describe("the installation itself: the low-stock schedule and the lifecycle", () => {
+  /** The installation-level caller: a workspace host's token with no person, listing exactly `permissions`. */
+  const installation = (name: string, permissions: string[] = []) =>
+    installationClient(hostApp, { token: () => signAccessToken(hostKey, { iss: HOST, aud: RESOURCE, sub: `installation:${name}`, lifetimeSeconds: 60, clegra: { installation: name, permissions, host: "workspace" } }) })
+  const person = (name: string) =>
+    testClient(hostApp, { token: () => signAccessToken(hostKey, { iss: HOST, aud: RESOURCE, sub: "host-person-7", lifetimeSeconds: 60, clegra: { installation: name, person: { id: "host-person-7", name: "Carla Test" }, permissions: ALL_PERMISSIONS, host: "workspace" } }) })
+  type Sent = { type?: string; title: string; body?: string; uri?: string; to: unknown }
+  const sentOf = (r: { _meta?: Record<string, unknown> }) => ((r._meta?.clegra as { notifications?: Sent[] } | undefined)?.notifications ?? []) as Sent[]
+
+  test("declared: the schedule, the typed notification, the lifecycle tools; app-only, never a model's", async () => {
+    const m = hostApp.manifest()
+    assert.deepEqual(m.schedules, [{ name: "low_stock_check", action: "check_low_stock", tool: "check_low_stock", every: 60, maxSeconds: 30 }])
+    assert.deepEqual(m.notifications?.map((n) => [n.type, n.default, n.permission]), [["low_stock", true, "products.view"]])
+    assert.deepEqual(m.lifecycle, { installation: "clegra_installation", export: "clegra_export", delete: "clegra_delete" })
+    const listed = await (await person("shop-life")).listTools()
+    assert.equal((listed.find((t) => t.name === "check_low_stock")?._meta?.ui as { visibility?: string[] } | undefined)?.visibility?.join(), "app")
+    assert.ok(!listed.some((t) => ["clegra_installation", "clegra_export", "clegra_delete"].includes(t.name)), "the lifecycle tools are the installation's own")
+    const own = (await (await installation("shop-life", ["products.view"])).listTools()).map((t) => t.name)
+    assert.ok(["clegra_installation", "clegra_export", "clegra_delete"].every((n) => own.includes(n)), own.join())
+  })
+
+  test("the schedule tells the stock movers about each low product once, until it is back in stock", async () => {
+    const host = await installation("shop-alerts", ["products.view"])
+    const first = await host.schedule("low_stock_check")
+    assert.ok(!first.isError, JSON.stringify(first.content))
+    const sent = sentOf(first)
+    const data = first.structuredContent?.data as { low: number; told: string[] }
+    assert.ok(data.low > 0 && sent.length === data.low, JSON.stringify(first.structuredContent))
+    assert.ok(sent.every((n) => n.type === "low_stock" && JSON.stringify(n.to) === JSON.stringify({ permission: "stock.move" }) && n.uri?.startsWith("clegra://warehouse/product/")), JSON.stringify(sent))
+    assert.ok(sent.some((n) => n.title === "Out of stock: Enamel paint, blue"), JSON.stringify(sent.map((n) => n.title)))
+    // Again: nothing new to tell.
+    assert.deepEqual(sentOf(await host.schedule("low_stock_check")), [])
+    // Restocked, then out again: told again.
+    const paint = decodeURIComponent(sent.find((n) => n.title === "Out of stock: Enamel paint, blue")!.uri!.split("/").pop()!)
+    const carla = await person("shop-alerts")
+    assert.ok(!(await carla.call("product_register_movement", { id: paint, kind: "in", quantity: 50 })).isError)
+    assert.deepEqual(sentOf(await host.schedule("low_stock_check")), [])
+    assert.ok(!(await carla.call("product_register_movement", { id: paint, kind: "out", quantity: 50 })).isError)
+    assert.deepEqual(sentOf(await host.schedule("low_stock_check")).map((n) => n.title), ["Out of stock: Enamel paint, blue"])
+  })
+
+  test("a schedule's run is the installation's only: a person, or another tool's schedule, is refused", async () => {
+    const code = (r: { structuredContent?: Record<string, unknown> }) => (r.structuredContent?.error as { code?: string } | undefined)?.code
+    const carla = await person("shop-alerts")
+    assert.equal(code(await carla.call("check_low_stock", {}, { clegra: { schedule: "low_stock_check" } })), "permission_denied")
+    const host = await installation("shop-alerts", ["products.view"])
+    assert.equal(code(await host.call("check_low_stock", {}, { clegra: { schedule: "nightly" } })), "permission_denied")
+  })
+
+  test("the installation's state is kept; its data exported as JSON, deleted once, and the export keeps working after", async () => {
+    const host = await installation("shop-gone")
+    for (const state of ["enabled", "disabled", "uninstalled"] as const) assert.deepEqual((await host.call("clegra_installation", { state })).structuredContent, { ok: true })
+    assert.deepEqual(await sql(`SELECT state FROM installation_state WHERE tenant_id = $1`, [`shop-gone@${HOST}`]), [{ state: "uninstalled" }])
+
+    const { file } = await host.exportData()
+    assert.ok(file, "an export")
+    assert.deepEqual([file.name, file.contentType, file.bytes], ["warehouse-export.json", "application/json", file.body.byteLength])
+    assert.equal(file.sha256, createHash("sha256").update(file.body).digest("hex"))
+    const data = JSON.parse(file.body.toString("utf8")) as { installation: string; state: string; products: { id: string; stock: number }[]; orders: { lines: unknown[] }[]; people: unknown[] }
+    assert.deepEqual([data.installation, data.state, data.products.length, data.orders.length, data.people.length], [`shop-gone@${HOST}`, "uninstalled", 25, 12, 2])
+    assert.ok(data.orders.every((o) => o.lines.length > 0))
+
+    const deleted = await host.call("clegra_delete")
+    const counts = (deleted.structuredContent as { deleted: boolean; counts: Record<string, number> }).counts
+    assert.deepEqual([deleted.structuredContent?.deleted, counts.products, counts.orders, counts.movements! > 25], [true, 25, 12, true])
+    assert.deepEqual(await sql(`SELECT (SELECT count(*) FROM tenant WHERE id = $1)::integer AS tenants, (SELECT count(*) FROM product WHERE tenant_id = $1)::integer AS products, (SELECT count(*) FROM installation_state WHERE tenant_id = $1)::integer AS states`, [`shop-gone@${HOST}`]), [{ tenants: 0, products: 0, states: 0 }])
+    // Idempotent; the export after it: nothing kept. Uninstalled after the delete marks nothing.
+    assert.deepEqual((await host.call("clegra_delete")).structuredContent, { deleted: true, counts: { products: 0, movements: 0, orders: 0 } })
+    const after = await host.exportData()
+    assert.deepEqual([after.file, after.result.structuredContent], [null, { empty: true }])
+    assert.deepEqual((await host.call("clegra_installation", { state: "uninstalled" })).structuredContent, { ok: true })
+    assert.deepEqual(await sql(`SELECT count(*)::integer AS n FROM tenant WHERE id = $1`, [`shop-gone@${HOST}`]), [{ n: 0 }])
+    // The organizations are untouched.
+    assert.equal(rows(await ada.call("product_list", { limit: 1 })).total, 25)
+  })
+})
+
 describe("fragments and pages", () => {
   test("low stock lists the emptiest products first", async () => {
     const r = await luke.call("show_low_stock", { limit: 3 })
@@ -358,9 +435,9 @@ describe("fragments and pages", () => {
     assert.ok(m.agents.some((a) => a.name === "assistant"))
   })
 
-  test("the idempotency table in the migration is the SDK's", () => {
-    const migration = readFileSync(new URL("../db/migrations/005_clegra_store.sql", import.meta.url), "utf8")
-    assert.ok(migration.includes(SqlStore.schema()), "db/migrations/005_clegra_store.sql must contain SqlStore.schema()")
+  test("the store's tables in the latest migration are the SDK's", () => {
+    const migration = readFileSync(new URL("../db/migrations/006_clegra_lifecycle.sql", import.meta.url), "utf8")
+    assert.ok(migration.includes(SqlStore.schema()), "db/migrations/006_clegra_lifecycle.sql must contain SqlStore.schema()")
   })
 })
 

@@ -140,6 +140,22 @@ export async function lowStock(tenantId: string, limit = 10): Promise<Product[]>
   return rows.map(toProduct)
 }
 
+/**
+ * The low-stock check: the products at or under their reorder level now, and those of them nobody was told about yet
+ * (`fresh`, recorded as told in the same transaction: two checks at once tell each product once). A product back
+ * over its level is forgotten, so its next dip is told again.
+ */
+export async function stockAlerts(tenantId: string): Promise<{ low: Product[]; fresh: Product[] }> {
+  return transaction(async (tx) => {
+    const low = (await tx(`SELECT * FROM product_stock WHERE tenant_id = $1 AND stock_status <> 'ok' ORDER BY (stock::numeric / GREATEST(reorder_level, 1)) ASC, name ASC`, [tenantId])).map(toProduct)
+    const ids = low.map((p) => p.id)
+    await tx(`DELETE FROM stock_alert WHERE tenant_id = $1 AND NOT (product_id = ANY($2::text[]))`, [tenantId, ids])
+    const told = await tx(`INSERT INTO stock_alert (tenant_id, product_id) SELECT $1, unnest($2::text[]) ON CONFLICT DO NOTHING RETURNING product_id`, [tenantId, ids])
+    const fresh = new Set(told.map((r) => String(r.product_id)))
+    return { low, fresh: low.filter((p) => fresh.has(p.id)) }
+  })
+}
+
 /** What the stock on hand cost to buy (purchase cost × stock, never negative stock). */
 export async function stockValue(tenantId: string): Promise<{ value: number; products: number; units: number }> {
   const [r] = await sql(

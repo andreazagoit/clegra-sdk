@@ -40,7 +40,7 @@ test("004 keeps the existing rows, makes every organization a tenant and frees t
   await sql(`INSERT INTO sales_order_line (order_id, line_no, product_id, quantity, unit_price) VALUES ('s1', 1, 'p1', 2, 5)`)
   await sql(`INSERT INTO stock_movement (id, organization_id, product_id, kind, quantity, user_id) VALUES ('m1', 'o1', 'p1', 'in', 10, 'u1'), ('m2', 'o1', 'p1', 'out', 2, 'u1')`)
 
-  assert.deepEqual(await migrate(), ["004_tenants.sql", "005_clegra_store.sql"])
+  assert.deepEqual(await migrate(), ["004_tenants.sql", "005_clegra_store.sql", "006_clegra_lifecycle.sql"])
   // 005: the store table under the package's name, its index too.
   assert.deepEqual(await sql(`SELECT to_regclass('clegra_store')::text AS t, to_regclass('clegra_store_expires_at')::text AS i`), [{ t: "clegra_store", i: "clegra_store_expires_at" }])
 

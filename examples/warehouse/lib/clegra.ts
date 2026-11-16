@@ -28,12 +28,13 @@ import {
   personNames,
   registerMovement,
   STOCK_STATUSES,
+  stockAlerts,
   stockValue,
   UNITS,
   WarehouseError,
   type Actor,
 } from "./warehouse"
-import { isWorkspaceInstallation, provisionWorkspace } from "./tenants"
+import { deleteWorkspace, exportWorkspace, isWorkspaceInstallation, provisionWorkspace, setInstallationState } from "./tenants"
 
 // ------------------------------------------------------------------ schemas (fields carry their meaning)
 
@@ -123,6 +124,15 @@ async function mapped<T>(work: () => Promise<T>): Promise<T> {
     if (error instanceof ListError) throw new AppError("invalid_input", error.message)
     throw error
   }
+}
+
+/**
+ * The lifecycle's tenant: a workspace host's installation, the only caller of the lifecycle tools (the SDK lists them
+ * to a workspace host's installation-level token alone). An organization's data belong to its own sign-in.
+ */
+function installationOf(ctx: Context): string {
+  if (!isWorkspaceInstallation(ctx.installation)) throw new AppError("permission_denied", "The lifecycle is a workspace host's, for one of its installations.")
+  return ctx.installation
 }
 
 const permissions = Object.fromEntries(
@@ -273,6 +283,59 @@ export function createWarehouseApp({ auth, store = new SqlStore((text, params) =
             return { message: ctx.t({ en: `Draft order ${order.number} created.`, it: `Ordine ${order.number} creato in bozza.` }), record: ctx.uri("order", order.id) }
           }),
       },
+      // Run by the workspace host every hour (`schedules`), as the installation, with nobody at the screen.
+      check_low_stock: {
+        title: { en: "Check low stock", it: "Controlla le scorte" },
+        description: {
+          en: "Finds the products at or under their reorder level and tells the people who register stock about each one once, until it is back in stock",
+          it: "Trova i prodotti alla scorta minima o sotto e lo dice, una volta per prodotto finché non torna disponibile, a chi registra i movimenti",
+        },
+        icon: "bell-ring",
+        input: z.object({}),
+        // It records which products were told about, nothing of the warehouse: never asks.
+        confirm: "never",
+        permission: "products.view",
+        // The host's machinery: never a model's tool.
+        visibility: "app",
+        run: (_input, ctx) =>
+          mapped(async () => {
+            const { low, fresh } = await stockAlerts(await tenant(ctx))
+            for (const p of fresh)
+              ctx.notify({
+                type: "low_stock",
+                title: p.stockStatus === "out" ? { en: `Out of stock: ${p.name}`, it: `Esaurito: ${p.name}` } : { en: `Low stock: ${p.name}`, it: `Sotto scorta: ${p.name}` },
+                body: { en: `${p.stock} in stock, reorder level ${p.reorderLevel}.`, it: `${p.stock} in giacenza, scorta minima ${p.reorderLevel}.` },
+                uri: ctx.uri("product", p.id),
+                to: { permission: "stock.move" },
+              })
+            return {
+              message: ctx.t({ en: `${low.length} products at or under their reorder level, ${fresh.length} newly.`, it: `${low.length} prodotti alla scorta minima o sotto, ${fresh.length} da adesso.` }),
+              data: { low: low.length, told: fresh.map((p) => p.id) },
+            }
+          }),
+      },
+    },
+
+    schedules: {
+      low_stock_check: { action: "check_low_stock", every: 60, maxSeconds: 30 },
+    },
+
+    notifications: {
+      low_stock: {
+        label: { en: "Low stock", it: "Sotto scorta" },
+        description: { en: "A product reached its reorder level or ran out", it: "Un prodotto è arrivato alla scorta minima o è esaurito" },
+        permission: "products.view",
+      },
+    },
+
+    // For the workspace host's installations only (installationOf): told of its changes, its data exported and deleted.
+    lifecycle: {
+      installation: (state, ctx) => setInstallationState(installationOf(ctx), state),
+      export: async (ctx) => {
+        const data = await exportWorkspace(installationOf(ctx))
+        return data ? { name: "warehouse-export.json", contentType: "application/json", body: JSON.stringify(data, null, 2) } : null
+      },
+      delete: async (ctx) => ({ counts: await deleteWorkspace(installationOf(ctx)) }),
     },
 
     fragments: {
@@ -325,7 +388,7 @@ export function createWarehouseApp({ auth, store = new SqlStore((text, params) =
       },
       products: { title: { en: "Products", it: "Prodotti" }, icon: "package", list: "product", columns: ["sku", "name", "category", "stock", "stockStatus", "salePrice", "purchaseCost"] },
       movements: { title: { en: "Stock movements", it: "Movimenti" }, icon: "arrow-left-right", list: "movement", columns: ["date", "summary", "kind", "note", "by"] },
-      orders: { title: { en: "Orders", it: "Ordini" }, icon: "receipt", list: "order", columns: ["number", "customer", "date", "status", "total"] },
+      orders: { title: { en: "Orders", it: "Ordini" }, icon: "receipt", list: "order", actions: ["create_order"], columns: ["number", "customer", "date", "status", "total"] },
       // The app's own page (app/embed/stock), framed by the host at the app's public origin with a sign-in ticket.
       stock: { title: { en: "Stock board", it: "Tabellone giacenze" }, icon: "bar-chart-3", permission: "products.view", description: { en: "Every product's stock against its reorder level", it: "La giacenza di ogni prodotto rispetto alla scorta minima" }, url: "/embed/stock" },
     },

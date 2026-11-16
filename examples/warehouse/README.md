@@ -62,6 +62,16 @@ The same rules apply in the pages and over MCP.
   installation gets its own copy of the demo data (Aurora Hardware) on its first call, in one
   transaction. A host's person is not a better-auth user: their name comes from the token and is
   kept in `person` when they change something, so lists show who did it.
+- **What the host runs as the installation** (a workspace host's token with no person):
+  - the schedule `low_stock_check` (every 60 minutes) runs the app-only action `check_low_stock`. It sends a
+    notification of the declared type `low_stock` to everyone who holds `stock.move` (`to: { permission }`), once per
+    product at or under its reorder level, until it is back in stock (`stock_alert`);
+  - the lifecycle: `clegra_installation` keeps the state the host last told (`installation_state`), `clegra_export`
+    gives the installation's data as one JSON file, and `clegra_delete` deletes them (idempotent, with counts). These
+    are for a workspace host's installations only; an organization's data belong to its own sign-in.
+    `db/migrations/006_clegra_lifecycle.sql` also re-runs `SqlStore.schema()`: the SDK's second table (later runs)
+    is cleared by every delete.
+- **Page actions**: «New order» on the orders list.
 - **Wiring**: `app/api/clegra/[...path]/route.ts` (`toNextHandlers`) and `withClegra` in
   `next.config.ts`. The rewrites put `/mcp`, `/.well-known/clegra.json` and the OAuth metadata
   at the root of the site.
@@ -133,6 +143,7 @@ framed only by the hosts declared in `lib/clegra.ts` (`EMBED_HOSTS`), signed in 
 
 - tenant isolation, also for a workspace host's installations (a host token signed with a local key set);
 - the `004_tenants.sql` migration on a database that already has data;
+- the low-stock schedule, its notifications and the lifecycle (state, export, delete), as the installation (`installationClient`);
 - the purchase-cost permission;
 - list filters, sort, search and the cursor;
 - the actions and fragments;

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto"
 
-import { transaction, type Sql } from "./db"
+import { sql, transaction, type Sql } from "./db"
 import { DEMO_USERS } from "./demo"
 import { AURORA, demoGtin, type CompanyData } from "./seed-data"
 
@@ -103,4 +103,68 @@ export async function provisionWorkspace(installation: string): Promise<void> {
     await insertCompanyData(tx, installation, workspaceCode(installation), AURORA, { admin: person("admin"), member: person("member") })
   })
   provisioned.add(installation)
+}
+
+// ------------------------------------------------------------------ a workspace installation's lifecycle
+
+export type InstallationState = "enabled" | "disabled" | "uninstalled"
+
+/**
+ * What the workspace host last told about its installation (`clegra_installation`). Enabled or disabled: the
+ * installation gets its copy of the demo company if it has none yet. Uninstalled: recorded only while its data are
+ * still here (after the host's delete there is nothing to mark).
+ */
+export async function setInstallationState(installation: string, state: InstallationState): Promise<void> {
+  if (!isWorkspaceInstallation(installation)) throw new Error(`"${installation}" is not a workspace installation`)
+  if (state !== "uninstalled") await provisionWorkspace(installation)
+  await sql(
+    `INSERT INTO installation_state (tenant_id, state) SELECT $1, $2 WHERE EXISTS (SELECT 1 FROM tenant WHERE id = $1)
+     ON CONFLICT (tenant_id) DO UPDATE SET state = excluded.state, changed_at = now()`,
+    [installation, state],
+  )
+}
+
+export async function installationState(installation: string): Promise<InstallationState | null> {
+  const [row] = await sql<{ state: InstallationState }>(`SELECT state FROM installation_state WHERE tenant_id = $1`, [installation])
+  return row?.state ?? null
+}
+
+/**
+ * Everything the warehouse keeps for a workspace installation, as plain rows (the host's export): null when it keeps
+ * nothing (never called, or deleted). Reads only: an export never provisions the demo company.
+ */
+export async function exportWorkspace(installation: string) {
+  if (!isWorkspaceInstallation(installation)) throw new Error(`"${installation}" is not a workspace installation`)
+  const [tenant] = await sql<{ created_at: Date }>(`SELECT created_at FROM tenant WHERE id = $1`, [installation])
+  if (!tenant) return null
+  const [products, movements, orders, lines, people, state] = await Promise.all([
+    sql(`SELECT id, sku, gtin, name, category, unit, sale_price::float8 AS "salePrice", purchase_cost::float8 AS "purchaseCost", reorder_level AS "reorderLevel", stock FROM product_stock WHERE tenant_id = $1 ORDER BY sku`, [installation]),
+    sql(`SELECT id, product_id AS product, kind, quantity, occurred_at AS "occurredAt", note, person_id AS person, order_id AS "order" FROM stock_movement WHERE tenant_id = $1 ORDER BY occurred_at, id`, [installation]),
+    sql(`SELECT id, number, customer_name AS customer, status, ordered_on::text AS "orderedOn", confirmed_at AS "confirmedAt", confirmed_by AS "confirmedBy", created_by AS "createdBy" FROM sales_order WHERE tenant_id = $1 ORDER BY number`, [installation]),
+    sql(`SELECT l.order_id AS "order", l.line_no AS line, l.product_id AS product, l.quantity, l.unit_price::float8 AS "unitPrice" FROM sales_order_line l JOIN sales_order o ON o.id = l.order_id WHERE o.tenant_id = $1 ORDER BY l.order_id, l.line_no`, [installation]),
+    sql(`SELECT id, name FROM person WHERE tenant_id = $1 ORDER BY id`, [installation]),
+    installationState(installation),
+  ])
+  return { installation, since: tenant.created_at.toISOString(), state, products, movements, orders: orders.map((o) => ({ ...o, lines: lines.filter((l) => l.order === o.id).map(({ order: _, ...l }) => l) })), people }
+}
+
+/**
+ * Deletes everything the warehouse keeps for a workspace installation (its tenant row, and with it every row of
+ * its own, by the foreign keys), with how many of each there were. Idempotent: again, zeros. A later call of the
+ * installation gets a fresh copy of the demo company.
+ */
+export async function deleteWorkspace(installation: string): Promise<Record<"products" | "movements" | "orders", number>> {
+  if (!isWorkspaceInstallation(installation)) throw new Error(`"${installation}" is not a workspace installation`)
+  const counts = await transaction(async (tx) => {
+    const [n] = await tx<{ products: number; movements: number; orders: number }>(
+      `SELECT (SELECT count(*) FROM product WHERE tenant_id = $1)::integer AS products,
+              (SELECT count(*) FROM stock_movement WHERE tenant_id = $1)::integer AS movements,
+              (SELECT count(*) FROM sales_order WHERE tenant_id = $1)::integer AS orders`,
+      [installation],
+    )
+    await tx(`DELETE FROM tenant WHERE id = $1`, [installation])
+    return { products: n?.products ?? 0, movements: n?.movements ?? 0, orders: n?.orders ?? 0 }
+  })
+  provisioned.delete(installation)
+  return counts
 }
