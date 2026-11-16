@@ -8,7 +8,7 @@ import { Badge, STOCK_TONES } from "@/components/ui"
 import { formatMoney } from "@/lib/format"
 import { CATEGORY_LABELS, STOCK_STATUS_LABELS, UNIT_LABELS } from "@/lib/labels"
 import { requireViewer } from "@/lib/session"
-import { getProduct, listMovements, memberNames } from "@/lib/warehouse"
+import { getProduct, listMovements, personNames } from "@/lib/warehouse"
 
 export const metadata: Metadata = { title: "Product" }
 
@@ -18,7 +18,7 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
   const product = await getProduct(viewer.orgId, id)
   if (!product) notFound()
   const movements = await listMovements(viewer.orgId, { filters: { product: product.id }, sort: { field: "date", dir: "desc" }, limit: 50 })
-  const people = await memberNames(viewer.orgId, [...new Set(movements.rows.flatMap((m) => (m.by ? [m.by] : [])))])
+  const people = await personNames(viewer.orgId, [...new Set(movements.rows.flatMap((m) => (m.by ? [m.by] : [])))])
   const facts: [string, React.ReactNode][] = [
     ["In stock", `${product.stock} ${UNIT_LABELS[product.unit].en}`],
     ["Reorder at", String(product.reorderLevel)],

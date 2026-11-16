@@ -22,7 +22,8 @@ export type AuthOptions = {
 /**
  * Sign-in for the app's own users, and the authorization server for MCP clients — all better-auth:
  *
- * - email + password, the organization plugin (the tenant is the session's active organization);
+ * - email + password, the organization plugin (the tenant is the session's active organization; each organization
+ *   gets its `tenant` row when it is created);
  * - jwt + mcp: ChatGPT, Claude or Clegra connect with OAuth 2.1 (PKCE, `resource`), the person signs in on
  *   /sign-in and agrees on /oauth/consent; access tokens are JWTs for `<site>/mcp` carrying the organization (`org`);
  * - cimd: clients identify themselves with an https URL (a Client ID Metadata Document). Dynamic client
@@ -62,7 +63,17 @@ export function createAuth(pool: Pool, options: AuthOptions = {}) {
       },
     },
     plugins: [
-      organization({ creatorRole: "admin", allowUserToCreateOrganization: false }),
+      organization({
+        creatorRole: "admin",
+        allowUserToCreateOrganization: false,
+        organizationHooks: {
+          // An organization is a tenant (db/migrations/004_tenants.sql): its warehouse rows point at this row,
+          // which goes when the organization goes.
+          afterCreateOrganization: async ({ organization }) => {
+            await pool.query(`INSERT INTO tenant (id, kind, organization_id) VALUES ($1, 'organization', $1) ON CONFLICT (id) DO NOTHING`, [organization.id])
+          },
+        },
+      }),
       jwt({ disableSettingJwtHeader: true }),
       mcp({
         resource: mcpResource(),

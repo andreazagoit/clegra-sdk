@@ -1,6 +1,6 @@
 import { oauthProviderAuthServerMetadata, oauthProviderOpenIdConfigMetadata } from "@better-auth/oauth-provider"
 import { createLocalJWKSet, decodeProtectedHeader, errors, jwtVerify, type JWK } from "jose"
-import { AuthError, type AuthOptions, type ResolvedCaller } from "modelapp"
+import { AuthError, type AuthOptions, type Issuer, type ResolvedCaller } from "modelapp"
 
 import { MODELAPP_SCOPE, type Auth } from "./auth"
 import { sql } from "./db"
@@ -19,12 +19,29 @@ export async function callerFor(userId: string, organizationId: string): Promise
 }
 
 /**
- * MAP's `auth` for this app: better-auth (its mcp plugin) issues the access tokens, the app verifies them here.
- * A token counts only when it is a JWT (`typ: at+jwt`) signed by better-auth's own keys, from its issuer, for this
+ * Workspace hosts whose tokens (with the `modelapp` claim) are accepted: MODELAPP_ISSUERS, `issuer|jwksUri`,
+ * comma-separated. Their tenant is `<installation>@<issuer>`, an installation of that host, never an organization.
+ */
+export function issuersFromEnv(env: Record<string, string | undefined> = process.env): Issuer[] {
+  return (env.MODELAPP_ISSUERS ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((entry) => {
+      const [issuer, jwksUri] = entry.split("|").map((s) => s.trim())
+      if (!issuer) throw new Error(`MODELAPP_ISSUERS: "${entry}" has no issuer`)
+      return { issuer, ...(jwksUri ? { jwksUri } : {}) }
+    })
+}
+
+/**
+ * MAP's `auth` for this app. Workspace hosts from MODELAPP_ISSUERS (`env`): the SDK verifies their tokens itself,
+ * for this MCP server alone. The app's own users: better-auth (its mcp plugin) issues the access tokens, the app
+ * verifies them here. Such a token counts only when it is a JWT (`typ: at+jwt`) signed by better-auth's own keys, from its issuer, for this
  * MCP server alone (`aud`), not expired (30 s of clock skew), not sender-bound (`cnf`), with the `modelapp` scope
  * and the organization (`org`) — and the person is still a member of that organization.
  */
-export function modelAppAuth(auth: Auth): AuthOptions {
+export function modelAppAuth(auth: Auth, env: Record<string, string | undefined> = process.env): AuthOptions {
   const issuer = `${publicUrl()}/api/auth`
   const resource = mcpResource()
 
@@ -49,6 +66,7 @@ export function modelAppAuth(auth: Auth): AuthOptions {
   return {
     resource,
     authorizationServers: [issuer],
+    issuers: issuersFromEnv(env),
     resolve: async (token) => {
       try {
         decodeProtectedHeader(token)

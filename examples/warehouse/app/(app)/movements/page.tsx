@@ -6,7 +6,7 @@ import { MovementTable } from "@/components/movement-table"
 import { PageHeader, Pager } from "@/components/ui"
 import { MOVEMENT_KIND_LABELS } from "@/lib/labels"
 import { requireViewer } from "@/lib/session"
-import { listMovements, listProducts, memberNames, MOVEMENT_KINDS, type MovementKind } from "@/lib/warehouse"
+import { listMovements, listProducts, personNames, MOVEMENT_KINDS, type MovementKind } from "@/lib/warehouse"
 
 export const metadata: Metadata = { title: "Movements" }
 
@@ -21,7 +21,7 @@ export default async function MovementsPage({ searchParams }: { searchParams: Pr
     listMovements(viewer.orgId, { filters: kind ? { kind } : {}, ...(sp.q ? { text: sp.q } : {}), sort: { field: "date", dir: "desc" }, ...(cursor ? { cursor } : {}), limit: LIMIT }),
     viewer.can("stock.move") ? listProducts(viewer.orgId, { sort: { field: "sku", dir: "asc" }, limit: 200 }) : null,
   ])
-  const people = await memberNames(viewer.orgId, [...new Set(page.rows.flatMap((m) => (m.by ? [m.by] : [])))])
+  const people = await personNames(viewer.orgId, [...new Set(page.rows.flatMap((m) => (m.by ? [m.by] : [])))])
   return (
     <>
       <PageHeader title="Movements">

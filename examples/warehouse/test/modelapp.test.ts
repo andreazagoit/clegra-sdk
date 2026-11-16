@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs"
 import { after, before, describe, test } from "node:test"
 
 import { decodeJwt, decodeProtectedHeader, generateKeyPair, SignJWT } from "jose"
-import { SqlStore } from "modelapp"
+import { generateSigningKey, signAccessToken, SqlStore, type Person } from "modelapp"
 import { toNextHandlers } from "modelapp/next"
 import { checkApp, formatReport } from "modelapp/spec"
 import { testClient } from "modelapp/testing"
@@ -21,7 +21,8 @@ const { closeDb, getDb, sql } = await import("../lib/db")
 const { migrate } = await import("../lib/migrate")
 const { seed } = await import("../lib/seed")
 const { createAuth, getAuth } = await import("../lib/auth")
-const { modelAppAuth } = await import("../lib/modelapp-auth")
+const { issuersFromEnv, modelAppAuth } = await import("../lib/modelapp-auth")
+const { ALL_PERMISSIONS } = await import("../lib/permissions")
 const { createWarehouseApp } = await import("../lib/modelapp")
 const { oauthAccessToken } = await import("../scripts/oauth-flow")
 const { restartable, restartAuthorization, staleOAuthQuery } = await import("../lib/oauth-query")
@@ -61,7 +62,7 @@ async function rpc(token: string | null, method: string, params: Record<string, 
 
 const rows = (r: { structuredContent?: Record<string, unknown> }) => r.structuredContent as unknown as Rows
 const errorOf = (r: { isError?: boolean; structuredContent?: Record<string, unknown> }) => (r.isError ? ((r.structuredContent?.error as { code: string; message: string }) ?? { code: "?", message: "" }) : null)
-const stockOf = async (orgId: string, productId: string) => Number((await sql<{ stock: number }>(`SELECT stock FROM product_stock WHERE organization_id = $1 AND id = $2`, [orgId, productId]))[0]?.stock)
+const stockOf = async (orgId: string, productId: string) => Number((await sql<{ stock: number }>(`SELECT stock FROM product_stock WHERE tenant_id = $1 AND id = $2`, [orgId, productId]))[0]?.stock)
 
 let ada: Client, luke: Client, sophie: Client
 let aurora = "", hummingbird = ""
@@ -129,7 +130,7 @@ describe("purchase cost (products.cost)", () => {
   test("the stock value fragment is for admins only", async () => {
     assert.ok(!(await luke.listTools()).some((t) => t.name === "show_stock_value"))
     const r = await ada.call("show_stock_value", {})
-    const [expected] = await sql<{ v: string }>(`SELECT sum(purchase_cost * GREATEST(stock, 0)) AS v FROM product_stock WHERE organization_id = $1`, [aurora])
+    const [expected] = await sql<{ v: string }>(`SELECT sum(purchase_cost * GREATEST(stock, 0)) AS v FROM product_stock WHERE tenant_id = $1`, [aurora])
     assert.equal((r.structuredContent?.data as { value: number }).value, Number(expected!.v))
   })
 })
@@ -256,6 +257,63 @@ describe("create_order", () => {
     assert.match(String(draft.number), /^SO-\d{4}-0013$/)
     assert.equal(await stockOf(aurora, "prd_aur_ham500"), before)
     assert.equal(errorOf(await ada.call("create_order", { customer: "X Y", lines: [{ product: "prd_hum_cndlav", quantity: 1 }] }))?.code, "not_found")
+  })
+})
+
+// A workspace host on its own keys (a Clegra node): its public key given to the app as a local JWKS, its tokens signed here.
+const HOST = "https://node.test"
+const hostKey = await generateSigningKey()
+const hostApp = createWarehouseApp({ auth: { ...modelAppAuth(auth), issuers: [{ issuer: HOST, jwks: { keys: [hostKey.publicJwk] } }] } })
+
+describe("workspace hosts (MODELAPP_ISSUERS)", () => {
+  /** A client of one installation of the host: a new one-request token for each call, as a workspace host signs them. */
+  const hostClient = (installation: string, person: Person) =>
+    testClient(hostApp, { token: () => signAccessToken(hostKey, { iss: HOST, aud: RESOURCE, sub: person.id, lifetimeSeconds: 60, modelapp: { installation, person, permissions: ALL_PERMISSIONS, host: "workspace" } }) })
+  const carla = { id: "host-person-7", name: "Carla Test" }
+
+  test("hosts come from the environment, with the app's one MCP address as their audience", () => {
+    assert.deepEqual(issuersFromEnv({}), [])
+    assert.deepEqual(issuersFromEnv({ MODELAPP_ISSUERS: " https://node.test|https://node.test/keys , https://other.test " }), [{ issuer: "https://node.test", jwksUri: "https://node.test/keys" }, { issuer: "https://other.test" }])
+    assert.throws(() => issuersFromEnv({ MODELAPP_ISSUERS: "|https://node.test/keys" }), /has no issuer/)
+    const options = modelAppAuth(auth, { MODELAPP_ISSUERS: "https://node.test" })
+    assert.deepEqual([options.issuers, options.resource], [[{ issuer: "https://node.test" }], RESOURCE])
+  })
+
+  test("an installation gets its own copy of the demo company once, and never sees an organization's data", async () => {
+    const c = await hostClient("shop-1", carla)
+    const products = rows(await c.call("product_list", { limit: 100 }))
+    assert.equal(products.total, 25)
+    assert.ok(products.rows.every((r) => /^prd_w[0-9a-f]{16}_/.test(String(r.id))), "its own ids, not Aurora's")
+    assert.equal(rows(await c.call("order_list", {})).total, 12)
+    assert.equal(errorOf(await c.call("product_get", { id: "prd_aur_drl18v" }))?.code, "not_found")
+    assert.equal(errorOf(await c.call("order_get", { id: "ord_aur_9" }))?.code, "not_found")
+    // Provisioned once: more calls (and the same installation of another person) add nothing.
+    await (await hostClient("shop-1", { id: "host-person-8", name: "Dan Test" })).call("product_list", {})
+    const [count] = await sql<{ tenants: number; products: number }>(`SELECT (SELECT count(*) FROM tenant WHERE id = $1)::integer AS tenants, (SELECT count(*) FROM product WHERE tenant_id = $1)::integer AS products`, [`shop-1@${HOST}`])
+    assert.deepEqual(count, { tenants: 1, products: 25 })
+    // Another installation: another copy; the organizations are untouched and don't see either.
+    const other = rows(await (await hostClient("shop-2", carla)).call("product_list", { limit: 100 }))
+    assert.equal(other.total, 25)
+    assert.ok(other.rows.every((r) => !products.rows.some((p) => p.id === r.id)))
+    const a = rows(await ada.call("product_list", { limit: 100 }))
+    assert.equal(a.total, 25)
+    assert.ok(a.rows.every((r) => String(r.id).startsWith("prd_aur_")))
+    assert.equal(errorOf(await ada.call("product_get", { id: String(products.rows[0]!.id) }))?.code, "not_found")
+  })
+
+  test("a host person's change works and shows their name; the demo people are named too", async () => {
+    const c = await hostClient("shop-3", carla)
+    const drill = rows(await c.call("product_list", { query: "DRL-18V" })).rows[0]!
+    const r = await c.call("product_register_movement", { id: String(drill.id), kind: "in", quantity: 3, note: "Host delivery" })
+    assert.ok(!r.isError, JSON.stringify(r.content))
+    const list = (await c.call("movement_list", { product: String(drill.id), sort: "date", dir: "desc", limit: 5 })).structuredContent as unknown as Rows & { refs: { by: Record<string, string> } }
+    assert.equal(list.rows[0]!.by, carla.id)
+    assert.equal(list.refs.by[carla.id], "Carla Test")
+    assert.equal(list.refs.by["demo-ada-fernley"], "Ada Fernley", "the opening stock, by the demo company's admin")
+    const order = await c.call("create_order", { customer: "Woodland Joinery", lines: [{ product: String(drill.id), quantity: 1 }] })
+    assert.ok(!order.isError, JSON.stringify(order.content))
+    const [row] = await sql<{ created_by: string }>(`SELECT created_by FROM sales_order WHERE tenant_id = $1 AND customer_name = 'Woodland Joinery'`, [`shop-3@${HOST}`])
+    assert.equal(row?.created_by, carla.id)
   })
 })
 
