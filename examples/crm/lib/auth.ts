@@ -20,6 +20,9 @@ export function createAuth(env: Record<string, string | undefined> = process.env
     secret,
     // The public origin; better-auth lives at /api/auth under it, which is the OAuth issuer.
     baseURL: publicOrigin(env),
+    // The client's address for rate limiting: on Vercel (and `next start` behind one proxy) x-real-ip / x-forwarded-for hold
+    // the one address the platform saw; without it every client would share one bucket.
+    advanced: { ipAddress: { ipAddressHeaders: ["x-real-ip", "x-forwarded-for"] } },
     database: drizzleAdapter(db(), { provider: "pg", schema }),
     databaseHooks: {
       session: {

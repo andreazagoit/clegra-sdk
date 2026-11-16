@@ -25,11 +25,14 @@ export function oauthQueryOf(searchParams: Record<string, string | string[] | un
 }
 
 /** Follows better-auth's answer to a step of the flow: a redirect (`location`), or `{ redirect: true, url }`. */
-export async function followOAuth(response: Response): Promise<never> {
+export async function followOAuth(response: Response, step = "oauth"): Promise<never> {
   const location = response.headers.get("location")
-  if (location) redirect(location)
-  const body = (await response.json().catch(() => null)) as { url?: unknown; message?: unknown; error_description?: unknown } | null
-  if (response.ok && typeof body?.url === "string") redirect(body.url)
+  const body = location ? null : ((await response.json().catch(() => null)) as { url?: unknown; message?: unknown; error_description?: unknown } | null)
+  const next = location ?? (response.ok && typeof body?.url === "string" ? body.url : null)
+  if (next) {
+    console.info(`[oauth] ${step} → ${describeRedirect(next)}`)
+    redirect(next)
+  }
   throw new Error(`The authorization could not continue (${response.status}${typeof body?.error_description === "string" ? `: ${body.error_description}` : typeof body?.message === "string" ? `: ${body.message}` : ""}).`)
 }
 
@@ -80,7 +83,38 @@ export async function authorizeAgain(path: string, requestHeaders: Headers, sign
     if (at > 0) cookies.set(pair.slice(0, at).trim(), pair.slice(at + 1).trim())
   }
   const headers = new Headers({ accept: "text/html", cookie: [...cookies].map(([k, v]) => `${k}=${v}`).join("; ") })
-  const userAgent = requestHeaders.get("user-agent")
-  if (userAgent) headers.set("user-agent", userAgent)
-  return followOAuth(await auth().handler(new Request(new URL(path, authIssuer()), { headers, redirect: "manual" })))
+  // The person's browser and address, as the platform gave them (better-auth rate-limits per address).
+  for (const name of ["user-agent", "x-real-ip", "x-forwarded-for"]) {
+    const value = requestHeaders.get(name)
+    if (value) headers.set(name, value)
+  }
+  return followOAuth(await auth().handler(new Request(new URL(path, authIssuer()), { headers, redirect: "manual" })), "authorize again")
+}
+
+/**
+ * How long after better-auth signed it a request is still started again. Past that the app that asked (ChatGPT,
+ * Claude…) has most likely given up on it or started another one: its code would be refused there ("missing OAuth
+ * data"), so the person is told to start again from the app instead.
+ */
+export const RESTART_WITHIN_MS = 30 * 60_000
+
+/** How long ago better-auth signed the request (`ba_iat`, ms), or null when it says nothing usable. */
+export function signedAgeMs(oauthQuery: string, now = Date.now()): number | null {
+  const issuedAt = Number(new URLSearchParams(oauthQuery).get("ba_iat"))
+  return Number.isFinite(issuedAt) && issuedAt > 0 ? now - issuedAt : null
+}
+
+/** A signed request that no longer holds but is recent enough to start again (see RESTART_WITHIN_MS). */
+export function restartable(oauthQuery: string, now = Date.now()): boolean {
+  const age = signedAgeMs(oauthQuery, now)
+  return age !== null && age >= 0 && age <= RESTART_WITHIN_MS
+}
+
+/** The message for a connection page too old to go on with. */
+export const TOO_OLD_MESSAGE = "This connection page was opened too long ago and the app has moved on. Close this tab and start connecting again from the app you were using."
+
+/** Where a step of the flow sends the person, for the logs: origin, path and the names of the parameters (never their values). */
+export function describeRedirect(url: string): string {
+  const u = new URL(url, "http://relative.invalid")
+  return `${u.origin === "http://relative.invalid" ? "" : u.origin}${u.pathname} [${[...new Set(u.searchParams.keys())].join(",")}]`
 }

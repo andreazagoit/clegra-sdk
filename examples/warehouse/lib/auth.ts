@@ -38,7 +38,9 @@ export function createAuth(pool: Pool, options: AuthOptions = {}) {
     // better-auth refuses to start in production without it; in development it warns.
     secret: process.env.BETTER_AUTH_SECRET,
     database: pool,
-    ...(options.validateSchema === false ? { advanced: { database: { validateSchema: false } } } : {}),
+    // The client's address for rate limiting: on Vercel (and `next start` behind one proxy) x-real-ip / x-forwarded-for hold
+    // the one address the platform saw; without it every client would share one bucket.
+    advanced: { ipAddress: { ipAddressHeaders: ["x-real-ip", "x-forwarded-for"] }, ...(options.validateSchema === false ? { database: { validateSchema: false } } : {}) },
     // Staff accounts are made by an admin (here: the seed), not by a public sign-up form.
     emailAndPassword: { enabled: true, disableSignUp: true },
     session: { expiresIn: 60 * 60 * 24 * 7 },

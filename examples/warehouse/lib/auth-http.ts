@@ -7,7 +7,7 @@ import { cookies, headers } from "next/headers"
 import { getAuth } from "./auth"
 import { publicUrl } from "./site"
 
-export { restartAuthorization, staleOAuthQuery } from "./oauth-query"
+export { describeRedirect, restartable, restartAuthorization, signedAgeMs, staleOAuthQuery, TOO_OLD_MESSAGE } from "./oauth-query"
 
 /**
  * A POST to one of better-auth's endpoints from a server action, as the browser would make it (its cookies, the
@@ -29,6 +29,7 @@ export async function authPost(path: string, body: Record<string, unknown>): Pro
         "user-agent": incoming.get("user-agent") ?? "",
         // The client's address, as the platform (Vercel, `next start`) gave it: better-auth rate-limits sign-ins per address.
         ...(incoming.get("x-forwarded-for") ? { "x-forwarded-for": incoming.get("x-forwarded-for")! } : {}),
+        ...(incoming.get("x-real-ip") ? { "x-real-ip": incoming.get("x-real-ip")! } : {}),
       },
       body: JSON.stringify(body),
     }),
@@ -74,7 +75,15 @@ export async function authorizeAgain(path: string, setCookies: string[] = []): P
     if (at > 0) jar.set(pair.slice(0, at).trim(), pair.slice(at + 1).trim())
   }
   const response = await (await getAuth()).handler(
-    new Request(`${publicUrl()}${path}`, { headers: { accept: "text/html", cookie: [...jar].map(([k, v]) => `${k}=${v}`).join("; "), "user-agent": incoming.get("user-agent") ?? "" }, redirect: "manual" }),
+    new Request(`${publicUrl()}${path}`, {
+      headers: {
+        accept: "text/html",
+        cookie: [...jar].map(([k, v]) => `${k}=${v}`).join("; "),
+        // The person's browser and address, as the platform gave them (better-auth rate-limits per address).
+        ...Object.fromEntries(["user-agent", "x-real-ip", "x-forwarded-for"].flatMap((name) => (incoming.get(name) ? [[name, incoming.get(name)!]] : []))),
+      },
+      redirect: "manual",
+    }),
   )
   const location = response.headers.get("location")
   if (location) return location

@@ -227,10 +227,10 @@ describe("the CRM's own users, with better-auth access tokens", () => {
       return oauthQueryOf(record)!
     }
     const holds = async (query: string) => verifyOAuthQueryParams(query, (await auth().$context).secret)
-    // Signed requests made eleven minutes ago: better-auth gives them ten.
-    const elevenMinutesAgo = async <T>(run: () => Promise<T>) => {
+    // Signed requests made some minutes ago (better-auth gives them ten).
+    const minutesAgo = async <T>(minutes: number, run: () => Promise<T>) => {
       const now = Date.now
-      Date.now = () => now() - 11 * 60_000
+      Date.now = () => now() - minutes * 60_000
       try {
         return await run()
       } finally {
@@ -258,7 +258,7 @@ describe("the CRM's own users, with better-auth access tokens", () => {
     const fresh = await redirectOf(signIn(accounts.emma, password, await toSignIn(), asBrowser()))
     assert.equal(fresh.pathname, "/oauth/consent")
     // Past its ten minutes: refused by better-auth, yet the button signs in and starts the same authorization afresh.
-    const stale = await elevenMinutesAgo(toSignIn)
+    const stale = await minutesAgo(11, toSignIn)
     assert.equal(await holds(stale), false)
     const restarted = await redirectOf(signIn(accounts.emma, password, stale, asBrowser()))
     assert.equal(restarted.pathname, "/oauth/consent")
@@ -268,7 +268,7 @@ describe("the CRM's own users, with better-auth access tokens", () => {
 
     // Allow on a consent page left open too long: asked again, with a new signed request.
     await send("/sign-in/email", { json: { email: accounts.emma, password } })
-    const staleConsent = await elevenMinutesAgo(async () => pageQuery(new URL(((await (await send("/oauth2/authorize", { query })).json()) as { url: string }).url, SITE)))
+    const staleConsent = await minutesAgo(11, async () => pageQuery(new URL(((await (await send("/oauth2/authorize", { query })).json()) as { url: string }).url, SITE)))
     assert.equal(await holds(staleConsent), false)
     const askedAgain = await redirectOf(answerConsent(staleConsent, true, asBrowser()))
     assert.equal(askedAgain.pathname, "/oauth/consent")
@@ -289,6 +289,21 @@ describe("the CRM's own users, with better-auth access tokens", () => {
     const listed = await rpc(tokens.access_token, "tools/list")
     assert.equal(listed.status, 200, JSON.stringify(listed))
     assert.ok(tokens.refresh_token)
+
+    // Allowed already (ChatGPT connecting again): the button sends the person straight back with a code, the
+    // client's own state, and the issuer (RFC 9207).
+    await send("/sign-out", { json: {} })
+    jar.clear()
+    const again = await redirectOf(signIn(accounts.emma, password, await toSignIn(), asBrowser()))
+    assert.equal(`${again.origin}${again.pathname}`, redirectUri)
+    assert.deepEqual([...again.searchParams.keys()].sort(), ["code", "iss", "state"])
+    assert.deepEqual([again.searchParams.get("state"), again.searchParams.get("iss")], [query.state, ISSUER])
+    // A page opened two hours ago: the app has moved on (its code would be refused there): told so, not sent back.
+    const ancient = await minutesAgo(120, toSignIn)
+    const told = await redirectOf(signIn(accounts.emma, password, ancient, asBrowser()))
+    assert.equal(told.pathname, "/sign-in")
+    assert.match(told.searchParams.get("error") ?? "", /start connecting again from the app/)
+    assert.equal(told.searchParams.get("code"), null)
   })
 
   test("npm run token over real HTTP (sign in → authorize → consent → token), then the conformance checks on it", { timeout: 90_000 }, async () => {

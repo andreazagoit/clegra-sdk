@@ -22,3 +22,31 @@ export function restartAuthorization(oauthQuery: string, { signedIn }: { signedI
   }
   return `/api/auth/oauth2/authorize?${query}`
 }
+
+/**
+ * How long after better-auth signed it a request is still started again. Past that the app that asked (ChatGPT,
+ * Claude…) has most likely given up on it or started another one: its code would be refused there ("missing OAuth
+ * data"), so the person is told to start again from the app instead.
+ */
+export const RESTART_WITHIN_MS = 30 * 60_000
+
+/** How long ago better-auth signed the request (`ba_iat`, ms), or null when it says nothing usable. */
+export function signedAgeMs(oauthQuery: string, now = Date.now()): number | null {
+  const issuedAt = Number(new URLSearchParams(oauthQuery).get("ba_iat"))
+  return Number.isFinite(issuedAt) && issuedAt > 0 ? now - issuedAt : null
+}
+
+/** A signed request that no longer holds but is recent enough to start again (see RESTART_WITHIN_MS). */
+export function restartable(oauthQuery: string, now = Date.now()): boolean {
+  const age = signedAgeMs(oauthQuery, now)
+  return age !== null && age >= 0 && age <= RESTART_WITHIN_MS
+}
+
+/** The message for a connection page too old to go on with. */
+export const TOO_OLD_MESSAGE = "This connection page was opened too long ago and the app has moved on. Close this tab and start connecting again from the app you were using."
+
+/** Where a step of the flow sends the person, for the logs: origin, path and the names of the parameters (never their values). */
+export function describeRedirect(url: string): string {
+  const u = new URL(url, "http://relative.invalid")
+  return `${u.origin === "http://relative.invalid" ? "" : u.origin}${u.pathname} [${[...new Set(u.searchParams.keys())].join(",")}]`
+}

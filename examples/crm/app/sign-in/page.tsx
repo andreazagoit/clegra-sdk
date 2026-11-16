@@ -3,7 +3,7 @@ import { redirect } from "next/navigation"
 
 import { auth } from "@/lib/auth"
 import { DEMO_USERS } from "@/lib/demo-data"
-import { oauthQueryOf, restartAuthorization } from "@/lib/oauth-pages"
+import { oauthQueryOf, restartable, restartAuthorization, TOO_OLD_MESSAGE } from "@/lib/oauth-pages"
 import { currentMember } from "@/lib/session"
 
 import { buttonClass, Card, inputClass, Notice, param, secondaryButtonClass } from "../_components/ui"
@@ -14,16 +14,22 @@ export const metadata = { title: "Sign in" }
 export default async function SignInPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const sp = await searchParams
   // Opened by an OAuth authorization (an MCP client connecting): sign in here, then better-auth continues it.
-  const oauthQuery = oauthQueryOf(sp)
-  if (!oauthQuery && (await currentMember())) redirect("/")
-  // Opened again after its ten minutes (a tab left open, a page restored): the same authorization, signed anew.
-  if (oauthQuery && !(await verifyOAuthQueryParams(oauthQuery, (await auth().$context).secret))) redirect(restartAuthorization(oauthQuery, { signedIn: false }))
+  let oauthQuery = oauthQueryOf(sp)
+  let error = param(sp.error)
+  // Opened again after its ten minutes (a tab left open, a page restored): the same authorization, signed anew;
+  // or, much later, the app has moved on: say so, and offer a plain sign-in.
+  if (oauthQuery && !(await verifyOAuthQueryParams(oauthQuery, (await auth().$context).secret))) {
+    if (restartable(oauthQuery)) redirect(restartAuthorization(oauthQuery, { signedIn: false }))
+    oauthQuery = null
+    error = TOO_OLD_MESSAGE
+  }
+  if (!oauthQuery && !error && (await currentMember())) redirect("/")
   const demo = process.env.DEMO_SIGNIN === "1"
   return (
     <main className="mx-auto flex min-h-screen max-w-sm flex-col justify-center px-4 py-10">
       <h1 className="mb-1 text-xl font-semibold tracking-tight">CRM</h1>
       <p className="mb-6 text-zinc-500">{oauthQuery ? "Sign in to connect an app to your CRM." : "Sign in to your sales team."}</p>
-      <Notice error={param(sp.error)} />
+      <Notice error={error} />
       <Card>
         <form action={signInAction} className="flex flex-col gap-3">
           {oauthQuery ? <input type="hidden" name="oauth_query" value={oauthQuery} /> : null}

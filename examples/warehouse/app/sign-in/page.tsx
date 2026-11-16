@@ -3,7 +3,7 @@ import { redirect } from "next/navigation"
 
 import { demoSignInAction, signInAction } from "@/app/actions"
 import { ActionForm } from "@/components/action-form"
-import { oauthQueryHolds, oauthQueryOf, restartAuthorization } from "@/lib/auth-http"
+import { oauthQueryHolds, oauthQueryOf, restartable, restartAuthorization, TOO_OLD_MESSAGE } from "@/lib/auth-http"
 import { COMPANIES, DEMO_USERS } from "@/lib/demo"
 import { getViewer } from "@/lib/session"
 
@@ -12,10 +12,16 @@ export const metadata: Metadata = { title: "Sign in" }
 export default async function SignInPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const sp = await searchParams
   // Opened by an OAuth authorization (an MCP client connecting): the signed request continues after sign-in.
-  const oauthQuery = oauthQueryOf(sp)
-  if (!oauthQuery && (await getViewer())) redirect("/")
-  // Opened after its ten minutes (a tab left open, a page restored): the same authorization, signed anew.
-  if (oauthQuery && !(await oauthQueryHolds(oauthQuery))) redirect(restartAuthorization(oauthQuery, { signedIn: false }))
+  let oauthQuery = oauthQueryOf(sp)
+  let tooOld = false
+  // Opened after its ten minutes (a tab left open, a page restored): the same authorization, signed anew; or, much
+  // later, the app has moved on: say so, and offer a plain sign-in.
+  if (oauthQuery && !(await oauthQueryHolds(oauthQuery))) {
+    if (restartable(oauthQuery)) redirect(restartAuthorization(oauthQuery, { signedIn: false }))
+    oauthQuery = null
+    tooOld = true
+  }
+  if (!oauthQuery && !tooOld && (await getViewer())) redirect("/")
   const demo = process.env.DEMO_SIGNIN === "1"
   const carry = oauthQuery ? <input type="hidden" name="oauth_query" value={oauthQuery} /> : null
   return (
@@ -23,6 +29,7 @@ export default async function SignInPage({ searchParams }: { searchParams: Promi
       <div>
         <p className="text-sm font-medium text-accent">Warehouse</p>
         <h1 className="mt-1">Sign in</h1>
+        {tooOld ? <p role="alert" className="mt-2 text-sm text-red-700">{TOO_OLD_MESSAGE}</p> : null}
         {oauthQuery ? <p className="mt-2 text-sm text-stone-600">An app is asking to connect to your warehouse. Sign in first; you will see what it asks for before anything is shared.</p> : null}
       </div>
       <ActionForm action={signInAction} submit="Sign in" className="card flex flex-col gap-3 p-4">

@@ -24,7 +24,7 @@ const { createAuth, getAuth } = await import("../lib/auth")
 const { modelAppAuth } = await import("../lib/modelapp-auth")
 const { createWarehouseApp } = await import("../lib/modelapp")
 const { oauthAccessToken } = await import("../scripts/oauth-flow")
-const { restartAuthorization, staleOAuthQuery } = await import("../lib/oauth-query")
+const { restartable, restartAuthorization, staleOAuthQuery } = await import("../lib/oauth-query")
 
 const SITE = "http://localhost:3930"
 const RESOURCE = `${SITE}/mcp`
@@ -440,6 +440,9 @@ describe("MCP authorization (better-auth tokens, verified by the app)", () => {
     const toSignIn = await next(await send(`/api/auth/oauth2/authorize?${query}`)).finally(() => (Date.now = now))
     assert.equal(toSignIn.pathname, "/sign-in")
     const oauthQuery = toSignIn.searchParams.toString()
+    // Eleven minutes: started again. Two hours: the app has moved on, the person is told to start from it.
+    assert.equal(restartable(oauthQuery), true)
+    assert.equal(restartable(oauthQuery, Date.now() + 110 * 60_000), false)
     // What the sign-in action posts: refused as stale, so it signs in alone and asks for the same authorization again.
     const refused = await send("/api/auth/sign-in/email", { json: { email, password: process.env.DEMO_PASSWORD, oauth_query: oauthQuery } })
     assert.equal(staleOAuthQuery((await refused.json()) as Record<string, unknown>), true)
