@@ -82,8 +82,9 @@ Work through the TODOs in `clegra.ts`:
    previews have other hosts: give each environment its own value.
 4. **A shared store.** On serverless or with several instances, use
    `store: new SqlStore((text, params) => pool.query(text, params))`. It keeps write results (idempotency) and
-   one-time token ids in your Postgres. `SqlStore.schema()` gives the table for a migration. Run it as a migration,
-   never at startup.
+   one-time token ids in your Postgres (and the runs of `later` actions, below). `SqlStore.schema()` gives its
+   tables (`clegra_store`, `clegra_store_later`) for a migration, `CREATE … IF NOT EXISTS`: run it as a migration,
+   never at startup, and again in a new migration when you upgrade.
 5. **`clegra check` in CI.** Get a token for a test user through the real OAuth flow, then run
    `CLEGRA_TOKEN=… npx clegra check https://preview.example.com`. The exit code is 0 when conformant, 1 when a
    check failed, and 3 when there was no token (only the public checks ran).
@@ -208,16 +209,87 @@ Three things you get by saying them in the schema:
   sending, and what your schema refuses comes back per field (`error.fields`) in the caller's language. Add
   `.meta({ label, currency, labels })` for the words and the money.
 
+## Pages people use every day
+
+The same app, with what makes it a place to work in rather than a list (all optional; [spec §5.2, §4.2, §11–§13](spec.md)):
+
+```ts
+actions: {
+  add: {
+    title: "New note",
+    input: z.object({ title: z.string() }),
+    permission: "notes.edit",
+    run: (input, ctx) => {
+      const id = crypto.randomUUID()
+      notesOf(ctx.installation).set(id, { id, title: input.title, status: "open" })
+      return { message: `${input.title} added.`, record: id }
+    },
+  },
+  remind: {                                           // run by a schedule: no required input, not confirm "always"
+    title: "Remind about open notes",
+    input: z.object({}),
+    readOnly: true,
+    run: (_input, ctx) => {
+      const open = [...notesOf(ctx.installation).values()].filter((n) => n.status === "open").length
+      if (open) ctx.notify({ type: "reminder", title: `${open} notes are open`, to: { permission: "notes.edit" } })   // no person in a schedule: say `to`
+      return { message: `${open} open.` }
+    },
+  },
+  archive_on: {                                       // «approve now, act later»: confirmed now, runs at `when`
+    title: "Archive the done notes",
+    input: z.object({ when: z.iso.datetime() }),
+    permission: "notes.edit",
+    later: { at: "when", window: 60 },
+    run: (_input, ctx) => {
+      for (const n of notesOf(ctx.installation).values()) if (n.status === "done") notesOf(ctx.installation).delete(n.id)
+      return { message: "Archived." }
+    },
+  },
+},
+pages: {
+  notes: { title: "Notes", list: "note", columns: ["title", "status"], actions: ["add"], badge: "open_count" },
+  home: { title: "Home", dashboard: [{ type: "open_count", params: {} }] },
+},
+nav: [{ section: "Notes", pages: ["home", "notes"] }],
+schedules: { morning: { action: "remind", every: 1440 } },
+notifications: { reminder: { label: "Open notes reminder" } },
+lifecycle: {
+  export: (ctx) => ({ contentType: "application/json", body: JSON.stringify([...notesOf(ctx.installation).values()]) }),
+  delete: (ctx) => {
+    const n = notesOf(ctx.installation).size
+    notes.delete(ctx.installation)
+    return { counts: { notes: n } }
+  },
+},
+```
+
+- **Page actions and badges**: «New note» is the notes page's primary button, opening its form; the open count shows
+  next to «Notes» in the navigation. ChatGPT and Claude see the same in the generated view.
+- **Schedules** run as the installation, with nobody at the screen: Clegra calls `remind` once a day. A write that
+  needs a confirmation can't be scheduled; that is what `later` is for.
+- **Later**: the person confirms «Archive the done notes at 18:00» once; the SDK keeps the confirmed call and runs it
+  at that time, as them, or tells them it did not run. It needs a store with later runs (`MemoryStore`, the default,
+  or `SqlStore`).
+- **Lifecycle**: when an administrator uninstalls the app, Clegra offers to export the data and delete them in 30
+  days, or to delete them now.
+
 ## Test it
 
 ```ts
-import { testClient } from "clegra/testing"
+import { installationClient, testClient } from "clegra/testing"
 import app from "./app"
 
 const plain = await testClient(app, { permissions: "all" })           // as ChatGPT would call
 await plain.call("note_list", { status: "open" })
 const host = await testClient(app, { permissions: "all", host: "workspace" })
 await host.confirmed("note_close", { id: "n1" })                      // call id + confirmation proof
+await host.confirmed("archive_on", { when: "2026-12-01T17:00:00Z" })  // stored: { data: { later: { id, at, until } } }
+
+const installation = await installationClient(app)                    // the installation itself: no person
+await installation.schedule("morning")                                // as the host runs the schedule
+await installation.runLater()                                         // the due later runs
+const { file } = await installation.exportData()                      // clegra_export, read back
+await installation.call("clegra_delete")
 ```
 
 `testClient` signs with dev tokens, so it needs `auth: { dev: true }` on the app it tests. Alternatively, pass
