@@ -3,7 +3,8 @@ import { readFileSync } from "node:fs"
 import { Ajv2020 } from "ajv/dist/2020.js"
 
 import { entityKindProblems, keyOf, RECORD_URI, kindDefinitionProblems, kindNameProblem, kindOfRecord, kindSentence, kindsOf, normaliseKey, propertyOf, valueProblem, type EntityKind, type KindDef, type KindField } from "./kinds"
-import { EMBED_EXCHANGE_SEGMENT, EMBED_TICKET_SECONDS, EMBED_TICKET_TYPE, MANIFEST_PATH, META_KEY, PROTOCOL_ID, URI_SCHEME } from "./protocol"
+import { EMBED_EXCHANGE_SEGMENT, EMBED_TICKET_SECONDS, EMBED_TICKET_TYPE, INSTALLATION_TOOLS, LATER_TOOL, MANIFEST_PATH, META_KEY, PROTOCOL_ID, URI_SCHEME } from "./protocol"
+import { appOnlyTools, manifestRuleProblems, type RulesManifest } from "./rules"
 
 /**
  * CONFORMANCE (spec §8): what any app must do, checked from outside over
@@ -43,12 +44,16 @@ type Manifest = {
   searchTool?: string
   embed?: { tool: ToolRef; path: string; frameAncestors: string[] }
   kinds?: Record<string, KindDef>
-  entities: { name: string; kind?: EntityKind; permission?: string; schema: { properties?: Record<string, { items?: { type?: unknown } }> }; fields: ManifestField[]; tools: { list: ToolRef; get: ToolRef }; searchable: boolean }[]
-  actions: { name: string; entity?: string; input: { properties?: Record<string, { ref?: unknown }> }; readOnly: boolean; confirm: string; permission?: string; tool: ToolRef }[]
-  pages: { name: string; kind: string; entity?: string; columns?: string[]; permission?: string; tool: ToolRef; view?: string; url?: string }[]
-  fragments: { type: string; entity?: string; template?: string; view?: string; permission?: string; tool: ToolRef; actions?: string[] }[]
+  entities: { name: string; kind?: EntityKind; permission?: string; schema: { properties?: Record<string, { items?: { type?: unknown } }> }; fields: ManifestField[]; tools: { list: ToolRef; get: ToolRef }; searchable: boolean; visibility?: string }[]
+  actions: (RulesManifest["actions"][number] & { input: { properties?: Record<string, { ref?: unknown; type?: unknown; format?: unknown }> }; permission?: string })[]
+  pages: { name: string; kind: string; entity?: string; columns?: string[]; permission?: string; tool: ToolRef; view?: string; url?: string; actions?: string[]; badge?: string }[]
+  fragments: { type: string; entity?: string; template?: string; view?: string; permission?: string; tool: ToolRef; actions?: string[]; params: { properties?: Record<string, unknown>; required?: unknown }; visibility?: string }[]
   agents: { name: string; tools: string[] }[]
   permissions: { id: string }[]
+  nav?: RulesManifest["nav"]
+  schedules?: RulesManifest["schedules"]
+  notifications?: RulesManifest["notifications"]
+  lifecycle?: Record<string, string>
 }
 
 const TOOL_NAME = /^[a-zA-Z0-9_.-]{1,64}$/
@@ -156,7 +161,9 @@ export async function checkApp(options: Options): Promise<Report> {
   const known = new Set([...names.keys(), manifest.resolveTool, ...(manifest.searchTool ? [manifest.searchTool, "fetch"] : [])])
   for (const a of manifest.agents) for (const t of a.tools) if (!known.has(t)) problems.push(`agent ${a.name}: unknown tool ${t}`)
   for (const r of refs) if (r.kind === "write" && r.tool.plain && !manifest.actions.find((a) => a.tool.name === r.tool.name)) problems.push(`${r.where}: only actions write`)
-  check("manifest.references", "names in the manifest refer to things it declares; tool names are unique and valid", problems)
+  // Navigation, page actions and badges, app-only items, targets, later runs, schedules, notification types, reserved tools: the SDK's own rules.
+  problems.push(...manifestRuleProblems(manifest as unknown as RulesManifest))
+  check("manifest.references", "names in the manifest refer to things it declares; tool names are unique and valid; navigation, page actions, schedules, notifications, targets and later runs hold", problems)
 
   // 2b. Kinds (spec §3.1): neutral for an app that declares none.
   const kinded = manifest.entities.filter((e) => e.kind !== undefined || e.fields.some((f) => f.as !== undefined))
@@ -279,6 +286,37 @@ export async function checkApp(options: Options): Promise<Report> {
     if (r.kind === "write" && a.destructiveHint !== Boolean(r.destructive)) toolProblems.push(`${tool.name}: destructiveHint must be ${Boolean(r.destructive)} (confirm)`)
   }
   check("mcp.tools", "tools match the manifest: names, annotations (readOnlyHint, destructiveHint), nothing hidden is listed", toolProblems)
+
+  // 4h. App-only items (visibility "app"): their tools are for views and the host's UI, never a model's.
+  const VIS_TITLE = 'the tools of app-only entities, actions and fragments carry _meta.ui.visibility ["app"]: callable by views, never given to a model'
+  const appOnly = appOnlyTools(manifest as unknown as RulesManifest)
+  if (!appOnly.size) skip("mcp.visibility", VIS_TITLE, "the app has no app-only entities, actions or fragments")
+  else {
+    const p: string[] = []
+    for (const [name, where] of appOnly) {
+      const t = byName.get(name)
+      if (!t) continue // not listed to this caller
+      const visibility = (t._meta?.ui as { visibility?: unknown } | undefined)?.visibility
+      if (!Array.isArray(visibility) || !visibility.includes("app") || visibility.includes("model")) p.push(`${name} (${where}): _meta.ui.visibility is ${JSON.stringify(visibility)}, not ["app"]`)
+    }
+    if (manifest.searchTool && byName.has(manifest.searchTool)) for (const e of manifest.entities.filter((x) => x.visibility === "app" && x.searchable)) {
+      const title = e.fields.find((f) => f.role === "title")
+      const rows = byName.has(e.tools.list.name) ? ((await rpc("tools/call", { name: e.tools.list.name, arguments: { limit: 5 } }, token)).result?.structuredContent as { rows?: Record<string, unknown>[] } | undefined)?.rows ?? [] : []
+      const row = rows.find((r) => typeof r[title?.name ?? ""] === "string" && (r[title!.name] as string).trim())
+      if (!row) continue
+      const found = await rpc("tools/call", { name: manifest.searchTool, arguments: { query: String(row[title!.name]).trim().slice(0, 200) } }, token)
+      const results = ((found.result?.structuredContent as { results?: { id?: string }[] } | undefined)?.results ?? []) as { id?: string }[]
+      if (results.some((r) => typeof r.id === "string" && r.id.startsWith(`${URI_SCHEME}://${manifest.name}/${e.name}/`))) p.push(`${manifest.searchTool}: answers with records of ${e.name}, which is app-only`)
+    }
+    check("mcp.visibility", VIS_TITLE, p)
+  }
+
+  // 4i. The installation's own tools (later runs, lifecycle) are listed only to the installation itself (a workspace host, no person).
+  const HIDDEN_TITLE = "the installation's tools (clegra_later, clegra_installation, clegra_export, clegra_delete) are not listed to a plain caller"
+  const declared = [...Object.values(manifest.lifecycle ?? {}), ...((manifest.schedules ?? []).some((x) => x.name === LATER_TOOL) ? [LATER_TOOL] : [])]
+  const shown = INSTALLATION_TOOLS.filter((n) => byName.has(n))
+  if (!declared.length && !shown.length) skip("lifecycle.hidden", HIDDEN_TITLE, "the app has no lifecycle tools and no later runs")
+  else check("lifecycle.hidden", HIDDEN_TITLE, shown.map((n) => `${n} is listed to a plain caller`))
   const again = ((await rpc("tools/list", {}, token)).result?.tools ?? []) as Tool[]
   check("mcp.deterministic", "tools/list is the same on every call", JSON.stringify(again) === JSON.stringify(listed) ? null : "two calls differ")
 
