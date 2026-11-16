@@ -66,12 +66,30 @@ function makeApp(deals: Deal[]) {
           return { message: `${d.name} marked as won.${input.note ? ` (${input.note})` : ""}`, record: d.id }
         },
       },
+      add_deal: {
+        title: "Add deal",
+        input: z.object({ name: z.string().min(1).meta({ label: "Name" }), stage: z.enum(["open", "won"]).meta({ label: "Stage", labels: { open: "Open", won: "Won" } }) }),
+        confirm: false,
+        expose: { plain: true },
+        run: (input) => {
+          deals.push({ id: `d${deals.length + 1}`, name: input.name, stage: input.stage, value: 0 })
+          return { message: `${input.name} added.` }
+        },
+      },
     },
+    fragments: {
+      open_deals: { title: "Open deals", description: "How many deals are open", params: z.object({}), template: "stat", data: () => ({ label: "Open", value: deals.filter((d) => d.stage === "open").length }) },
+    },
+    pages: {
+      pipeline: { title: "Pipeline", list: "deal", columns: ["name", "stage"], params: z.object({ stage: z.enum(["open", "won"]).optional() }), query: () => ({}), actions: ["add_deal"], badge: "open_deals" },
+      summary: { title: "Summary", dashboard: [{ type: "open_deals", params: {} }] },
+    },
+    nav: [{ section: "Sales", pages: ["pipeline", "summary"] }],
   })
 }
 
 type Mode = "mcp" | "chatgpt" | "openai"
-type HostOptions = { mode: Mode; refuse?: Record<string, string>; legacyCallTool?: boolean }
+type HostOptions = { mode: Mode; refuse?: Record<string, string>; legacyCallTool?: boolean; open?: { tool: string; args: Record<string, unknown> } }
 type Logged = { via: "mcp" | "openai"; method: string; name?: string; args?: Record<string, unknown>; initialized?: boolean; params?: unknown }
 
 // The host page: it frames the view, answers the bridge, relays calls to the app (window.hostCall, from Node).
@@ -140,7 +158,7 @@ async function host(options: HostOptions): Promise<{ page: Page; view: FrameLoca
   const app = makeApp(deals)
   const client = await testClient(app, { person: "alice", permissions: "all" })
   const tools = await client.listTools()
-  const initial = await client.call("deal_list", {})
+  const initial = await client.call(options.open?.tool ?? "deal_list", options.open?.args ?? {})
   const view = viewHtml("Sales")
   const html = options.mode === "mcp" ? view : view.replace("<head>", `<head>${openaiShim(initial)}`)
   const page = await browser.newPage()
@@ -218,6 +236,30 @@ for (const mode of ["mcp", "chatgpt", "openai"] as const) {
     })
   })
 }
+
+describe("the generated view: a page's actions and the app's navigation", () => {
+  test("the primary page action opens its form prefilled from the page's params; the menu opens the other page; the badge counts", async () => {
+    const { page, view, log, deals } = await host({ mode: "mcp", open: { tool: "open_pipeline", args: { stage: "won" } } })
+    await view.locator("h2", { hasText: "Pipeline" }).waitFor()
+    const nav = view.locator("nav.nav")
+    await nav.locator(".navlabel", { hasText: "Sales" }).waitFor()
+    assert.equal(await nav.locator("button[aria-current=page]").textContent().then((t) => t?.replace(/\d+$/, "")), "Pipeline")
+    await nav.locator(".count", { hasText: "12" }).waitFor()
+    await view.locator(".pageacts button.primary", { hasText: "Add deal" }).click()
+    assert.equal(await view.locator("form.act select[name=stage]").inputValue(), "won", "prefilled from the page's params")
+    await view.locator("form.act button.primary").click()
+    await view.locator("form.act .ferr", { hasText: "Required" }).waitFor()
+    await view.locator("form.act input[name=name]").fill("Lumen Labs")
+    await view.locator("form.act button.primary").click()
+    await view.locator(".msg", { hasText: "Lumen Labs added." }).waitFor()
+    assert.deepEqual(deals.at(-1), { id: "d13", name: "Lumen Labs", stage: "won", value: 0 })
+    assert.deepEqual((await log()).find((l) => l.name === "add_deal")!.args, { name: "Lumen Labs", stage: "won" })
+    await nav.locator("button", { hasText: "Summary" }).click()
+    await view.locator("h2", { hasText: "Summary" }).waitFor()
+    await view.locator("nav.nav button[aria-current=page]", { hasText: "Summary" }).waitFor()
+    await page.close()
+  })
+})
 
 describe("the generated view and ChatGPT's window.openai specifics", () => {
   test("a callTool answer without the result's structuredContent is said, not swallowed", async () => {
