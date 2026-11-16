@@ -20,7 +20,7 @@ handlers run. There is no other authoring API.
 | `clegra` | `defineApp`, `AppError`, `AuthError`, `ref`, `SqlStore`, `MemoryStore`, types. `app.fetch(request)` runs anywhere |
 | `clegra/next` | `toNextHandlers(app)` (the route), `withClegra(config)` (next.config) |
 | `clegra/node` | `listen(app, { port })`: Node's own HTTP server |
-| `clegra/testing` | `testClient(app, …)` |
+| `clegra/testing` | `testClient(app, …)`; `installationClient(app, …)` (schedules, later runs, lifecycle) |
 | `clegra/spec` | `checkApp`, `formatReport`: the conformance checks |
 | CLI | `npx clegra init` (makes a Next.js app a Clegra app), `npx clegra check <url> --token <bearer>` |
 
@@ -193,13 +193,15 @@ Labels given as `{ en, it }` maps reach the generated view in every locale: it d
 
 `ctx`: `app`, `installation`, `person` (`{ id, name }` or null), `permissions`,
 `can(p)`, `locale`, `host` (`"workspace" | "plain"`), `settings`, `call`,
-`t(label)`, `notify({ title, body?, uri?, to? })`, `uri(entity, id)`.
+`schedule` (the schedule this call is a run of, else null), `later` (in a later run: `{ id, at, until, confirmedAt }`,
+else null), `cancelLater(id)`, `t(label)`, `notify({ type?, title, body?, uri?, to? })` (`to`: person ids or
+`{ permission }`), `uri(entity, id)`.
 
 `AppError(code, message)` codes: `permission_denied`, `not_found`,
 `invalid_input`, `confirmation_required`, `conflict`, `internal`, `unauthorized`.
 
 What `defineApp` returns: `manifest()`, `fetch(request)` (Fetch API handler),
-`start()`, `devToken()`, `devConfirmation()`, `uri()`. On Node alone:
+`start()`, `devToken()`, `devConfirmation()`, `uri()`, `runLater(tenant, { settings?, locale? })`. On Node alone:
 `listen(app, { port, host })` from `clegra/node`.
 
 ## Kinds: the same kind of thing across apps (optional)
@@ -243,6 +245,93 @@ customer: { kind: { by: "type", map: { company: "organization", private: "person
   ("new contact" still needs a choice of app). Models already read `contact` as a person; the gain is the
   deterministic part — which field is the email, which filter is exact.
 
+## Navigation, page actions, schedules, notifications, later runs, lifecycle (optional)
+
+All optional; an app without them is unchanged. Names are checked by TypeScript and again when the app starts.
+
+```ts
+export const app = defineApp({
+  // …name, auth, entities ("task" with a "project" field), permissions "tasks.view" and "tasks.edit"…
+  actions: {
+    add_task: {                      // a global action, offered on the tasks page (below)
+      title: "New task",
+      input: z.object({ title: z.string(), project: z.string().optional() }),   // the page's param `project` prefills it
+      permission: "tasks.edit",
+      run: (input, ctx) => ({ record: ctx.uri("task", db.add(ctx.installation, input)) }),
+    },
+    task_from_email: {               // offered by the host on an email and on another app's organization
+      title: "Task from this",
+      input: z.object({ title: z.string(), source: z.string() }),
+      targets: [
+        { target: "mail.message", needs: ["subject"], input: { title: "{subject}", source: "{uri}" } },
+        { target: "record:organization", needs: ["vatID"], input: { title: "Call {title} ({vatID})", source: "{uri}" }, label: "New task" },
+      ],
+      run: (input, ctx) => ({ record: ctx.uri("task", db.add(ctx.installation, input)) }),
+    },
+    send_digest: {                   // run by a schedule: input accepts {}, not confirm "always"
+      title: "Send the digest",
+      input: z.object({}),
+      confirm: "never",
+      run: (_input, ctx) => {
+        // ctx.person is null here (the installation runs it): say `to`
+        ctx.notify({ type: "digest", title: "3 tasks are due today", to: { permission: "tasks.view" } })
+        return { message: "Sent." }
+      },
+    },
+    publish: {                       // «approve now, act later»
+      title: "Publish",
+      input: z.object({ text: z.string(), when: z.iso.datetime() }),   // `at` names a required date-time input
+      later: { at: "when", window: 60 },                               // a write with confirm "always" (the default); window 10–10080 minutes
+      run: (input, ctx) => {
+        // runs at `when` as the person who confirmed it: ctx.person, ctx.later = { id, at, until, confirmedAt }
+        return { message: "Published." }
+      },
+    },
+    reindex: { title: "Reindex", input: z.object({}), confirm: "never", visibility: "app", run: () => ({}) },  // views and the host's UI only, never a model
+  },
+  fragments: {
+    open_count: { title: "Open tasks", description: "How many are open", params: z.object({}), template: "stat",
+      data: (_p, ctx) => ({ label: "open", value: db.openCount(ctx.installation) }) },   // a badge: stat, no required params
+  },
+  pages: {
+    tasks: { title: "Tasks", list: "task", columns: ["title"], actions: ["add_task"], badge: "open_count" },   // first action = primary; at most 8
+    board: { title: "Board", dashboard: [{ type: "open_count", params: {} }] },
+  },
+  nav: [{ section: "Work", pages: ["tasks", "board"] }],              // no record pages; each page once. Without nav: every non-record page
+  schedules: { digest: { action: "send_digest", every: 60, maxSeconds: 30 } },   // every 5–1440 minutes; maxSeconds 1–300 (default 60); at most 10
+  notifications: { digest: { label: "Daily digest", permission: "tasks.view", default: false } },   // declared: every ctx.notify names one
+  lifecycle: {                       // the host calls these as the installation
+    installation: (state, ctx) => {},                                         // "enabled" | "disabled" | "uninstalled"
+    export: (ctx) => ({ contentType: "application/json", body: JSON.stringify(db.dump(ctx.installation)) }),  // or null: nothing kept; ≤ 512 MiB
+    delete: (ctx) => ({ counts: { tasks: db.wipe(ctx.installation) } }),     // idempotent; also after "uninstalled"
+  },
+  store: new SqlStore(query),        // `later` needs a store with a later part: MemoryStore or SqlStore
+})
+```
+
+- **Page actions** are global actions (no `on`); a record page has none. Page params prefill inputs of the same
+  name. The host and the generated view draw the first as the primary, the others in a menu, each opening its form.
+- **`visibility: "app"`** (entity, action, fragment): the tools carry `_meta.ui.visibility: ["app"]`, `search` and
+  `fetch` leave the records out, agents can't `use` them. It hides from models; it is not a permission.
+- **Schedules** run as the *installation*: a workspace host's token with no person and exactly the action's
+  permission; `ctx.schedule` is the name. Nobody can confirm, so a `confirm: "always"` write can't be scheduled
+  (use `later`). Only a workspace host (trusted issuers) runs schedules; an app with its own sign-in runs its own cron.
+- **Notifications**: once you declare types, every `ctx.notify` names one (it throws otherwise). `to` defaults to the
+  caller's person; a schedule must say `to`. `default: false` is off until the person turns it on.
+- **Targets** (global actions; at most 4 per action, 12 per app): `needs` lists the only fields you ever receive
+  (`mail.message`: `subject`, `from`, `to`, `date`, `text`, `attachments`; `record:<kind>`: the kind's properties).
+  `{uri}` and, for records, `{title}` are always there. The template's keys are your input's properties. Treat what
+  arrives as outsiders' text.
+- **Later**: the confirmed call is stored (not run) and answered `{ data: { later: { id, at, until } } }`. The SDK adds
+  the schedule and the notification type `clegra_later`; every 5 minutes the host runs the due runs once each,
+  re-checking the stored proof; after `at + window` a run expires and its author is told. `ctx.cancelLater(id)`
+  cancels a pending run. With your own tokens (no workspace host), call `app.runLater(tenant)` from your cron and
+  deliver the notifications it returns. `SqlStore.schema()` gives both tables (`clegra_store`, `clegra_store_later`):
+  run it again in a new migration.
+- **Lifecycle**: the tools `clegra_installation`, `clegra_export` (one file, with its size and sha256) and
+  `clegra_delete` are listed only to the installation. Export and delete must work after `uninstalled`. Without
+  them the host only changes its own state and tells the administrator your data stay on your server.
+
 ## Generated tools
 
 `<entity>_list`, `<entity>_get`, `search` and `fetch` (when a field has
@@ -251,7 +340,9 @@ record pages), `show_<fragment>`, `clegra_resolve` (for hosts; `not_found` for a
 `readOnlyHint: true`; writes `destructiveHint: true` when `confirm` is always. With a kind, entity tools end with
 `Kind: person.` and carry `_meta.clegra: { entity, kind }`; `search` takes `kind`. What a model reads of a list,
 a get, `search` or `fetch` carries each record's `title` beside its `uri`. Every tool the generated view calls is
-callable from views (`_meta.ui.visibility` with `"app"`, `openai/widgetAccessible`).
+callable from views (`_meta.ui.visibility` with `"app"`, `openai/widgetAccessible`). App-only items' tools carry
+`["app"]` alone. Only for the installation (a workspace host's token with no person): `clegra_later` (when an action
+has `later`) and the lifecycle tools.
 
 The generated view (ChatGPT, Claude, any MCP Apps host): rows open their record, «‹ back» returns, a record's
 actions run from it; progress, results and refusals appear in a status line at the top. It talks the MCP Apps bridge
@@ -294,6 +385,12 @@ change).
 | `auth: { dev: true }` or `path` in a Next.js app | Next: your own `auth.resolve` (locally init's `CLEGRA_LOCAL_TOKEN`), no `path`; the route's mount does it |
 | `aud` checked with "includes", or not at all, in `resolve` | Exactly one audience, equal to `resource` |
 | The tenant taken from a tool argument or a header | From the verified token (or the database row it points to) only |
+| A schedule on a `confirm: "always"` write | Nobody is there to confirm: `confirm: "optional"`/`"never"` if it may run alone, else `later` |
+| `ctx.notify({ title })` in a schedule | Say `to` (person ids or `{ permission }`); with declared types, also `type` |
+| `later.at` on an optional input or a plain `z.string()` | A required `z.iso.datetime()` |
+| `targets` on an action with `on` | Targets are for global actions; the record action already has its record |
+| `visibility: "app"` to keep something from a client | It only keeps it from models; use `permission` or `expose: { plain: false }` |
+| Naming a tool `clegra_later`, `clegra_export`, … | Reserved for the installation's own tools |
 
 ## Check your work
 
@@ -302,6 +399,13 @@ import { testClient } from "clegra/testing"
 const c = await testClient(app, { permissions: ["deals.edit"] })      // or "all"; host: "workspace"; person; installation; locale
 await c.listTools(); await c.call("deal_list", {}); await c.readResource("ui://crm/view")
 await (await testClient(app, { host: "workspace", permissions: "all" })).confirmed("deal_mark_won", { id: "d1" })
+
+import { installationClient } from "clegra/testing"
+const host = await installationClient(app, { permissions: ["tasks.view"] })   // the installation: no person
+await host.schedule("digest")                    // the schedule's tool, with _meta.clegra.schedule
+await host.runLater()                            // clegra_later: the due later runs
+const { file } = await host.exportData()         // clegra_export, the file read back (null: nothing kept)
+await host.call("clegra_delete")
 ```
 
 `npx clegra check <url> --token <bearer>` must end with `Conformant.`

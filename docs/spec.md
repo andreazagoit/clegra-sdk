@@ -977,8 +977,10 @@ caller (§10) is given them (§6 rule 12).
   most 512 MiB; a host refuses more, and a file whose size or hash doesn't
   match.
 - **`clegra_delete`** `{}` → `{ deleted: true, counts? }` (`counts`: what was
-  deleted, by name): everything the app keeps for the tenant, its later runs
-  included. Idempotent: asking again answers the same.
+  deleted, by name; the SDK adds `later_runs`): everything the app keeps for
+  the tenant, its later runs included. Idempotent: asking again is never an
+  error and answers `deleted: true` again (`counts` then say what that call
+  deleted).
 
 `clegra_export` and `clegra_delete` MUST keep working after `uninstalled`:
 that is when they are needed.
