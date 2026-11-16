@@ -5,6 +5,15 @@ changelog in [future/CHANGELOG.md](future/CHANGELOG.md).
 
 ## Unreleased (1.0 draft)
 
+### Kinds in a workspace host: the rules made precise (spec §9; docs/map/kinds.md)
+
+- §9.1 names: a host gives a clashing app another name at install time and keeps it (other apps store URIs that carry
+  it); it translates URIs both ways on every call and refuses, rather than sends, a URI an app could misread as its own.
+- §9.4 sources: `not-linked` is a source state for an app that signs people in itself when the viewer has not linked
+  their account; a reference the viewer can't resolve for that reason reads `no-access`.
+- docs/map/kinds.md: when kinds pay off, third parties' dotted kinds, and the promotion rule (two independent apps, a
+  host behaviour that uses it, precise keys, schema.org names; additive only).
+
 ### Embedded pages: the sign-in ticket (spec §5.1)
 
 - A same-site `url` page is signed in with a ticket, not the app's session cookie (a third-party cookie in a host's
