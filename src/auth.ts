@@ -288,25 +288,41 @@ export class TokenVerifier {
     }
   }
 
-  /** Checks a confirmation proof for this caller, installation, tool, arguments (as received) and call id. Returns why not, or null when it holds. */
-  async checkConfirmation(proof: string, expected: { issuer: string; subject: string; installation: string; tool: string; args: unknown; call: string | null }, trust: RequestTrust): Promise<string | null> {
+  /**
+   * Checks a confirmation proof for this caller, installation, tool, arguments (as received), call id and, for a
+   * later run, its deadline (`until`, epoch seconds). `at`: verify it as of that moment (a stored proof, checked
+   * again when its run is due, at its confirmation time). Gives the proof's `iat` when it holds, else why not.
+   */
+  async checkConfirmation(
+    proof: string,
+    expected: { issuer: string; subject: string; installation: string; tool: string; args: unknown; call: string | null; until?: number },
+    trust: RequestTrust,
+    at?: Date,
+  ): Promise<{ ok: true; iat: number } | { ok: false; why: string }> {
+    const no = (why: string) => ({ ok: false as const, why })
     try {
       const { keys, audience } = this.#trustOf(expected.issuer, trust)
-      const { payload } = await jwtVerify(proof, keys as Parameters<typeof jwtVerify>[1], { typ: CONFIRMATION_TYPE, issuer: expected.issuer, audience, clockTolerance: 30 })
-      if (typeof payload.iat !== "number" || typeof payload.exp !== "number" || payload.exp - payload.iat > 300) return "a proof lives 5 minutes at most"
-      if (payload.sub !== expected.subject) return "the proof is for someone else"
-      if (payload.installation !== expected.installation) return "the proof is for another installation"
-      if (payload.tool !== expected.tool) return "the proof is for another tool"
-      if (payload.args !== argsHash(expected.args)) return "the proof is for other arguments"
-      if (!expected.call || payload.call !== expected.call) return "the proof is for another call"
-      return null
+      const { payload } = await jwtVerify(proof, keys as Parameters<typeof jwtVerify>[1], { typ: CONFIRMATION_TYPE, issuer: expected.issuer, audience, clockTolerance: 30, ...(at ? { currentDate: at } : {}) })
+      if (typeof payload.iat !== "number" || typeof payload.exp !== "number" || payload.exp - payload.iat > 300) return no("a proof lives 5 minutes at most")
+      if (payload.sub !== expected.subject) return no("the proof is for someone else")
+      if (payload.installation !== expected.installation) return no("the proof is for another installation")
+      if (payload.tool !== expected.tool) return no("the proof is for another tool")
+      if (payload.args !== argsHash(expected.args)) return no("the proof is for other arguments")
+      if (!expected.call || payload.call !== expected.call) return no("the proof is for another call")
+      if (expected.until !== undefined && payload.until !== expected.until) return no("the proof is for another deadline")
+      return { ok: true, iat: payload.iat }
     } catch (error) {
-      return error instanceof Error ? error.message : "invalid proof"
+      return no(error instanceof Error ? error.message : "invalid proof")
     }
   }
 }
 
 // ------------------------------------------------------------ signing (hosts, tests, dev)
+
+/** A later run's deadline, epoch seconds: its `at` (a date-time string) plus `window` minutes, rounded down. NaN when `at` is not a date-time. */
+export function laterDeadline(at: string, windowMinutes: number): number {
+  return Math.floor(Date.parse(at) / 1000 + windowMinutes * 60)
+}
 
 export type SigningKey = { privateKey: CryptoKey; publicJwk: JWK; kid: string }
 
@@ -331,10 +347,14 @@ export async function signAccessToken(key: SigningKey, claims: { iss: string; au
     .sign(key.privateKey)
 }
 
-/** A confirmation proof (spec §7): the person confirmed exactly these arguments, as sent, for this call of this installation. */
-export async function signConfirmation(key: SigningKey, claims: { iss: string; aud: string; sub: string; installation: string; tool: string; args: unknown; call: string; lifetimeSeconds?: number }): Promise<string> {
+/**
+ * A confirmation proof (spec §7): the person confirmed exactly these arguments, as sent, for this call of this
+ * installation. `until` (epoch seconds), for an action with `later`: the run's deadline, `at` + `window` minutes
+ * (`laterDeadline`).
+ */
+export async function signConfirmation(key: SigningKey, claims: { iss: string; aud: string; sub: string; installation: string; tool: string; args: unknown; call: string; until?: number; lifetimeSeconds?: number }): Promise<string> {
   const now = Math.floor(Date.now() / 1000)
-  return new SignJWT({ installation: claims.installation, tool: claims.tool, args: argsHash(claims.args), call: claims.call })
+  return new SignJWT({ installation: claims.installation, tool: claims.tool, args: argsHash(claims.args), call: claims.call, ...(claims.until !== undefined ? { until: claims.until } : {}) })
     .setProtectedHeader({ alg: "EdDSA", typ: CONFIRMATION_TYPE, kid: key.kid })
     .setIssuer(claims.iss)
     .setAudience(claims.aud)
@@ -755,10 +775,16 @@ export class DevAuthority {
     return p === "all" ? this.app.allPermissions() : p
   }
 
-  async token(input: { person?: string | Person; permissions?: string[] | "all"; host?: "workspace" | "plain"; installation?: string; locale?: string; audience: string; issuer?: string }): Promise<string> {
+  /**
+   * A dev access token. `person: null`: no person — with `host: "workspace"` the installation-level caller (the host
+   * calling for the installation itself: schedules, later runs, lifecycle), `sub` = `installation:<installation>`,
+   * no permissions unless given.
+   */
+  async token(input: { person?: string | Person | null; permissions?: string[] | "all"; host?: "workspace" | "plain"; installation?: string; locale?: string; audience: string; issuer?: string }): Promise<string> {
+    const installation = input.installation ?? this.installation
     const known = typeof input.person === "string" ? this.people.find((p) => p.id === input.person) : undefined
-    const person = typeof input.person === "object" ? input.person : known ?? this.people[0]!
-    const permissions = input.permissions ? (input.permissions === "all" ? this.app.allPermissions() : input.permissions) : this.permissionsOf(known ?? this.people[0])
+    const person = input.person === null ? null : typeof input.person === "object" ? input.person : (known ?? this.people[0]!)
+    const permissions = input.permissions ? (input.permissions === "all" ? this.app.allPermissions() : input.permissions) : person ? this.permissionsOf(known ?? this.people[0]) : []
     const iss = input.issuer ?? DEV_ISSUER
     this.#origins.add(iss)
     return signAccessToken(this.key, {
@@ -766,8 +792,8 @@ export class DevAuthority {
       ...(input.host === "workspace" ? { lifetimeSeconds: HOST_TOKEN_SECONDS } : {}),
       iss,
       aud: input.audience,
-      sub: person.id,
-      [TOKEN_CLAIM]: { installation: input.installation ?? this.installation, person: { id: person.id, name: person.name }, permissions, ...(input.locale ? { locale: input.locale } : {}), host: input.host ?? "plain" },
+      sub: person ? person.id : `installation:${installation}`,
+      [TOKEN_CLAIM]: { installation, ...(person ? { person: { id: person.id, name: person.name } } : {}), permissions, ...(input.locale ? { locale: input.locale } : {}), host: input.host ?? "plain" },
     })
   }
 

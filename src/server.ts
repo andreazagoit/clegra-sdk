@@ -1,16 +1,18 @@
 import { AsyncLocalStorage } from "node:async_hooks"
+import { createHash, randomUUID } from "node:crypto"
 
 import { createMcpHandler, inputRequired, inputResponse, McpServer, type CallToolResult, type Icon, type ServerContext } from "@modelcontextprotocol/server"
 import { entityKindProblems, keyOf, kindNameProblem, kindDefinitionProblems, kindOfRecord, kindSentence, kindsOf, normaliseKey, type KindDef, type KindField, type Normalisation } from "../spec/src/kinds"
-import { EMBED_TOOL, META_KEY, OAUTH_SCOPE, PROTOCOL_ID, RESOLVE_TOOL, URI_SCHEME, uriPrefix } from "../spec/src/protocol"
+import { DELETE_TOOL, EMBED_TOOL, EXPORT_TOOL, INSTALLATION_TOOL, INSTALLATION_TOOLS, LATER_TOOL, META_KEY, OAUTH_SCOPE, PROTOCOL_ID, RESOLVE_TOOL, URI_SCHEME, uriPrefix } from "../spec/src/protocol"
+import { LIMITS, manifestRuleProblems } from "../spec/src/rules"
 import { z } from "zod"
 
-import { AuthError, canonicalJson, DEV_ISSUER, DevAuthority, INSTALLATION, isLoopback, signConfirmation, tenantOf, TokenVerifier, type AuthOptions, type Caller, type Person, type RequestTrust } from "./auth"
+import { argsHash, AuthError, canonicalJson, DEV_ISSUER, DevAuthority, INSTALLATION, isLoopback, laterDeadline, signConfirmation, tenantOf, TokenVerifier, type AuthOptions, type Caller, type Person, type RequestTrust } from "./auth"
 import { EmbedAuthority, EmbedError, type EmbedCaller, type EmbedOptions } from "./embed"
 import { MANIFEST_PATH, manifestUri, SPEC_VERSION, type Manifest, type ManifestField } from "./manifest"
 import { isLabel, labelMap, localize, type Label } from "./labels"
 import { fieldsOf, jsonSchemaOf, kindRef, localRef, plainSchema, type FieldInfo } from "./meaning"
-import { MemoryStore, type IdempotencyStore } from "./store"
+import { MemoryStore, type IdempotencyStore, type LaterOutcome, type LaterRun } from "./store"
 import type {
   ActionConfig,
   ActionHandle,
@@ -24,10 +26,15 @@ import type {
   FragmentConfig,
   FragmentInstance,
   KindConfig,
+  LaterInfo,
+  LifecycleConfig,
+  NavSection,
   Notification,
+  NotificationTypeConfig,
   PageConfig,
   PermissionConfig,
   Query,
+  ScheduleConfig,
   SettingConfig,
   Template,
   ViewSource,
@@ -110,7 +117,7 @@ export type PeopleResolver = (ids: string[], ctx: Context) => Record<string, str
 
 /** The one `_meta` key of the host protocol (spec §7): `{ call, confirmation, settings }` on requests, `{ notifications, untrusted, l10n }` on results. */
 export { META_KEY }
-type HostMeta = { call?: unknown; confirmation?: unknown; settings?: unknown }
+type HostMeta = { call?: unknown; confirmation?: unknown; settings?: unknown; schedule?: unknown }
 const hostMeta = (meta: Record<string, unknown> | undefined): HostMeta => {
   const m = meta?.[META_KEY]
   return m && typeof m === "object" && !Array.isArray(m) ? (m as HostMeta) : {}
@@ -133,7 +140,25 @@ export class AppError extends Error {
 type ToolName = { name: string; plain: boolean }
 /** `keys`: the fields that hold a key of the entity's kind (spec §3.1 rule 5), with how their values compare. */
 type EntityRecord = { name: string; config: EntityConfig<z.ZodObject>; fields: FieldInfo[]; handle: EntityHandle; tools: { list: ToolName; get: ToolName }; keys: Map<string, { property: string; how: Normalisation }> }
-type ActionRecord = { name: string; tool: string; entity?: EntityRecord; config: ActionConfig<z.ZodObject, EntityHandle | undefined>; input: z.ZodObject; handler: ActionHandler<z.ZodObject, EntityHandle | undefined>; write: boolean; confirm: "always" | "optional" | "never"; plain: boolean }
+type ActionRecord = {
+  name: string
+  tool: string
+  entity?: EntityRecord
+  config: ActionConfig<z.ZodObject, EntityHandle | undefined>
+  input: z.ZodObject
+  handler: ActionHandler<z.ZodObject, EntityHandle | undefined>
+  write: boolean
+  confirm: "always" | "optional" | "never"
+  plain: boolean
+  /** «Approve now, act later»: the input that says when, and the minutes it may run late. */
+  later?: { at: string; window: number }
+}
+/** A schedule as the server runs it: the SDK's own `clegra_later` has no action. */
+type ScheduleRecord = { name: string; action?: ActionRecord; tool: string; every: number; maxSeconds: number }
+/** A notification as a result carries it (`_meta.clegra.notifications`): its texts in the caller's language, its recipients said. */
+export type SentNotification = { type?: string; title: string; body?: string; uri?: string; to: string[] | { permission: string } }
+/** What one pass over the due later runs did: each run's outcome, and the notifications for the host to deliver. */
+export type LaterReport = { runs: { id: string; tool: string; at: string; status: LaterOutcome["status"]; message: string }[]; notifications: SentNotification[] }
 type PageRecord = { name: string; config: PageConfig; derived?: boolean; tool: ToolName }
 type FragmentRecord = { type: string; config: FragmentConfig<z.ZodObject, Template>; tool: ToolName }
 
@@ -141,7 +166,20 @@ const NAME = /^[a-z][a-z0-9-]{1,39}$/
 const IDENT = /^[a-z][a-z0-9_]{0,39}$/
 const PERMISSION = /^[a-z][a-z0-9_-]{0,39}\.[a-z][a-z0-9_-]{0,39}$/
 const RESERVED_PARAMS = new Set(["query", "sort", "dir", "cursor", "limit", "id"])
-const RESERVED_TOOLS = new Set(["search", "fetch", RESOLVE_TOOL, EMBED_TOOL])
+const RESERVED_TOOLS = new Set(["search", "fetch", RESOLVE_TOOL, EMBED_TOOL, ...INSTALLATION_TOOLS])
+/** How far in the past a later run's `at` may be when it is confirmed, and how far ahead. */
+const LATER_PAST_MS = 5 * 60_000
+const LATER_AHEAD_MS = 366 * 24 * 3600_000
+/** Later runs taken per pass. */
+const LATER_BATCH = 25
+/** The largest export a host takes. */
+const EXPORT_MAX_BYTES = 512 * 1024 * 1024
+/** The words of the SDK's own notification when a later run did not run, per language (the app's locale when the caller's is missing). */
+const DID_NOT_RUN: Record<string, (title: string) => string> = { en: (t) => `«${t}» did not run`, it: (t) => `«${t}» non è stata eseguita` }
+/** The SDK's notification type for later runs that did not run. */
+const LATER_NOTIFICATION: NotificationTypeConfig = { label: { en: "Scheduled actions that did not run", it: "Azioni programmate non eseguite" }, description: { en: "An action you confirmed for later expired or was refused.", it: "Un'azione confermata per dopo è scaduta o è stata rifiutata." }, default: true }
+/** The `_meta` of a tool only views and the host's own UI call: never a model's (MCP Apps visibility, ChatGPT). */
+const APP_ONLY_META = { ui: { visibility: ["app"] }, "openai/visibility": "private", "openai/widgetAccessible": true }
 
 /** The fixed hint on the tools of an entity with cross-app references (spec §3.2): how a model opens such a record. */
 export const CROSS_INPUT_HINT = "An input that takes a record of another app takes its URI (clegra://<app>/<entity>/<id>), as that app's search or lists give it."
@@ -280,6 +318,10 @@ export class AppServer {
   readonly #agents = new Map<string, AgentConfig>()
   readonly #permissions = new Map<string, PermissionConfig>()
   readonly #settings = new Map<string, SettingConfig>()
+  readonly #schedules = new Map<string, { action: ActionHandle; every: number; maxSeconds: number }>()
+  readonly #notificationTypes = new Map<string, NotificationTypeConfig>()
+  #nav: NavSection[] | null = null
+  #lifecycle: LifecycleConfig = {}
   #kinds: Record<string, KindConfig> = {}
   #manifest: Manifest | null = null
   #devReady: Promise<void> | null = null
@@ -417,7 +459,9 @@ export class AppServer {
     const confirm = write ? (config.confirm ?? "always") : "never"
     // Writes reach plain MCP clients only when the developer opts in (spec §6).
     const plain = config.expose?.plain ?? !write
-    this.#actions.set(tool, { name, tool, ...(entity ? { entity } : {}), config: config as never, input, handler: handler as never, write, confirm, plain })
+    if (config.later && !this.#store.later) throw new Error(`action "${name}": later keeps the confirmed call in the store, and this store has no later part (MemoryStore and SqlStore have one)`)
+    const later = config.later ? { at: String(config.later.at), window: config.later.window ?? LIMITS.laterWindow.default } : undefined
+    this.#actions.set(tool, { name, tool, ...(entity ? { entity } : {}), config: config as never, input, handler: handler as never, write, confirm, plain, ...(later ? { later } : {}) })
     this.#changed()
     return { kind: "action", name, tool }
   }
@@ -475,6 +519,38 @@ export class AppServer {
     return id
   }
 
+  /** The navigation: sections of pages (their references are checked with the manifest). */
+  registerNav(sections: NavSection[]): void {
+    this.#nav = sections.map((s) => ({ ...s, pages: [...s.pages] }))
+    this.#changed()
+  }
+
+  /** A schedule: a global action the workspace host runs as the installation every `every` minutes. */
+  registerSchedule(name: string, config: ScheduleConfig): void {
+    if (name === LATER_TOOL) throw new Error(`schedule "${name}" is reserved (the SDK runs later actions with it)`)
+    if (this.#schedules.has(name)) throw new Error(`schedule "${name}" is registered twice`)
+    this.#schedules.set(name, { action: config.action, every: config.every, maxSeconds: config.maxSeconds ?? LIMITS.scheduleSeconds.default })
+    this.#changed()
+  }
+
+  /** A notification type the app's notifications name (`ctx.notify({ type })`). */
+  registerNotificationType(type: string, config: NotificationTypeConfig): void {
+    if (type === LATER_TOOL) throw new Error(`notification "${type}" is reserved (the SDK tells a later run's author with it)`)
+    if (!IDENT.test(type)) throw new Error(`notification "${type}": lowercase letters, digits and _, starting with a letter`)
+    this.#notificationTypes.set(type, config)
+    this.#changed()
+  }
+
+  /** What the app does when the workspace host tells it of its installation, asks for its data, or asks it to delete them. */
+  registerLifecycle(config: LifecycleConfig): void {
+    for (const [k, v] of Object.entries(config)) {
+      if (!["installation", "export", "delete"].includes(k)) throw new Error(`lifecycle: "${k}" is not installation, export or delete`)
+      if (v !== undefined && typeof v !== "function") throw new Error(`lifecycle.${k}: a function`)
+    }
+    this.#lifecycle = { ...config }
+    this.#changed()
+  }
+
   /** A setting an administrator fills per installation (spec §2): text, number or boolean, never a secret. */
   registerSetting(id: string, config: SettingConfig): void {
     if (!/^[a-z][a-z0-9_]{1,39}$/.test(id)) throw new Error(`setting "${id}": lowercase letters, digits and _, starting with a letter, 2 to 40 characters`)
@@ -524,18 +600,82 @@ export class AppServer {
     return [...this.#permissions.keys()]
   }
 
-  #context(caller: Caller, meta: Record<string, unknown> | undefined, notes: Notification[]): Context {
+  /** The actions with `later`. */
+  #laterActions(): ActionRecord[] {
+    return [...this.#actions.values()].filter((a) => a.later)
+  }
+
+  /** Every schedule, the SDK's own `clegra_later` included when an action has later. */
+  #allSchedules(): ScheduleRecord[] {
+    const out: ScheduleRecord[] = [...this.#schedules.entries()].map(([name, s]) => {
+      const action = this.#actions.get(s.action.tool)
+      return { name, ...(action ? { action } : {}), tool: s.action.tool, every: s.every, maxSeconds: s.maxSeconds }
+    })
+    if (this.#laterActions().length) out.push({ name: LATER_TOOL, tool: LATER_TOOL, every: LIMITS.laterEvery, maxSeconds: LIMITS.scheduleSeconds.default })
+    return out
+  }
+
+  /** Whether the caller is the installation itself: a workspace host's token without a person (schedules, later runs, lifecycle). */
+  #isInstallation(caller: Caller): boolean {
+    return caller.host === "workspace" && !caller.person
+  }
+
+  /**
+   * Why a call's `_meta.clegra.schedule` is refused, or null: it names one of the app's schedules, of this very tool,
+   * and comes from the installation-level caller (a workspace host, no person). A call without it is not a schedule's.
+   */
+  #scheduleProblem(tool: string, caller: Caller, meta: Record<string, unknown> | undefined): string | null {
+    const name = hostMeta(meta).schedule
+    if (name === undefined) return null
+    if (!this.#isInstallation(caller)) return "a schedule's run comes from a workspace host as the installation, with no person"
+    const s = typeof name === "string" ? this.#allSchedules().find((x) => x.name === name) : undefined
+    if (!s) return `"${String(name)}" is not a schedule of this app`
+    if (s.tool !== tool) return `schedule "${s.name}" runs ${s.tool}, not ${tool}`
+    return null
+  }
+
+  /** A notification as `ctx.notify` takes it, checked: a declared type (or none when none is declared), recipients said when there is no person. */
+  #checkNotification(n: Notification, caller: Caller): void {
+    if (!n || typeof n !== "object") throw new Error("ctx.notify: give { title, … }")
+    const types = [...this.#notificationTypes.keys()]
+    if (types.length && (typeof n.type !== "string" || !this.#notificationTypes.has(n.type))) throw new Error(`ctx.notify: type ${n.type === undefined ? "is missing" : `"${String(n.type)}" is not declared`}: this app's notification types are ${types.join(", ")}`)
+    if (!types.length && n.type !== undefined) throw new Error(`ctx.notify: type "${String(n.type)}": this app declares no notification types (declare them in notifications, or leave type out)`)
+    const to = n.to
+    if (to === undefined) {
+      if (!caller.person) throw new Error("ctx.notify: this call has no person (a schedule, the installation itself): say who receives it in to")
+    } else if (Array.isArray(to)) {
+      if (!to.every((id) => typeof id === "string" && id)) throw new Error("ctx.notify: to is a list of person ids")
+    } else if (!to || typeof to !== "object" || typeof to.permission !== "string" || !this.#permissions.has(to.permission)) throw new Error(`ctx.notify: to is person ids or { permission } naming a declared permission${to && typeof to === "object" && "permission" in to ? ` ("${String(to.permission)}" is not one)` : ""}`)
+  }
+
+  /** Notifications as a result carries them, in the caller's language; `to` said (default: the person of `caller`). */
+  #sent(notes: Notification[], caller: Caller, ctx: Context): SentNotification[] {
+    return notes.map((n) => ({
+      ...(n.type !== undefined ? { type: n.type } : {}),
+      title: ctx.t(n.title),
+      ...(n.body !== undefined ? { body: ctx.t(n.body) } : {}),
+      ...(n.uri !== undefined ? { uri: n.uri } : {}),
+      to: n.to ?? (caller.person ? [caller.person.id] : []),
+    }))
+  }
+
+  #notificationsMeta(sent: SentNotification[]) {
+    return sent.length ? { _meta: { [META_KEY]: { notifications: sent } } } : {}
+  }
+
+  #context(caller: Caller, meta: Record<string, unknown> | undefined, notes: Notification[], run?: { later: LaterInfo; call: string | null }): Context {
     const locale = caller.locale ?? this.locale
     const host = hostMeta(meta)
-    // Settings are the installation's, set by its administrator: only its workspace host says them. A plain client gets the defaults.
-    const sent = (caller.host === "workspace" && host.settings && typeof host.settings === "object" && !Array.isArray(host.settings) ? host.settings : {}) as Record<string, unknown>
+    // Settings are the installation's, set by its administrator: only its workspace host says them (also when it runs a later run). A plain client gets the defaults.
+    const sent = ((caller.host === "workspace" || run) && host.settings && typeof host.settings === "object" && !Array.isArray(host.settings) ? host.settings : {}) as Record<string, unknown>
     const settings: Record<string, unknown> = {}
     for (const [id, s] of this.#settings) {
       const v = sent[id]
       const ok = s.type === "number" ? typeof v === "number" : s.type === "boolean" ? typeof v === "boolean" : typeof v === "string"
       settings[id] = ok ? v : s.default
     }
-    const call = typeof host.call === "string" ? host.call : null
+    const call = run ? run.call : typeof host.call === "string" ? host.call : null
+    const schedule = run ? LATER_TOOL : typeof host.schedule === "string" && this.#isInstallation(caller) && this.#allSchedules().some((x) => x.name === host.schedule) ? host.schedule : null
     return {
       app: this.name,
       installation: caller.installation,
@@ -546,8 +686,14 @@ export class AppServer {
       host: caller.host,
       settings,
       call,
+      schedule,
+      later: run?.later ?? null,
+      cancelLater: async (id) => (this.#store.later ? this.#store.later.cancel(String(id), caller.installation) : false),
       t: (label) => say(label, locale, this.locale),
-      notify: (n) => void notes.push(n),
+      notify: (n) => {
+        this.#checkNotification(n, caller)
+        notes.push(n)
+      },
       uri: (entity, id) => this.uri(entity, id),
     }
   }
@@ -650,6 +796,12 @@ export class AppServer {
     }
     const message = Object.entries(fields).map(([k, m]) => (k === "_" ? m : `${label(k)}: ${m}`)).join("; ")
     return failure("invalid_input", message, { fields })
+  }
+
+  /** An input's label in the caller's language (its key when it has none). */
+  #fieldLabel(schema: z.ZodObject, key: string, caller: Caller): string {
+    const l = (jsonSchemaOf(schema, "input") as { properties?: Record<string, Record<string, unknown>> }).properties?.[key]?.label
+    return isLabel(l) ? this.#t(caller, l) : key
   }
 
   /** Zod's messages in the caller's language, when Zod has it (else English). */
@@ -999,6 +1151,18 @@ export class AppServer {
       }
     }
     const received = (raw && typeof raw === "object" && !Array.isArray(raw) ? raw : args) as Record<string, unknown>
+    // A later action: when it runs is checked before anyone is asked to confirm it, and the deadline the proof must carry follows from it.
+    // (A call id already answered gives its answer back first, whatever the time is now.)
+    let until: number | undefined
+    let laterRefused: CallToolResult | null = null
+    if (a.later) {
+      const at = received[a.later.at]
+      const atMs = typeof at === "string" ? Date.parse(at) : NaN
+      const now = Date.now()
+      const why = !Number.isFinite(atMs) ? "a date and time" : atMs < now - LATER_PAST_MS ? "a time that has not passed" : atMs > now + LATER_AHEAD_MS ? "at most a year ahead" : null
+      if (why) laterRefused = failure("invalid_input", `${this.#fieldLabel(a.input, a.later.at, caller)}: ${why}`, { fields: { [a.later.at]: why } })
+      else until = laterDeadline(at as string, a.later.window)
+    }
     // Per caller: a stored answer is only ever given back to who made the call.
     const key = a.write && ctx.call ? `${caller.installation}:${caller.issuer}:${caller.subject}:${a.tool}:${ctx.call}` : null
     const hash = canonicalJson(received)
@@ -1013,13 +1177,17 @@ export class AppServer {
     }
     let kept = false
     try {
+      if (laterRefused) return laterRefused
+      let proven: { proof: string; iat: number } | null = null
       if (a.write && a.confirm === "always" && caller.host === "workspace") {
         const proof = hostMeta(meta).confirmation
-        const why = typeof proof === "string" ? await this.#verifier.checkConfirmation(proof, { issuer: caller.issuer, subject: caller.subject, installation: caller.installationId, tool: a.tool, args: received, call: ctx.call }, request.trust) : "no proof"
+        const checked = typeof proof === "string" ? await this.#verifier.checkConfirmation(proof, { issuer: caller.issuer, subject: caller.subject, installation: caller.installationId, tool: a.tool, args: received, call: ctx.call, ...(until !== undefined ? { until } : {}) }, request.trust) : { ok: false as const, why: "no proof" }
+        if (checked.ok) proven = { proof: proof as string, iat: checked.iat }
+        const why = checked.ok ? null : checked.why
         if (why) {
           const card = a.entity && record ? this.#recordCard(a.entity, this.#strip(a.entity, record, caller), caller) : null
           return failure("confirmation_required", `${this.#t(caller, a.config.title)} needs the person's confirmation (${why}).`, {
-            confirm: { tool: a.tool, title: this.#t(caller, a.config.title), ...(a.entity && record ? { record: { uri: this.uri(a.entity.name, String(record.id)), ...card } } : {}), input: received },
+            confirm: { tool: a.tool, title: this.#t(caller, a.config.title), ...(a.entity && record ? { record: { uri: this.uri(a.entity.name, String(record.id)), ...card } } : {}), input: received, ...(a.later && until !== undefined ? { later: { at: received[a.later.at], until } } : {}) },
           })
         }
       }
@@ -1031,6 +1199,35 @@ export class AppServer {
           return inputRequired({ inputRequests: { confirm: inputRequired.elicit({ message: `${this.#t(caller, a.config.title)}${lines ? ` (${lines})` : ""}?`, requestedSchema: z.object({ confirm: z.boolean() }) }) } }) as unknown as CallToolResult
         }
         if (answer.action !== "accept" || answer.content?.confirm !== true) return failure("confirmation_required", "Not confirmed.")
+      }
+      // Confirmed now, run later: the call is kept as received, with its proof, and runs when it is due (clegra_later).
+      if (a.later && until !== undefined) {
+        const at = received[a.later.at] as string
+        const run: LaterRun = {
+          id: randomUUID(),
+          tenant: caller.installation,
+          tool: a.tool,
+          args: received,
+          argsHash: argsHash(received),
+          at,
+          until,
+          author: caller.person ? { id: caller.person.id, name: caller.person.name } : null,
+          permissions: [a.config.permission, a.entity?.config.permission].filter((x): x is string => typeof x === "string" && caller.permissions.has(x)),
+          proof: proven?.proof ?? null,
+          issuer: caller.issuer,
+          subject: caller.subject,
+          installation: caller.installationId,
+          call: ctx.call,
+          confirmedAt: proven?.iat ?? Math.floor(Date.now() / 1000),
+        }
+        await this.#store.later!.add(run)
+        const message = `Scheduled for ${at}.`
+        const result: CallToolResult = { content: text(message), structuredContent: { ok: true, message, data: { later: { id: run.id, at, until } } } }
+        if (key) {
+          await this.#store.finish(key, { args: hash, result }, 24 * 3600_000)
+          kept = true
+        }
+        return result
       }
       let out: ActionResult | void
       try {
@@ -1045,7 +1242,7 @@ export class AppServer {
       const result: CallToolResult = {
         content: text(message),
         structuredContent: { ok: true, message, ...(recordUri ? { record: recordUri } : {}), ...(out?.data ? { data: out.data } : {}) },
-        ...(notes.length ? { _meta: { [META_KEY]: { notifications: notes.map((n) => ({ ...n, title: ctx.t(n.title), ...(n.body ? { body: ctx.t(n.body) } : {}), to: n.to ?? (caller.person ? [caller.person.id] : []) })) } } } : {}),
+        ...this.#notificationsMeta(this.#sent(notes, caller, ctx)),
       }
       if (key) {
         await this.#store.finish(key, { args: hash, result }, 24 * 3600_000)
@@ -1056,6 +1253,93 @@ export class AppServer {
       // Refused or failed: nothing is kept, the same call id can be tried again.
       if (key && !kept) await this.#store.abandon(key)
     }
+  }
+
+  // ------------------------------------------------------------ later runs
+
+  /**
+   * One pass over a tenant's due later runs: each is claimed (once: a claimed run is never given again), checked
+   * against what the person confirmed, and run as its author. `meta`: the request's (`_meta.clegra.settings`).
+   */
+  async #runDue(tenant: string, meta: Record<string, unknown> | undefined, trust: RequestTrust, locale: string | undefined): Promise<LaterReport> {
+    const report: LaterReport = { runs: [], notifications: [] }
+    const store = this.#store.later
+    if (!store) return report
+    for (const due of await store.due(tenant, new Date(), LATER_BATCH)) {
+      const run = await store.claim(due.id, tenant)
+      if (!run) continue // another pass took it
+      let done: { outcome: LaterOutcome; notes: SentNotification[] }
+      try {
+        done = await this.#runOne(run, meta, trust)
+      } catch (error) {
+        console.error(`[${PROTOCOL_ID}] ${LATER_TOOL} ${run.tool} ${run.id}`, error)
+        done = { outcome: { status: "failed", message: "The action failed." }, notes: [] }
+      }
+      await store.finish(run.id, done.outcome)
+      report.runs.push({ id: run.id, tool: run.tool, at: run.at, ...done.outcome })
+      report.notifications.push(...done.notes)
+      if ((done.outcome.status === "expired" || done.outcome.status === "refused") && run.author) report.notifications.push(this.#didNotRun(run, done.outcome, locale))
+    }
+    return report
+  }
+
+  /** One claimed later run: refused unless it is exactly what was confirmed (arguments, time, proof as of its confirmation), expired after its deadline, else run. */
+  async #runOne(run: LaterRun, meta: Record<string, unknown> | undefined, trust: RequestTrust): Promise<{ outcome: LaterOutcome; notes: SentNotification[] }> {
+    const refused = (message: string) => ({ outcome: { status: "refused" as const, message }, notes: [] })
+    const failed = (message: string, notes: SentNotification[] = []) => ({ outcome: { status: "failed" as const, message }, notes })
+    const a = this.#actions.get(run.tool)
+    if (!a?.later) return refused(`${run.tool} is not an action that runs later`)
+    if (argsHash(run.args) !== run.argsHash) return refused("its arguments are not the ones confirmed")
+    const at = run.args[a.later.at]
+    if (typeof at !== "string" || at !== run.at) return refused("its time is not the one confirmed")
+    if (!(Date.parse(at) <= Date.now())) return refused("it is not due yet")
+    if (run.proof) {
+      // The host's proof, verified as of when the person confirmed it: its signature, and that it covers exactly these arguments, this call and this deadline.
+      const checked = await this.#verifier.checkConfirmation(run.proof, { issuer: run.issuer, subject: run.subject, installation: run.installation, tool: run.tool, args: run.args, call: run.call, until: run.until }, trust, new Date(run.confirmedAt * 1000))
+      if (!checked.ok) return refused(checked.why)
+      if (checked.iat !== run.confirmedAt) return refused("the proof is not the one kept")
+    }
+    if (Math.floor(Date.now() / 1000) > run.until) return { outcome: { status: "expired", message: `its deadline passed (${new Date(run.until * 1000).toISOString()})` }, notes: [] }
+    const caller: Caller = { installation: run.tenant, installationId: run.installation, person: run.author, permissions: new Set(run.permissions), host: run.proof ? "workspace" : "plain", issuer: run.issuer, subject: run.subject }
+    if (!this.#mayUse(a, caller)) return refused("its author may not use it")
+    const notes: Notification[] = []
+    const ctx = this.#context(caller, meta, notes, { later: { id: run.id, at: run.at, until: run.until, confirmedAt: run.confirmedAt }, call: run.call })
+    const { id, [RECORD_TITLE_PARAM]: _hint, ...rest } = run.args
+    const parsed = a.input.safeParse(a.entity ? rest : run.args)
+    if (!parsed.success) return failed(`its arguments no longer fit the action: ${parsed.error.issues.map((i) => `${i.path.join(".") || "_"}: ${i.message}`).join("; ")}`)
+    let record: Record<string, unknown> | undefined
+    if (a.entity) {
+      const row = await a.entity.config.get(String(id ?? ""), ctx)
+      if (!row) return failed(`${this.#t(caller, a.entity.config.label)} ${String(id)} doesn't exist.`)
+      record = row as Record<string, unknown>
+    }
+    let out: ActionResult | void
+    try {
+      out = await a.handler(parsed.data as never, ctx, record as never)
+    } catch (error) {
+      if (error instanceof AppError) return failed(error.message, this.#sent(notes, caller, ctx))
+      console.error(`[${PROTOCOL_ID}] ${LATER_TOOL} ${a.tool}`, error)
+      return failed("The action failed.")
+    }
+    return { outcome: { status: "done", message: out?.message ?? "Done." }, notes: this.#sent(notes, caller, ctx) }
+  }
+
+  /** What the author of a later run that did not run is told. */
+  #didNotRun(run: LaterRun, outcome: LaterOutcome, locale: string | undefined): SentNotification {
+    const a = this.#actions.get(run.tool)
+    const lang = (locale ?? this.locale).split("-")[0]!.toLowerCase()
+    const title = a ? say(a.config.title, locale ?? this.locale, this.locale) : run.tool
+    return { type: LATER_TOOL, title: (DID_NOT_RUN[lang] ?? DID_NOT_RUN.en!)(title), body: outcome.message, to: [run.author!.id] }
+  }
+
+  /**
+   * Runs the tenant's due later runs now, as `clegra_later` does when the workspace host calls it: for an app whose
+   * callers are its own (no workspace host runs its schedules), from the app's own cron. `settings`: what handlers
+   * see as `ctx.settings`. The notifications in the report are the app's to deliver.
+   */
+  async runLater(tenant: string, options: { settings?: Record<string, unknown>; locale?: string } = {}): Promise<LaterReport> {
+    if (!this.#store.later) throw new Error("runLater: the store has no later part")
+    return this.#runDue(tenant, options.settings ? { [META_KEY]: { settings: options.settings } } : undefined, { dev: Boolean(this.#dev), requestResource: null }, options.locale)
   }
 
   // ------------------------------------------------------------ the MCP server
@@ -1076,13 +1360,61 @@ export class AppServer {
     return `ui://${this.name}/fragments/${type}`
   }
 
-  #ui(resourceUri: string, visibility: ("model" | "app")[] = ["model", "app"]) {
-    return { ui: { resourceUri, visibility }, "ui/resourceUri": resourceUri, "openai/outputTemplate": resourceUri, "openai/widgetAccessible": true }
+  /** A tool's view; `appOnly`: the tool of an app-only item, which no model is given (MCP Apps `visibility: ["app"]`, ChatGPT `openai/visibility: private`). */
+  #ui(resourceUri: string, appOnly = false) {
+    return { ui: { resourceUri, visibility: appOnly ? ["app"] : ["model", "app"] }, "ui/resourceUri": resourceUri, "openai/outputTemplate": resourceUri, "openai/widgetAccessible": true, ...(appOnly ? { "openai/visibility": "private" } : {}) }
   }
 
   /** A tool without a view of its own that views call (a record's actions): callable from a view in MCP Apps hosts (`ui.visibility` with "app") and in ChatGPT (`openai/widgetAccessible`). Without it a host refuses the view's call. */
-  #callable() {
-    return { ui: { visibility: ["model", "app"] }, "openai/widgetAccessible": true }
+  #callable(appOnly = false) {
+    return appOnly ? APP_ONLY_META : { ui: { visibility: ["model", "app"] }, "openai/widgetAccessible": true }
+  }
+
+  /** Whether this caller may open a page (its tool's gates: exposure, permission, its list's entity). */
+  #canOpen(p: PageRecord, caller: Caller): boolean {
+    const c = p.config
+    if (c.kind === "record" || (caller.host === "plain" && !p.tool.plain)) return false
+    if (c.permission && !caller.permissions.has(c.permission)) return false
+    return c.kind !== "list" || this.#canSee(this.#entities.get(c.entity.name)!, caller)
+  }
+
+  /**
+   * The navigation as this caller may use it (`view.nav` of a page): sections in the reader's language, each page
+   * with its title, the tool that opens it and its badge's tool. Without declared `nav`: every non-record page, one section.
+   */
+  #navFor(caller: Caller) {
+    const sections: NavSection[] = this.#nav ?? [{ pages: [...this.#pages.values()].filter((p) => p.config.kind !== "record").map((p) => p.name) }]
+    return sections
+      .map((s) => ({
+        ...(s.section !== undefined ? { section: this.#t(caller, s.section) } : {}),
+        pages: s.pages.flatMap((name) => {
+          const p = this.#pages.get(name)
+          if (!p || !this.#canOpen(p, caller) || p.config.kind === "record") return []
+          const badge = p.config.badge ? this.#fragments.get(p.config.badge) : undefined
+          return [{ name, title: this.#t(caller, p.config.title), tool: p.tool.name, ...(badge && this.#canShow(badge, caller) ? { badge: badge.tool.name } : {}) }]
+        }),
+      }))
+      .filter((s) => s.pages.length)
+  }
+
+  /** A page's actions as this caller may use them (like a record's), each with its inputs prefilled from the page's params of the same name. */
+  #pageActions(c: PageConfig, caller: Caller, params: Record<string, unknown>) {
+    if (c.kind === "record") return []
+    return (c.actions ?? []).flatMap((h) => {
+      const a = this.#actions.get(h.tool)
+      if (!a || !this.#mayUse(a, caller)) return []
+      const info = this.#actionInfo(a, caller)
+      const props = info.input.properties ?? {}
+      const prefill = Object.fromEntries(Object.entries(params).filter(([k, v]) => Object.hasOwn(props, k) && v !== undefined && v !== null && v !== ""))
+      return [{ ...info, ...(Object.keys(prefill).length ? { prefill } : {}) }]
+    })
+  }
+
+  /** What every page's `view` carries beside its kind and title: its actions and the app's navigation (the page itself named). */
+  #pageExtras(p: PageRecord, caller: Caller, params: Record<string, unknown>) {
+    const actions = this.#pageActions(p.config, caller, params)
+    const nav = this.#navFor(caller)
+    return { page: p.name, ...(actions.length ? { actions } : {}), ...(nav.length ? { nav } : {}) }
   }
 
   #allPages(): PageRecord[] {
@@ -1147,6 +1479,9 @@ export class AppServer {
     const reg = s.registerTool.bind(s) as unknown as (name: string, config: Record<string, unknown>, cb: (args: Record<string, unknown>, ctx: ServerContext) => Promise<CallToolResult>) => void
     const guard = (name: string, fn: (args: Record<string, unknown>, ctx: ServerContext) => Promise<CallToolResult>) => async (args: Record<string, unknown>, ctx: ServerContext) => {
       const notes: L10n = new Map()
+      // A schedule's run is the installation's, of that schedule's own tool: anything else naming a schedule is refused.
+      const scheduleWhy = this.#scheduleProblem(name, caller, ctx.mcpReq._meta as Record<string, unknown> | undefined)
+      if (scheduleWhy) return failure("permission_denied", `Not a run of this schedule: ${scheduleWhy}.`)
       try {
         return withL10n(await shownLabels.run(notes, () => fn(args ?? {}, ctx)), notes)
       } catch (error) {
@@ -1168,6 +1503,7 @@ export class AppServer {
       // The kind's sentence is always last (spec §6 rule 8); the cross-app hint (spec §3.2) before it.
       const kindText = `${e.fields.some((f) => kindRef(f)) ? ` ${CROSS_APP_HINT}` : ""}${e.config.kind !== undefined ? ` ${kindSentence(e.config.kind)}` : ""}`
       const entityMeta = { [META_KEY]: { entity: e.name, ...(e.config.kind !== undefined ? { kind: e.config.kind } : {}) } }
+      const appOnlyEntity = e.config.visibility === "app"
       reg(
         e.tools.list.name,
         {
@@ -1175,7 +1511,7 @@ export class AppServer {
           description: `${t(e.config.description) || plural}. Lists ${plural.toLowerCase()} with filters, sort and paging (pass \`cursor\` from the previous result's \`next\`).${kindText}`,
           inputSchema: z.strictObject({ ...this.#listFiltersShape(e, caller), cursor: z.string().optional(), limit: z.number().int().min(1).max(100).optional() }),
           annotations: { title: plural, ...read },
-          _meta: { ...this.#ui(this.#viewUri()), ...entityMeta },
+          _meta: { ...this.#ui(this.#viewUri(), appOnlyEntity), ...entityMeta },
         },
         guard(e.tools.list.name, async (args, mctx) => {
           const ctx = ctxOf(mctx)
@@ -1199,7 +1535,7 @@ export class AppServer {
           description: `One ${label.toLowerCase()} by id, with the actions available on it.${kindText}`,
           inputSchema: z.object({ id: z.string().describe(`The ${label.toLowerCase()}'s id`) }),
           annotations: { title: label, ...read },
-          _meta: { ...this.#ui(e.config.view ? this.#entityViewUri(e.name) : this.#viewUri()), ...entityMeta },
+          _meta: { ...this.#ui(e.config.view ? this.#entityViewUri(e.name) : this.#viewUri(), appOnlyEntity), ...entityMeta },
         },
         guard(e.tools.get.name, async (args, mctx) => {
           const ctx = ctxOf(mctx)
@@ -1220,7 +1556,8 @@ export class AppServer {
     }
 
     // search and fetch (ChatGPT's conventions), over searchable entities.
-    const searchable = [...this.#entities.values()].filter((e) => this.#canSee(e, caller) && this.#visibleFields(e, caller).some((f) => f.search))
+    // App-only entities are never a model's: search and fetch leave their records out.
+    const searchable = [...this.#entities.values()].filter((e) => e.config.visibility !== "app" && this.#canSee(e, caller) && this.#visibleFields(e, caller).some((f) => f.search))
     // The kinds search can be limited to (spec §6): those of the searchable entities.
     const searchKinds = [...new Set(searchable.flatMap((e) => kindsOf(e.config.kind)))]
     if (searchable.length) {
@@ -1273,7 +1610,8 @@ export class AppServer {
         guard("fetch", async (args, mctx) => {
           const ctx = ctxOf(mctx)
           const parsed = this.parseUri(String(args.id))
-          if (!parsed) return failure("not_found", "Unknown id.")
+          const hidden = parsed && (this.#entities.get(parsed.type)?.config.visibility === "app" || this.#fragments.get(parsed.type)?.config.visibility === "app")
+          if (!parsed || hidden) return failure("not_found", "Unknown id.")
           const r = await this.#resolve({ type: parsed.type, params: parsed.params }, caller, ctx)
           if (r.state !== "ok") return failure(r.state === "no-access" ? "permission_denied" : "not_found", r.state === "no-access" ? "No access." : "Not found.")
           const entity = this.#entities.get(parsed.type)
@@ -1396,7 +1734,7 @@ export class AppServer {
           description: `${t(a.config.description) || title}${a.write ? (a.confirm === "always" ? " (a change; the person confirms it first)" : " (a change)") : ""}.${a.entity ? ` On one ${one}: its \`id\`, and its title in \`${RECORD_TITLE_PARAM}\`.` : ""}${crossInput ? ` ${CROSS_INPUT_HINT}` : ""}`,
           inputSchema: listedOnly(input, t),
           annotations: { title, readOnlyHint: !a.write, destructiveHint: a.write && a.confirm === "always", idempotentHint: !a.write, openWorldHint: false },
-          _meta: this.#callable(),
+          _meta: this.#callable(a.config.visibility === "app"),
         },
         guard(a.tool, (args, mctx) => this.#runAction(a, caller, args, mctx, request, request.received.get(mctx.mcpReq.id as string | number))),
       )
@@ -1405,9 +1743,7 @@ export class AppServer {
     // Pages: open_<page> (record pages are <entity>_get).
     for (const p of this.#allPages()) {
       const c = p.config
-      if (c.kind === "record" || (plainCaller && !p.tool.plain)) continue
-      if (c.permission && !caller.permissions.has(c.permission)) continue
-      if (c.kind === "list" && !this.#canSee(this.#entities.get(c.entity.name)!, caller)) continue
+      if (c.kind === "record" || !this.#canOpen(p, caller)) continue
       const title = t(c.title)
       const params = this.#pageParams(p, caller)
       const shape = c.kind === "list" ? { ...params.shape, cursor: z.string().optional(), limit: z.number().int().min(1).max(100).optional() } : params.shape
@@ -1439,7 +1775,7 @@ export class AppServer {
             const refs = await this.#refs(e, out.rows, caller, ctx, pointers)
             return {
               content: text(JSON.stringify({ page: p.name, rows: marked.map((r) => this.#named(e, r, refs)), ...(out.next ? { next: out.next } : {}) })),
-              structuredContent: { page: p.name, entity: e.name, params: pageParams, ...out, uris: out.rows.map((r) => this.uri(e.name, String(r.id))), refs, view: { kind: "list", title: this.#t(caller, c.title), columns, tool: p.tool.name, args: pageParams, getTool: e.tools.get.name, ...(query.sort && !c.params ? { sort: query.sort } : {}) } },
+              structuredContent: { page: p.name, entity: e.name, params: pageParams, ...out, uris: out.rows.map((r) => this.uri(e.name, String(r.id))), refs, view: { kind: "list", title: this.#t(caller, c.title), columns, tool: p.tool.name, args: pageParams, getTool: e.tools.get.name, ...(query.sort && !c.params ? { sort: query.sort } : {}), ...this.#pageExtras(p, caller, pageParams) } },
               ...this.#marks(pointers),
             }
           }
@@ -1450,11 +1786,11 @@ export class AppServer {
             const pointers: string[] = []
             return {
               content: text(JSON.stringify({ page: p.name, fragments: fragments.map((f, i) => ({ uri: f.uri, state: f.state, ...("data" in f ? { data: this.#markResolved(f, `/fragments/${i}`, pointers) } : {}) })) })),
-              structuredContent: { page: p.name, params: pageParams, fragments, view: { kind: "dashboard", title: this.#t(caller, c.title) } },
+              structuredContent: { page: p.name, params: pageParams, fragments, view: { kind: "dashboard", title: this.#t(caller, c.title), tool: p.tool.name, args: pageParams, ...this.#pageExtras(p, caller, pageParams) } },
               ...this.#marks(pointers),
             }
           }
-          return { content: text(`Opened ${title}.`), structuredContent: { page: p.name, params: pageParams, view: { kind: "custom", title: this.#t(caller, c.title) } } }
+          return { content: text(`Opened ${title}.`), structuredContent: { page: p.name, params: pageParams, view: { kind: "custom", title: this.#t(caller, c.title), ...this.#pageExtras(p, caller, pageParams) } } }
         }),
       )
     }
@@ -1470,7 +1806,7 @@ export class AppServer {
           description: `${t(f.config.description).replace(/[.\s]*$/, "")}. Shows it as a live fragment; don't repeat its data in full.`,
           inputSchema: f.config.params,
           annotations: { title, ...read },
-          _meta: this.#ui(f.config.view ? this.#fragmentViewUri(f.type) : this.#viewUri()),
+          _meta: this.#ui(f.config.view ? this.#fragmentViewUri(f.type) : this.#viewUri(), f.config.visibility === "app"),
         },
         guard(f.tool.name, async (args, mctx) => {
           const r = await this.#resolve({ type: f.type, params: args }, caller, ctxOf(mctx))
@@ -1480,8 +1816,130 @@ export class AppServer {
         }),
       )
     }
+    // The installation's own tools: listed only to the installation-level caller (a workspace host, no person).
+    if (this.#isInstallation(caller)) this.#installationTools(caller, reg, guard, request)
     this.options.mcp?.(s, caller)
     return s
+  }
+
+  /** `clegra_later` (when an action has later) and the lifecycle tools the app implements, for the installation-level caller. */
+  #installationTools(
+    caller: Caller,
+    reg: (name: string, config: Record<string, unknown>, cb: (args: Record<string, unknown>, ctx: ServerContext) => Promise<CallToolResult>) => void,
+    guard: (name: string, fn: (args: Record<string, unknown>, ctx: ServerContext) => Promise<CallToolResult>) => (args: Record<string, unknown>, ctx: ServerContext) => Promise<CallToolResult>,
+    request: RequestInfo,
+  ): void {
+    const write = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }
+    const meta = (mctx: ServerContext) => mctx.mcpReq._meta as Record<string, unknown> | undefined
+    /** A lifecycle handler's context, its notifications kept for the result. */
+    const run = async (mctx: ServerContext, fn: (ctx: Context) => Promise<CallToolResult>): Promise<CallToolResult> => {
+      const notes: Notification[] = []
+      const ctx = this.#context(caller, meta(mctx), notes)
+      const result = await fn(ctx)
+      const sent = this.#notificationsMeta(this.#sent(notes, caller, ctx))
+      return { ...result, ...sent }
+    }
+    if (this.#laterActions().length) {
+      reg(
+        LATER_TOOL,
+        {
+          title: "Run due later actions",
+          description: "For the workspace host, as the installation (its schedule clegra_later): runs the actions people confirmed for later whose time has come.",
+          inputSchema: z.object({}),
+          annotations: { title: "Run due later actions", ...write },
+          _meta: APP_ONLY_META,
+        },
+        guard(LATER_TOOL, async (_args, mctx) => {
+          const report = await this.#runDue(caller.installation, meta(mctx), request.trust, caller.locale)
+          const count = (status: string) => report.runs.filter((r) => r.status === status).length
+          return {
+            content: text(`${report.runs.length} due: ${count("done")} done, ${count("failed")} failed, ${count("expired")} expired, ${count("refused")} refused.`),
+            structuredContent: { runs: report.runs },
+            ...this.#notificationsMeta(report.notifications),
+          }
+        }),
+      )
+    }
+    const life = this.#lifecycle
+    if (life.installation) {
+      const handler = life.installation
+      reg(
+        INSTALLATION_TOOL,
+        {
+          title: "Installation changed",
+          description: "For the workspace host, as the installation: the administrator enabled, disabled or uninstalled the app.",
+          inputSchema: z.object({ state: z.enum(["enabled", "disabled", "uninstalled"]) }),
+          annotations: { title: "Installation changed", ...write, idempotentHint: true },
+          _meta: APP_ONLY_META,
+        },
+        guard(INSTALLATION_TOOL, (args, mctx) =>
+          run(mctx, async (ctx) => {
+            await handler(args.state as "enabled" | "disabled" | "uninstalled", ctx)
+            return { content: text(`The installation is ${String(args.state)}.`), structuredContent: { ok: true } }
+          }),
+        ),
+      )
+    }
+    if (life.export) {
+      const handler = life.export
+      reg(
+        EXPORT_TOOL,
+        {
+          title: "Export",
+          description: "For the workspace host, as the installation: everything the app keeps for it, as one file (an embedded resource).",
+          inputSchema: z.object({}),
+          annotations: { title: "Export", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+          _meta: APP_ONLY_META,
+        },
+        guard(EXPORT_TOOL, (_args, mctx) =>
+          run(mctx, async (ctx) => {
+            const file = await handler(ctx)
+            if (!file) return { content: text("The app keeps nothing for this installation."), structuredContent: { empty: true } }
+            return this.#exportResult(file)
+          }),
+        ),
+      )
+    }
+    if (life.delete) {
+      const handler = life.delete
+      reg(
+        DELETE_TOOL,
+        {
+          title: "Delete",
+          description: "For the workspace host, as the installation: deletes everything the app keeps for it. Asking again answers the same.",
+          inputSchema: z.object({}),
+          annotations: { title: "Delete", readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+          _meta: APP_ONLY_META,
+        },
+        guard(DELETE_TOOL, (_args, mctx) =>
+          run(mctx, async (ctx) => {
+            const out = await handler(ctx)
+            // The later runs the SDK keeps for the tenant are its data too.
+            const later = this.#store.later ? await this.#store.later.clear(caller.installation) : 0
+            const counts = { ...(out && out.counts ? out.counts : {}), ...(later ? { later_runs: later } : {}) }
+            return { content: text("Deleted."), structuredContent: { deleted: true, ...(Object.keys(counts).length ? { counts } : {}) } }
+          }),
+        ),
+      )
+    }
+  }
+
+  /** An export as the host takes it: the file's facts, and the file itself as one embedded resource (base64). */
+  #exportResult(file: { name?: string; contentType: string; body: string | Uint8Array }): CallToolResult {
+    const EXT: Record<string, string> = { "application/json": ".json", "text/csv": ".csv", "application/zip": ".zip", "text/plain": ".txt", "application/x-ndjson": ".ndjson" }
+    if (typeof file.contentType !== "string" || !/^[\w.+-]+\/[\w.+-]+(\s*;.*)?$/.test(file.contentType)) throw new Error(`lifecycle.export: contentType "${String(file.contentType)}" is not a media type`)
+    const name = file.name ?? `${this.name}-export${EXT[file.contentType.split(";")[0]!.trim()] ?? ""}`
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(name)) throw new Error(`lifecycle.export: name "${name}": letters, digits, . _ -, at most 128`)
+    const bytes = typeof file.body === "string" ? Buffer.from(file.body, "utf8") : Buffer.from(file.body.buffer, file.body.byteOffset, file.body.byteLength)
+    if (bytes.byteLength > EXPORT_MAX_BYTES) throw new Error(`lifecycle.export: ${bytes.byteLength} bytes; an export is at most ${EXPORT_MAX_BYTES} bytes`)
+    const sha256 = createHash("sha256").update(bytes).digest("hex")
+    return {
+      content: [
+        { type: "text", text: `Export ${name}: ${bytes.byteLength} bytes.` },
+        { type: "resource", resource: { uri: `${uriPrefix(this.name)}/export/${encodeURIComponent(name)}`, mimeType: file.contentType, blob: bytes.toString("base64") } },
+      ],
+      structuredContent: { name, contentType: file.contentType, bytes: bytes.byteLength, sha256 },
+    }
   }
 
   // ------------------------------------------------------------ the manifest
@@ -1552,6 +2010,7 @@ export class AppServer {
         fields,
         tools: { list: e.tools.list, get: e.tools.get },
         searchable: e.fields.some((f) => f.search),
+        ...(e.config.visibility === "app" ? { visibility: "app" as const } : {}),
       }
     })
     const actions = [...this.#actions.values()].map((a) => ({
@@ -1565,6 +2024,9 @@ export class AppServer {
       readOnly: !a.write,
       confirm: a.confirm,
       ...perm(a.config.permission, `action "${a.name}"`),
+      ...(a.config.visibility === "app" ? { visibility: "app" as const } : {}),
+      ...(a.config.targets?.length ? { targets: a.config.targets.map((x) => ({ target: x.target, needs: [...x.needs], ...(x.input ? { input: JSON.parse(JSON.stringify(x.input)) as Record<string, unknown> } : {}), ...(x.label !== undefined ? { label: L(x.label)! } : {}) })) } : {}),
+      ...(a.later ? { later: { at: a.later.at, window: a.later.window } } : {}),
     }))
     const everyone: Caller = { installation: "manifest", installationId: "manifest", person: null, permissions: new Set(this.#permissions.keys()), host: "workspace", issuer: "", subject: "" }
     const pages = this.#allPages().map((p) => {
@@ -1576,6 +2038,8 @@ export class AppServer {
         ...(c.icon ? { icon: c.icon } : c.kind === "record" || c.kind === "list" ? (this.#entities.get(c.entity.name)!.config.icon ? { icon: this.#entities.get(c.entity.name)!.config.icon } : {}) : {}),
         ...perm(c.permission, `page "${p.name}"`),
         params: plainSchema(jsonSchemaOf(this.#pageParams(p, everyone), "input")) as Record<string, unknown>,
+        ...(c.kind !== "record" && c.actions?.length ? { actions: c.actions.map((h) => this.#actions.get(h.tool)?.name ?? h.name) } : {}),
+        ...(c.kind !== "record" && c.badge !== undefined ? { badge: c.badge } : {}),
       }
       const override = c.kind !== "custom" && c.view ? { view: this.#pageViewUri(p.name) } : {}
       if (c.kind === "list") return { ...base, entity: c.entity.name, columns: c.columns, tool: p.tool, ...override }
@@ -1603,6 +2067,7 @@ export class AppServer {
           ...(f.config.actions?.length ? { actions: f.config.actions.map((h) => h.name) } : {}),
           ...(f.config.size ? { size: f.config.size } : {}),
           ...(f.config.untrusted ? { untrusted: true } : {}),
+          ...(f.config.visibility === "app" ? { visibility: "app" as const } : {}),
         }
       }),
     ]
@@ -1620,6 +2085,13 @@ export class AppServer {
       return { name, title: L(a.title)!, description: L(a.description)!, instructions: a.instructions, tools, tier: a.tier ?? "standard", ...(a.starters?.length ? { starters: a.starters.map((s) => L(s)!) } : {}) }
     })
     const auth = this.options.auth ?? {}
+    const types: [string, NotificationTypeConfig][] = [...this.#notificationTypes.entries(), ...(this.#laterActions().length ? [[LATER_TOOL, LATER_NOTIFICATION] as [string, NotificationTypeConfig]] : [])]
+    const notifications = types.map(([type, n]) => ({ type, label: L(n.label)!, ...(n.description !== undefined ? { description: L(n.description)! } : {}), default: n.default !== false, ...perm(n.permission, `notification "${type}"`) }))
+    const lifecycle = {
+      ...(this.#lifecycle.installation ? { installation: INSTALLATION_TOOL } : {}),
+      ...(this.#lifecycle.export ? { export: EXPORT_TOOL } : {}),
+      ...(this.#lifecycle.delete ? { delete: DELETE_TOOL } : {}),
+    } as Manifest["lifecycle"] & object
     this.#manifest = {
       specVersion: SPEC_VERSION,
       name: this.name,
@@ -1650,6 +2122,16 @@ export class AppServer {
         required: s.required === true,
         ...(s.default !== undefined ? { default: s.default } : {}),
       })),
+      ...(this.#nav ? { nav: this.#nav.map((s) => ({ ...(s.section !== undefined ? { section: L(s.section)! } : {}), pages: [...s.pages] })) } : {}),
+      ...(this.#allSchedules().length ? { schedules: this.#allSchedules().map((s) => ({ name: s.name, ...(s.name !== LATER_TOOL ? { action: s.action?.name ?? s.tool } : {}), tool: s.tool, every: s.every, maxSeconds: s.maxSeconds })) } : {}),
+      ...(notifications.length ? { notifications } : {}),
+      ...(Object.keys(lifecycle).length ? { lifecycle } : {}),
+    }
+    // The rules beyond the schema (spec/src/rules.ts, the same the conformance checks run): a wrong name fails here, at definition time.
+    const problems = manifestRuleProblems(this.#manifest)
+    if (problems.length) {
+      this.#manifest = null
+      throw new Error(problems.join("; "))
     }
     return this.#manifest!
   }
@@ -1669,11 +2151,16 @@ export class AppServer {
     return dev.token({ ...input, audience: DEV_ISSUER })
   }
 
-  /** A dev confirmation proof for one call (what a workspace host signs after «Confirm»). */
-  async devConfirmation(input: { tool: string; args: Record<string, unknown>; call: string; person?: string; installation?: string }): Promise<string> {
+  /**
+   * A dev confirmation proof for one call (what a workspace host signs after «Confirm»). For an action with `later`
+   * it carries the run's deadline (`until`, from the arguments' `at` and the action's window) unless `until` is given.
+   */
+  async devConfirmation(input: { tool: string; args: Record<string, unknown>; call: string; person?: string; installation?: string; until?: number }): Promise<string> {
     const dev = await this.#devStarted()
     const sub = input.person ?? dev.people[0]!.id
-    return signConfirmation(dev.key, { iss: DEV_ISSUER, aud: DEV_ISSUER, sub, installation: input.installation ?? dev.installation, tool: input.tool, args: input.args, call: input.call })
+    const later = this.#actions.get(input.tool)?.later
+    const until = input.until ?? (later && typeof input.args[later.at] === "string" ? laterDeadline(input.args[later.at] as string, later.window) : undefined)
+    return signConfirmation(dev.key, { iss: DEV_ISSUER, aud: DEV_ISSUER, sub, installation: input.installation ?? dev.installation, tool: input.tool, args: input.args, call: input.call, ...(until !== undefined && Number.isFinite(until) ? { until } : {}) })
   }
 
   // ------------------------------------------------------------ HTTP
