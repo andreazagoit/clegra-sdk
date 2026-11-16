@@ -1,7 +1,7 @@
 # Changelog
 
 Clegra apps 1.0 and the `clegra` package (not published yet). Newest first. Entries older than the rename below keep
-the names of their time (`modelapp`, MAP, docs/map): they are history.
+the names of their time (the `modelapp` package, docs/map): they are history.
 
 ## Unreleased (1.0 draft)
 
