@@ -19,15 +19,69 @@ export type Context = {
   readonly settings: Readonly<Record<string, unknown>>
   /** The call id (`_meta.clegra.call`), when the host sent one. */
   readonly call: string | null
+  /** The schedule this call is a run of (`_meta.clegra.schedule`; `clegra_later` for a later run), else null. Such a call has no person. */
+  readonly schedule: string | null
+  /** In a later run: the run (its id, when it was due, its deadline and when the person confirmed it, epoch seconds but `at`). Else null. */
+  readonly later: LaterInfo | null
+  /** Cancels a pending later run of this tenant: false when there is none with this id, or it already ran or started. */
+  cancelLater(id: string): Promise<boolean>
   /** A label in the caller's language. */
   t(label: Label | undefined): string
-  /** A notification for the workspace host to deliver to people of the installation (spec §7). */
+  /**
+   * A notification for the workspace host to deliver to people of the installation (spec §7). With declared
+   * `notifications`, each names one of their types; without, none does. A call without a person says `to`.
+   * Throws (a programming error) otherwise.
+   */
   notify(notification: Notification): void
   /** The URI of a record of this app. */
   uri(entity: string | EntityHandle, id: string): string
 }
 
-export type Notification = { title: Label; body?: Label; uri?: string; to?: string[] }
+/**
+ * `to`: person ids, or everyone of the installation who holds a declared permission (default: the caller's person).
+ * `type`: one of the app's declared notification types (people mute a type per app).
+ */
+export type Notification = { type?: string; title: Label; body?: Label; uri?: string; to?: string[] | { permission: string } }
+
+/** A later run, as its handler sees it (`ctx.later`): `at` as the person gave it, `until` and `confirmedAt` in epoch seconds. */
+export type LaterInfo = { id: string; at: string; until: number; confirmedAt: number }
+
+/** Who sees an entity, action or fragment: `"app"` keeps it from every model (only views and the host's own UI use it). */
+export type Visibility = "app"
+
+/** What a host offers a global action on: an email, or a record of a kind in any app of the workspace. */
+export type TargetName = "mail.message" | `record:${string}`
+
+/** A target of an action (`targets`): what it needs of the object, and its input as a template (`{from.address}`, `{uri}`, `{title}`). */
+export type Target<In = Record<string, unknown>> = { target: TargetName; needs: string[]; input?: { [K in keyof In]?: unknown }; label?: Label }
+
+/** «Approve now, act later»: the date-time input `at` says when the confirmed call runs, within `window` minutes (default 60). */
+export type LaterConfig<In = Record<string, unknown>> = { at: keyof In & string; window?: number }
+
+/** What an installation went to: the host tells the app (`lifecycle.installation`). */
+export type InstallationState = "enabled" | "disabled" | "uninstalled"
+
+/** The tenant's data as one file (`lifecycle.export`): `name` defaults to `<app>-export`. */
+export type ExportFile = { name?: string; contentType: string; body: string | Uint8Array }
+
+/**
+ * The app's lifecycle, called only by the workspace host as the installation: told of each change of its
+ * installation, the tenant's data exported, everything it keeps for the tenant deleted (also after `uninstalled`).
+ */
+export type LifecycleConfig = {
+  installation?: (state: InstallationState, ctx: Context) => Promise<void> | void
+  export?: (ctx: Context) => Promise<ExportFile | null> | ExportFile | null
+  delete?: (ctx: Context) => Promise<{ counts?: Record<string, number> } | void> | { counts?: Record<string, number> } | void
+}
+
+/** A schedule (`schedules`): a global action the workspace host runs as the installation every `every` minutes, within `maxSeconds` (default 60). */
+export type ScheduleConfig = { action: ActionHandle; every: number; maxSeconds?: number }
+
+/** A notification type (`notifications`): people mute it per app; `default: false` keeps it off until they turn it on. */
+export type NotificationTypeConfig = { label: Label; description?: Label; default?: boolean; permission?: string }
+
+/** A navigation section (`nav`): its label and its pages, in order. */
+export type NavSection = { section?: Label; pages: string[] }
 
 export type Value = string | number | boolean
 export type Filter = Value | { in: Value[] } | { gte?: Value; lte?: Value }
@@ -63,6 +117,7 @@ export type EntityConfig<S extends z.ZodObject> = {
   expose?: { plain?: boolean; list?: string; get?: string }
   /** Your own ui:// view for a record, instead of the generated one. */
   view?: ViewSource
+  visibility?: Visibility
 }
 
 /** An entity, as the SDK knows it once defined. */
@@ -91,6 +146,9 @@ export type ActionConfig<I extends z.ZodObject, E extends EntityHandle | undefin
   permission?: string
   /** Plain MCP clients: reads are listed by default, writes only with `plain: true`; `tool` renames the tool. */
   expose?: { plain?: boolean; tool?: string }
+  visibility?: Visibility
+  targets?: Target<z.infer<I>>[]
+  later?: LaterConfig<z.infer<I>>
 }
 
 export type ActionHandler<I extends z.ZodObject, E extends EntityHandle | undefined> = (
@@ -105,7 +163,18 @@ export type Exposure = { plain?: boolean; tool?: string }
 
 export type FragmentInstance = { type: string; params: Record<string, unknown>; size?: "small" | "medium" | "large" }
 
-type PageBase<P extends z.ZodObject> = { title: Label; icon?: string; permission?: string; description?: Label; params?: P; expose?: Exposure }
+type PageBase<P extends z.ZodObject> = {
+  title: Label
+  icon?: string
+  permission?: string
+  description?: Label
+  params?: P
+  expose?: Exposure
+  /** Global actions offered on the page; the first is its primary. Page params prefill inputs of the same name. */
+  actions?: ActionHandle[]
+  /** A `stat` fragment type without required params: its value is the page's count in the navigation. */
+  badge?: string
+}
 
 export type PageConfig<P extends z.ZodObject = z.ZodObject> =
   | (PageBase<P> & {
@@ -117,7 +186,7 @@ export type PageConfig<P extends z.ZodObject = z.ZodObject> =
       /** Your own ui:// view instead of the generated one (hosts may still draw the list natively). */
       view?: ViewSource
     })
-  | (Omit<PageBase<P>, "params" | "title"> & { kind: "record"; entity: EntityHandle; title?: Label; sections?: { title: Label; fields: string[] }[]; view?: ViewSource })
+  | (Omit<PageBase<P>, "params" | "title" | "actions" | "badge"> & { kind: "record"; entity: EntityHandle; title?: Label; sections?: { title: Label; fields: string[] }[]; view?: ViewSource })
   | (PageBase<P> & { kind: "dashboard"; fragments: FragmentInstance[] | ((params: z.infer<P>, ctx: Context) => FragmentInstance[] | Promise<FragmentInstance[]>); view?: ViewSource })
   | (PageBase<P> & { kind: "custom"; view: ViewSource })
   | (PageBase<P> & { kind: "custom"; url: string })
@@ -146,6 +215,7 @@ export type FragmentConfig<P extends z.ZodObject, T extends Template> = {
   expose?: Exposure
   /** Its texts are written by outsiders (records' names, notes): data for a model, never instructions. */
   untrusted?: boolean
+  visibility?: Visibility
 } & (
   | { template: T; data: (params: z.infer<P>, ctx: Context) => Promise<TemplateData[T] | null> | TemplateData[T] | null; view?: ViewSource }
   | { view: ViewSource; data: (params: z.infer<P>, ctx: Context) => Promise<Record<string, unknown> | null> | Record<string, unknown> | null; template?: never }

@@ -7,7 +7,7 @@ import type { EmbedOptions } from "./embed"
 import type { Label } from "./labels"
 import { AppServer, type PeopleResolver } from "./server"
 import type { IdempotencyStore } from "./store"
-import type { ActionHandle, ActionResult, Confirm, Context, EntityHandle, Exposure, FragmentInstance, KindConfig, ListResult, PageConfig, PermissionConfig, Query, SettingConfig, TemplateData, ViewSource } from "./types"
+import type { ActionHandle, ActionResult, Confirm, Context, EntityHandle, Exposure, FragmentInstance, KindConfig, LaterConfig, LifecycleConfig, ListResult, PageConfig, PermissionConfig, Query, SettingConfig, Target, TemplateData, ViewSource, Visibility } from "./types"
 
 /**
  * defineApp: THE authoring API (spec §1). One typed object holds the whole
@@ -43,6 +43,8 @@ export type EntityDef<S extends z.ZodObject, P extends string = string> = {
   expose?: { plain?: boolean; list?: string; get?: string }
   /** Your own ui:// view for one record, instead of the generated one. */
   view?: ViewSource
+  /** `"app"`: its tools are for views and the host's own UI only, never for a model (search and fetch leave its records out). */
+  visibility?: Visibility
 }
 
 type ActionBase<I extends z.ZodObject, P extends string> = {
@@ -58,11 +60,23 @@ type ActionBase<I extends z.ZodObject, P extends string> = {
   permission?: P
   /** Plain MCP clients: reads are listed by default, writes only with `plain: true`; `tool` renames the tool (default `<entity>_<action>` or `<action>`). */
   expose?: Exposure
+  /** `"app"`: for views and the host's own UI only, never for a model. */
+  visibility?: Visibility
+  /**
+   * «Approve now, act later», on a write the person confirms: `at` names a required date-time input; the confirmed
+   * call is kept (the store's `later` part) and runs at that time, at most `window` minutes late (10–10080, default 60).
+   */
+  later?: LaterConfig<z.infer<I>>
 }
 
 export type ActionDef<I extends z.ZodObject, E extends Schemas, P extends string = string> =
-  | (ActionBase<I, P> & { on?: undefined; run: (input: z.infer<I>, ctx: Context) => Awaitable<ActionResult | void> })
-  | { [N in keyof E]: ActionBase<I, P> & { /** The entity whose record the action works on. */ on: N; run: (input: z.infer<I>, ctx: Context, record: z.infer<E[N]>) => Awaitable<ActionResult | void> } }[keyof E]
+  | (ActionBase<I, P> & {
+      on?: undefined
+      /** Where a host offers the action on something else: an email (`mail.message`) or a record of a kind (`record:organization`), with its input filled from it. At most 4. */
+      targets?: Target<z.infer<I>>[]
+      run: (input: z.infer<I>, ctx: Context) => Awaitable<ActionResult | void>
+    })
+  | { [N in keyof E]: ActionBase<I, P> & { /** The entity whose record the action works on. */ on: N; targets?: never; run: (input: z.infer<I>, ctx: Context, record: z.infer<E[N]>) => Awaitable<ActionResult | void> } }[keyof E]
 
 type FragmentBase<Pm extends z.ZodObject, P extends string, A extends string> = {
   title: Label
@@ -78,24 +92,30 @@ type FragmentBase<Pm extends z.ZodObject, P extends string, A extends string> = 
   expose?: Exposure
   /** Its texts are written by outsiders (records' names, notes): marked as data for models. */
   untrusted?: boolean
+  /** `"app"`: its tool is for views and the host's own UI only, never for a model. */
+  visibility?: Visibility
 }
 
 export type FragmentDef<Pm extends z.ZodObject, P extends string = string, A extends string = string> =
   | { [T in keyof TemplateData]: FragmentBase<Pm, P, A> & { /** Drawn by the host (and by the generated view). */ template: T; data: (params: z.infer<Pm>, ctx: Context) => Awaitable<TemplateData[T] | null>; /** Your own ui:// view instead of the generated one. */ view?: ViewSource } }[keyof TemplateData]
   | (FragmentBase<Pm, P, A> & { template?: undefined; /** Your own ui:// view (an MCP Apps document). */ view: ViewSource; data: (params: z.infer<Pm>, ctx: Context) => Awaitable<Record<string, unknown> | null> })
 
-type PageBase<P extends string> = {
+type PageBase<P extends string, A extends string, F extends string> = {
   title: Label
   icon?: string
   description?: Label
   permission?: P
   /** Plain MCP clients: `plain: false` hides its tool; `tool` renames it (default `open_<page>`). */
   expose?: Exposure
+  /** Global actions (without `on`) offered on the page, at most 8; the first is its primary. Page params prefill inputs of the same name. */
+  actions?: A[]
+  /** A `stat` fragment type without required params: its value is the page's count in the navigation. */
+  badge?: F
 }
 
 /** A page is one of: `list`, `record`, `dashboard`, a custom `view`, or a custom `url`. */
-export type PageDef<E extends Schemas, P extends string = string> =
-  | (PageBase<P> & {
+export type PageDef<E extends Schemas, P extends string = string, A extends string = string, F extends string = string> =
+  | (PageBase<P, A, F> & {
       /** A list of this entity's records. */
       list: keyof E & string
       columns: string[]
@@ -106,15 +126,15 @@ export type PageDef<E extends Schemas, P extends string = string> =
       /** Your own ui:// view instead of the generated one. */
       view?: ViewSource
     })
-  | (Omit<PageBase<P>, "title"> & { /** The page of one record of this entity (every entity has a default one). */ record: keyof E & string; title?: Label; sections?: { title: Label; fields: string[] }[]; view?: ViewSource })
-  | (PageBase<P> & {
+  | (Omit<PageBase<P, A, F>, "title" | "actions" | "badge"> & { /** The page of one record of this entity (every entity has a default one). */ record: keyof E & string; title?: Label; sections?: { title: Label; fields: string[] }[]; view?: ViewSource; actions?: never; badge?: never })
+  | (PageBase<P, A, F> & {
       /** Fragments on a grid. */
       dashboard: FragmentInstance[] | ((params: any, ctx: Context) => Awaitable<FragmentInstance[]>) // eslint-disable-line @typescript-eslint/no-explicit-any
       params?: z.ZodObject
       view?: ViewSource
     })
-  | (PageBase<P> & { /** A custom page: your own MCP Apps document. */ view: ViewSource; params?: z.ZodObject })
-  | (PageBase<P> & { /** A custom page: your own site, in an isolated frame. */ url: string; params?: z.ZodObject })
+  | (PageBase<P, A, F> & { /** A custom page: your own MCP Apps document. */ view: ViewSource; params?: z.ZodObject })
+  | (PageBase<P, A, F> & { /** A custom page: your own site, in an isolated frame. */ url: string; params?: z.ZodObject })
 
 export type AgentDef = {
   title: Label
@@ -126,7 +146,26 @@ export type AgentDef = {
   starters?: Label[]
 }
 
-export type AppDefinition<E extends Schemas, A extends Schemas, F extends Schemas, P extends string> = {
+/** A schedule: a global action (readOnly, or a write whose confirm is `never` or `optional`) the workspace host runs as the installation. */
+export type ScheduleDef<A extends string = string> = {
+  action: A
+  /** Minutes between runs, 5–1440. */
+  every: number
+  /** How long a run may take, 1–300 seconds (default 60). */
+  maxSeconds?: number
+}
+
+/** A notification type: people mute it per app. */
+export type NotificationDef<P extends string = string> = {
+  label: Label
+  description?: Label
+  /** false: off until the person turns it on (default true). */
+  default?: boolean
+  /** Only holders of this permission receive it. */
+  permission?: P
+}
+
+export type AppDefinition<E extends Schemas, A extends Schemas, F extends Schemas, P extends string, G extends string = string> = {
   /** The app id: lowercase letters, digits, `-`; 2–40 characters. */
   name: string
   title: Label
@@ -152,8 +191,16 @@ export type AppDefinition<E extends Schemas, A extends Schemas, F extends Schema
   entities: { [K in keyof E]: EntityDef<E[K], NoInfer<P>> }
   actions?: { [K in keyof A]: ActionDef<A[K], E, NoInfer<P>> }
   fragments?: { [K in keyof F]: FragmentDef<F[K], NoInfer<P>, keyof A & string> }
-  pages?: Record<string, PageDef<E, NoInfer<P>>>
+  pages?: Record<G, PageDef<E, NoInfer<P>, NoInfer<keyof A & string>, NoInfer<keyof F & string>>>
+  /** The navigation: sections of pages, in order (no record pages; each page once). Without it a host shows every non-record page, ungrouped. */
+  nav?: { section?: Label; pages: NoInfer<G>[] }[]
   agents?: Record<string, AgentDef>
+  /** Actions the workspace host runs as the installation, with nobody at the screen: `{ digest: { action: "send_digest", every: 60 } }`. At most 10. */
+  schedules?: Record<string, ScheduleDef<NoInfer<keyof A & string>>>
+  /** The notification types the app sends (`ctx.notify({ type })`). Without them its notifications are untyped. */
+  notifications?: Record<string, NotificationDef<NoInfer<P>>>
+  /** Told by the workspace host of its installation's changes; the tenant's data exported and deleted on request. */
+  lifecycle?: LifecycleConfig
   /** Escape hatch: the raw McpServer of each request (official MCP SDK), to add hand-written tools, resources and views. `caller` is null before sign-in. */
   mcp?: (server: McpServer, caller: Caller | null) => void
   /** Where write results are kept for idempotency (default: in memory). */
@@ -172,12 +219,12 @@ export type AppDefinition<E extends Schemas, A extends Schemas, F extends Schema
 }
 
 /** What defineApp returns: the app, ready to serve. */
-export type App = Pick<AppServer, "name" | "locale" | "manifest" | "fetch" | "start" | "devMode" | "uri" | "fragmentUri" | "parseUri" | "createMcpServer" | "devToken" | "devConfirmation" | "embed">
+export type App = Pick<AppServer, "name" | "locale" | "manifest" | "fetch" | "start" | "devMode" | "uri" | "fragmentUri" | "parseUri" | "createMcpServer" | "devToken" | "devConfirmation" | "embed" | "runLater">
 
 const confirmOf = (c: boolean | Confirm | undefined): Confirm | undefined => (c === true ? "always" : c === false ? "never" : c)
 
-export function defineApp<E extends Schemas, A extends Schemas = Schemas, F extends Schemas = Schemas, P extends string = string>(def: AppDefinition<E, A, F, P>): App {
-  const { permissions, settings, kinds, entities, actions, fragments, pages, agents, ...options } = def
+export function defineApp<E extends Schemas, A extends Schemas = Schemas, F extends Schemas = Schemas, P extends string = string, G extends string = string>(def: AppDefinition<E, A, F, P, G>): App {
+  const { permissions, settings, kinds, entities, actions, fragments, pages, agents, nav, schedules, notifications, lifecycle, ...options } = def
   const app = new AppServer(options)
   if (kinds) app.defineKinds(kinds)
   for (const [id, p] of Object.entries(permissions ?? {})) app.registerPermission(id, p as PermissionConfig)
@@ -210,8 +257,15 @@ export function defineApp<E extends Schemas, A extends Schemas = Schemas, F exte
     app.registerFragment(type, { ...config, ...(handles.length ? { actions: handles } : {}) } as never)
   }
 
-  for (const [name, p] of Object.entries(pages ?? {}) as [string, PageDef<Schemas>][]) {
+  const actionOf = (n: string, where: string) => {
+    const h = actionHandles.get(n)
+    if (!h) throw new Error(`${where}: "${n}" is not an action of this app`)
+    return h
+  }
+  for (const [name, def] of Object.entries(pages ?? {}) as [string, PageDef<Schemas>][]) {
     const where = `page "${name}"`
+    const { actions: names, ...p } = def as PageDef<Schemas> & { actions?: string[] }
+    if (names?.length) Object.assign(p, { actions: names.map((n) => actionOf(n, where)) })
     let config: PageConfig
     if ("list" in p) {
       const { list, ...rest } = p
@@ -231,6 +285,10 @@ export function defineApp<E extends Schemas, A extends Schemas = Schemas, F exte
     const { uses, ...config } = a
     app.registerAgent(name, { ...config, tools: uses })
   }
+  if (nav) app.registerNav(nav)
+  for (const [name, s] of Object.entries(schedules ?? {}) as [string, ScheduleDef][]) app.registerSchedule(name, { ...s, action: actionOf(s.action, `schedule "${name}"`) })
+  for (const [type, n] of Object.entries(notifications ?? {}) as [string, NotificationDef][]) app.registerNotificationType(type, n)
+  if (lifecycle) app.registerLifecycle(lifecycle)
   // The manifest is built (and its references checked) at definition time: a wrong name fails at start, not at the first call.
   app.manifest()
   return app
