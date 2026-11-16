@@ -651,7 +651,11 @@ needs anything from an app beyond §2–§7.
    taken, the administrator gives it another name there at install time, and
    the host uses that name in the workspace's record URIs and translates them
    to and from the app's own `name` in every call. Record URIs are therefore
-   scoped to the workspace and resolved by its host. (A public registry that
+   scoped to the workspace and resolved by its host. The name is kept for the
+   installation's life (other apps store URIs that carry it). When another app
+   of the workspace is named as a renamed app's own `name`, the host MUST NOT
+   send the renamed app a URI of that other app (it would read as its own):
+   it refuses the call instead. (A public registry that
    lists apps may give them globally unique, publisher-verified names; that is
    a listing, outside this protocol.)
 2. **Caller.** Every call a host makes to list, search, match or resolve

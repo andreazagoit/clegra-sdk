@@ -19,6 +19,7 @@ export default defineApp({ name, title, version, locale, auth, permissions, sett
 |---|---|
 | [spec.md](spec.md) | The specification (normative, short) |
 | [quickstart.md](quickstart.md) | Next.js in 5 minutes (`npx modelapp init`), a day to ship; standalone Node; tests |
+| [kinds.md](kinds.md) | Kinds: when they pay off, third parties' dotted kinds, the promotion rule, what Clegra does with them |
 | [auth.md](auth.md) | Your sign-in as the authorization server, your `auth.resolve`: better-auth, Clerk, Auth0, WorkOS |
 | [ai-guide.md](ai-guide.md) ([llms.txt](llms.txt)) | The single-file reference for coding agents |
 | [examples/crm.md](examples/crm.md) | A CRM: Next.js, better-auth, Drizzle; code in [`examples/modelapp/crm`](../../examples/modelapp/crm) |
