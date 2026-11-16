@@ -2,7 +2,8 @@
 // organization (its id), or an installation of a workspace host such as Clegra
 // (`<installation>@<issuer>`, never an organization: those callers have no
 // account here). `tenants` holds both kinds, so the data tables can point at it.
-import { boolean, date, foreignKey, index, jsonb, numeric, pgTable, primaryKey, text, timestamp } from "drizzle-orm/pg-core"
+import { sql } from "drizzle-orm"
+import { bigint, boolean, date, foreignKey, index, jsonb, numeric, pgTable, primaryKey, text, timestamp } from "drizzle-orm/pg-core"
 
 export * from "./auth-schema"
 
@@ -116,4 +117,36 @@ export const clegraStore = pgTable(
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
   },
   (t) => [index("clegra_store_expires_at").on(t.expiresAt)],
+)
+
+/**
+ * Its later runs and, for the lifecycle's delete, what it clears per tenant: the second table of `SqlStore.schema()`
+ * (clegra), column for column.
+ */
+export const clegraStoreLater = pgTable(
+  "clegra_store_later",
+  {
+    id: text("id").primaryKey(),
+    tenant: text("tenant").notNull(),
+    tool: text("tool").notNull(),
+    args: text("args").notNull(),
+    argsHash: text("args_hash").notNull(),
+    at: text("at").notNull(),
+    dueAt: timestamp("due_at", { withTimezone: true }).notNull(),
+    until: bigint("until", { mode: "number" }).notNull(),
+    author: jsonb("author"),
+    permissions: jsonb("permissions").notNull(),
+    proof: text("proof"),
+    issuer: text("issuer").notNull(),
+    subject: text("subject").notNull(),
+    installation: text("installation").notNull(),
+    call: text("call"),
+    confirmedAt: bigint("confirmed_at", { mode: "number" }).notNull(),
+    status: text("status").default("pending").notNull(),
+    message: text("message"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    claimedAt: timestamp("claimed_at", { withTimezone: true }),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+  },
+  (t) => [index("clegra_store_later_due").on(t.tenant, t.dueAt).where(sql`status = 'pending'`)],
 )

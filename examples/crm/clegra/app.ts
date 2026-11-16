@@ -7,8 +7,10 @@ import { z } from "zod"
 
 import {
   closingSoon,
+  createContact,
   createDeal,
   CrmError,
+  deleteWorkspace,
   getCompany,
   getContact,
   getDeal,
@@ -25,6 +27,7 @@ import {
   setErpCustomer,
   setStage,
   STAGES,
+  tenantData,
 } from "@/lib/crm"
 import { database } from "@/lib/db"
 
@@ -139,7 +142,7 @@ export function createCrmApp({ auth, store = new SqlStore((text, params) => data
       "deals.view": { label: { en: "See deals", it: "Vedere le trattative" }, default: true },
       "deals.edit": { label: { en: "Change deals", it: "Modificare le trattative" }, default: true },
       "deals.values": { label: { en: "See deal values", it: "Vedere i valori delle trattative" } },
-      "contacts.edit": { label: { en: "Log calls with contacts", it: "Registrare le chiamate ai contatti" }, default: true },
+      "contacts.edit": { label: { en: "Add contacts and log calls", it: "Aggiungere contatti e registrare chiamate" }, default: true },
     },
   
     settings: {
@@ -241,6 +244,23 @@ export function createCrmApp({ auth, store = new SqlStore((text, params) => data
           return { message: ctx.t({ en: `${company.name} linked to ${input.customer}.`, it: `${company.name} collegata a ${input.customer}.` }), record: company.id }
         },
       },
+      create_contact: {
+        title: { en: "New contact", it: "Nuovo contatto" },
+        description: { en: "Adds a person at one of our companies", it: "Aggiunge una persona di una delle nostre aziende" },
+        icon: "user-plus",
+        input: z.object({
+          name: z.string().min(2).max(120).meta({ label: { en: "Name", it: "Nome" } }),
+          email: z.email().meta({ label: "Email" }),
+          // On the contacts page filtered by a company (`?company=…`) this is filled in.
+          company: ref("company").meta({ label: { en: "Company", it: "Azienda" } }),
+        }),
+        permission: "contacts.edit",
+        expose: { plain: true },
+        run: async (input, ctx) => {
+          const contact = await createContact(await tenant(ctx), input).catch((e) => refused(e, ctx))
+          return { message: ctx.t({ en: `Contact ${contact.name} added.`, it: `Contatto ${contact.name} aggiunto.` }), record: ctx.uri("contact", contact.id) }
+        },
+      },
       create_deal: {
         title: { en: "New deal", it: "Nuova trattativa" },
         description: { en: "Creates a deal for a company", it: "Crea una trattativa per un'azienda" },
@@ -267,6 +287,20 @@ export function createCrmApp({ auth, store = new SqlStore((text, params) => data
     },
 
     fragments: {
+      // The deals page's badge (a stat fragment: its value is the count).
+      open_deals: {
+        title: { en: "Open deals", it: "Trattative aperte" },
+        description: { en: "How many deals are open", it: "Quante trattative sono aperte" },
+        params: z.object({}),
+        permission: "deals.view",
+        // A count for the navigation, not something a model needs: views and the host call it, models never get it.
+        visibility: "app",
+        template: "stat",
+        data: async (_p, ctx) => {
+          const open = await openPipeline(await tenant(ctx))
+          return { label: ctx.t({ en: "Open deals", it: "Trattative aperte" }), value: open.count, format: "number" }
+        },
+      },
       pipeline_total: {
         title: { en: "Open pipeline", it: "Pipeline aperta" },
         description: { en: "The total value of open deals", it: "Il valore totale delle trattative aperte" },
@@ -304,9 +338,10 @@ export function createCrmApp({ auth, store = new SqlStore((text, params) => data
     },
 
     pages: {
-      deals: { title: { en: "Deals", it: "Trattative" }, icon: "briefcase", list: "deal", columns: ["name", "company", "stage", "value", "closeDate", "owner"] },
+      // «New deal» is the page's primary action, its form prefilled from the page's filter (`?company=…`); the badge counts open deals.
+      deals: { title: { en: "Deals", it: "Trattative" }, icon: "briefcase", list: "deal", columns: ["name", "company", "stage", "value", "closeDate", "owner"], actions: ["create_deal"], badge: "open_deals" },
       companies: { title: { en: "Companies", it: "Aziende" }, icon: "building-2", list: "company", columns: ["name", "city", "industry"] },
-      contacts: { title: { en: "Contacts", it: "Contatti" }, icon: "users", list: "contact", columns: ["name", "email", "company", "lastCall"] },
+      contacts: { title: { en: "Contacts", it: "Contatti" }, icon: "users", list: "contact", columns: ["name", "email", "company", "lastCall"], actions: ["create_contact"] },
       deal: {
         record: "deal",
         sections: [
@@ -343,6 +378,26 @@ export function createCrmApp({ auth, store = new SqlStore((text, params) => data
       },
     },
   
+    // The host's navigation: selling first, then the people and companies we sell to.
+    nav: [
+      { section: { en: "Sales", it: "Vendite" }, pages: ["pipeline", "deals", "board", "forecast"] },
+      { section: { en: "Customers", it: "Clienti" }, pages: ["companies", "contacts"] },
+    ],
+
+    // A workspace host tells the CRM when its installation is uninstalled, takes its data out, and deletes them
+    // (30 days later, or at once). Only a workspace installation's tenant is exported or deleted: an organization of
+    // the CRM's own users is never deleted through a host.
+    lifecycle: {
+      export: async (ctx) => {
+        if (!isWorkspaceInstallation(ctx.installation)) return null
+        return { name: "crm-export.json", contentType: "application/json", body: JSON.stringify(await tenantData(ctx.installation), null, 2) }
+      },
+      delete: async (ctx) => {
+        if (!isWorkspaceInstallation(ctx.installation)) return
+        return { counts: await deleteWorkspace(ctx.installation) }
+      },
+    },
+
     agents: {
       sales_assistant: {
         title: { en: "Sales assistant", it: "Assistente vendite" },

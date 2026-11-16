@@ -179,6 +179,21 @@ export async function logCall(orgId: string, contactId: string, input: { personI
   })
 }
 
+/** A new contact of one of the tenant's companies. An email already on another contact of the tenant is refused (it is the person's key). */
+export async function createContact(orgId: string, input: { name: string; email: string; company: string }): Promise<Contact> {
+  const name = input.name.trim()
+  const email = input.email.trim()
+  return db().transaction(async (tx) => {
+    const [company] = await tx.select({ id: companies.id }).from(companies).where(and(eq(companies.orgId, orgId), eq(companies.id, input.company)))
+    if (!company) throw new CrmError("unknown_company", `Unknown company ${input.company}`)
+    const [taken] = await tx.select({ id: contacts.id }).from(contacts).where(and(eq(contacts.orgId, orgId), sql`lower(${contacts.email}) = ${email.toLowerCase()}`))
+    if (taken) throw new CrmError("invalid", `${email} is already the email of contact ${taken.id}`)
+    const contact: Contact = { id: newId("ct"), name, email, company: input.company }
+    await tx.insert(contacts).values({ orgId, id: contact.id, name, email, companyId: input.company })
+    return contact
+  })
+}
+
 export async function callsWith(orgId: string, contactIds: string[], limit = 20): Promise<Call[]> {
   if (!contactIds.length) return []
   const rows = await db()
@@ -351,6 +366,34 @@ export async function provisionWorkspace(installation: string): Promise<void> {
     await tx.insert(people).values(Object.entries(OWNER_NAMES).map(([id, name]) => ({ orgId: installation, id, name })))
   })
   provisioned.add(installation)
+}
+
+/** Everything the CRM keeps for one tenant, as plain rows: what a workspace host's export holds. */
+export async function tenantData(orgId: string) {
+  const [companyRows, contactRows, dealRows, callRows, peopleRows] = await Promise.all([
+    db().select(companyFields).from(companies).where(eq(companies.orgId, orgId)).orderBy(asc(companies.createdAt), asc(companies.id)),
+    db().select(contactFields).from(contacts).where(eq(contacts.orgId, orgId)).orderBy(asc(contacts.createdAt), asc(contacts.id)),
+    db().select({ ...dealFields, wonNote: deals.wonNote }).from(deals).where(eq(deals.orgId, orgId)).orderBy(asc(deals.createdAt), asc(deals.id)),
+    db().select({ id: calls.id, contact: calls.contactId, person: calls.personId, note: calls.note, calledOn: calls.calledOn }).from(calls).where(eq(calls.orgId, orgId)).orderBy(asc(calls.calledOn), asc(calls.id)),
+    db().select({ id: people.id, name: people.name }).from(people).where(eq(people.orgId, orgId)).orderBy(asc(people.id)),
+  ])
+  return { companies: companyRows.map(toCompany), contacts: contactRows.map(toContact), deals: dealRows, calls: callRows, people: peopleRows }
+}
+
+/**
+ * Deletes a workspace installation's tenant and, through its foreign keys, every row it has. Idempotent: a second
+ * call finds nothing and answers zeros. A later call of the same installation gets a fresh copy of the demo data.
+ */
+export async function deleteWorkspace(installation: string): Promise<Record<"companies" | "contacts" | "deals" | "calls", number>> {
+  if (!isWorkspaceInstallation(installation)) throw new Error(`"${installation}" is not a workspace installation`)
+  const counts = await db().transaction(async (tx) => {
+    const n = async (table: typeof companies | typeof contacts | typeof deals | typeof calls) => (await tx.select({ n: count() }).from(table).where(eq(table.orgId, installation)))[0]?.n ?? 0
+    const counted = { companies: await n(companies), contacts: await n(contacts), deals: await n(deals), calls: await n(calls) }
+    await tx.delete(tenants).where(eq(tenants.id, installation))
+    return counted
+  })
+  provisioned.delete(installation)
+  return counts
 }
 
 /** For tests: forget which installations were provisioned in this process. */

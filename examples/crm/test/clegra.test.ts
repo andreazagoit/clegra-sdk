@@ -6,7 +6,7 @@ import { test } from "node:test"
 import "./setup"
 
 import { embedProxy } from "clegra/next"
-import { testClient } from "clegra/testing"
+import { installationClient, testClient } from "clegra/testing"
 import { checkApp, formatReport } from "clegra/spec"
 import { and, eq } from "drizzle-orm"
 
@@ -100,6 +100,38 @@ test("writes reach plain MCP clients only where the app opted in, with honest an
   assert.equal(tools.get("deal_set_stage")!.annotations!.destructiveHint, false)
   assert.equal(tools.get("deal_list")!.annotations!.readOnlyHint, true)
   assert.equal((tools.get("open_forecast")!._meta!.ui as { resourceUri: string }).resourceUri, "ui://crm/pages/forecast")
+})
+
+test("pages people use every day: the deals page offers «New deal» prefilled by its filter and counts open deals; nav groups the pages", async () => {
+  const c = await testClient(app, { person: "alice", permissions: "all", installation: "pages" })
+  const page = await c.call("open_deals", { company: "co_does_not_matter" })
+  const view = (page.structuredContent as { view: { actions?: { tool: string; prefill?: Record<string, unknown> }[]; nav?: { section?: string; pages: { name: string; badge?: string }[] }[] } }).view
+  assert.deepEqual(view.actions?.map((a) => [a.tool, a.prefill]), [["create_deal", { company: "co_does_not_matter" }]])
+  assert.deepEqual(view.nav?.map((s) => [s.section, s.pages.map((p) => p.name)]), [["Sales", ["pipeline", "deals", "board", "forecast"]], ["Customers", ["companies", "contacts"]]])
+  assert.equal(view.nav?.[0]?.pages.find((p) => p.name === "deals")?.badge, "show_open_deals")
+  const badge = await c.call("show_open_deals", {})
+  assert.equal(typeof (badge.structuredContent as { data?: { value?: unknown } }).data?.value, "number")
+  // The badge is for the navigation: app-only, never a model's tool.
+  const tool = (await c.listTools()).find((t) => t.name === "show_open_deals")!
+  assert.deepEqual((tool._meta?.ui as { visibility?: string[] }).visibility, ["app"])
+})
+
+test("a workspace installation's data: exported as one JSON file, then deleted, a second delete finds nothing", async () => {
+  const people = await testClient(app, { person: "alice", permissions: "all", installation: "leaving" })
+  await people.call("deal_list", {})
+  const host = await installationClient(app, { installation: "leaving" })
+  const { file, result } = await host.exportData()
+  assert.ok(file, JSON.stringify(result).slice(0, 500))
+  assert.equal(file.contentType, "application/json")
+  const data = JSON.parse(file.body.toString("utf8")) as { deals: unknown[]; companies: unknown[] }
+  assert.ok(data.deals.length > 0 && data.companies.length > 0, "exported")
+  const first = await host.call("clegra_delete", {})
+  assert.equal((first.structuredContent as { deleted: boolean }).deleted, true, JSON.stringify(first).slice(0, 500))
+  assert.ok(((first.structuredContent as { counts: Record<string, number> }).counts.deals ?? 0) > 0, JSON.stringify(first.structuredContent))
+  const again = await host.call("clegra_delete", {})
+  assert.equal((again.structuredContent as { counts: Record<string, number> }).counts.deals, 0)
+  // A person never sees the lifecycle tools.
+  assert.ok(!(await people.listTools()).some((t) => ["clegra_installation", "clegra_export", "clegra_delete"].includes(t.name)), "lifecycle tools hidden from people")
 })
 
 test("the app passes the conformance checks", async () => {
