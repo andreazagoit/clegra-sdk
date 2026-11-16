@@ -17,7 +17,11 @@ export const MODELAPP_SCOPE = "modelapp"
 /** The access-token claim that names the organization a connection is for. */
 export const ORG_CLAIM = "org"
 
-export function authSchemaOptions(env?: Record<string, string | undefined>) {
+/**
+ * `cimdTransport`: how Client ID Metadata Documents (and their key sets) are fetched. Default: better-auth's own,
+ * public addresses only, pinned. A test passes a fake one to serve a client's documents in-process.
+ */
+export function authSchemaOptions(env?: Record<string, string | undefined>, cimdTransport: typeof fetchClientMetadataResource = fetchClientMetadataResource) {
   return {
     // People get their accounts from the CRM's operator (here: `npm run db:seed`), never by signing up.
     emailAndPassword: { enabled: true, disableSignUp: true },
@@ -49,7 +53,7 @@ export function authSchemaOptions(env?: Record<string, string | undefined>) {
       }),
       // Clients identified by an https URL (ChatGPT, Claude, VS Code…): no registration. Dynamic client
       // registration stays off: an open /register would let anyone show any name on the consent page.
-      cimd({ fetchClientMetadataResource, metadataProfile: "mcp-2026-07-28" }),
+      cimd({ fetchClientMetadataResource: cimdTransport, metadataProfile: "mcp-2026-07-28" }),
     ],
   } satisfies BetterAuthOptions
 }

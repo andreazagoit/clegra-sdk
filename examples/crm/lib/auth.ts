@@ -11,10 +11,10 @@ import { authSchemaOptions } from "./auth-options"
 import { db } from "./db"
 import { publicOrigin } from "./site"
 
-export function createAuth(env: Record<string, string | undefined> = process.env) {
+export function createAuth(env: Record<string, string | undefined> = process.env, cimdTransport?: Parameters<typeof authSchemaOptions>[1]) {
   const secret = env.BETTER_AUTH_SECRET?.trim()
   if (!secret) throw new Error("BETTER_AUTH_SECRET is not set: run `npm run setup` (writes .env.local), or set it in the environment.")
-  const options = authSchemaOptions(env)
+  const options = authSchemaOptions(env, cimdTransport)
   return betterAuth({
     ...options,
     secret,
