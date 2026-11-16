@@ -1,6 +1,6 @@
 # Clegra apps — specification
 
-> Version 1.0, draft (2026-11-14). Normative; MUST, SHOULD and MAY as in RFC 2119.
+> Version 1.0, draft (2026-11-16). Normative; MUST, SHOULD and MAY as in RFC 2119.
 > Clegra apps are Clegra's own developer platform: apps that Clegra draws natively
 > in its workspace and that are, at the same time, plain MCP servers that ChatGPT,
 > Claude and any MCP client use as they are. The package `clegra` builds them; this
@@ -11,7 +11,8 @@
 ## 1. What it is
 
 An **app** is described once, as one definition: entities, actions, pages,
-fragments, agents, permissions, settings. The definition has two halves:
+fragments, agents, permissions, settings, and optionally its navigation,
+schedules, notification types and lifecycle. The definition has two halves:
 
 - the **manifest**: pure JSON, no code. The *workspace host* (Clegra: the
   node of the company or person that installed the app; «host» below) reads it
@@ -23,7 +24,9 @@ fragments, agents, permissions, settings. The definition has two halves:
   use it as they use any MCP server.
 
 **No MCP extension is required or announced.** An MCP client never needs the
-manifest; the workspace host needs nothing beyond the manifest and MCP.
+manifest; the workspace host needs nothing beyond the manifest and MCP. Every
+feature on this page degrades to plain MCP: what ChatGPT, Claude and other
+clients see of each one is in §6.1.
 
 ## 2. The manifest
 
@@ -44,6 +47,10 @@ JSON Schema: [`packages/clegra/spec/schema/clegra.schema.json`](../../packages/c
 | `entities`, `actions`, `pages`, `fragments`, `agents` | §3–§5 |
 | `permissions` | `{ id, label, description?, default }`; ids are `group.verb` |
 | `settings` | `{ id, label, description?, type: text\|number\|boolean, required, default? }` (`id`: `[a-z][a-z0-9_]{1,39}`): values an administrator sets per installation; the workspace host sends them with every call (§7). Never secrets: those stay in the app's own configuration |
+| `nav?` | `[{ section?, pages }]`: the app's navigation (§5.2) |
+| `schedules?` | `[{ name, action?, tool, every, maxSeconds }]`: actions the workspace host runs as the installation (§11) |
+| `notifications?` | `[{ type, label, description?, default, permission? }]`: the notification types the app sends (§12) |
+| `lifecycle?` | `{ installation?, export?, delete? }`: the reserved lifecycle tools the app implements (§13) |
 
 **Labels** are always maps per locale (`{ "en": "Deal", "it": "Trattativa" }`);
 a host picks the person's locale, then `locale`, then the first entry.
@@ -51,11 +58,23 @@ Identifiers are never translated. **Tool refs** are `{ name, plain }`: the MCP
 tool, and whether it is listed to plain MCP clients.
 **Agents** are `{ name, title, description, instructions, tools, tier:
 fast|standard|strong, starters? }`: the host's model runs them with those tools.
+**Reserved names**: the tools `clegra_later`, `clegra_installation`,
+`clegra_export` and `clegra_delete` are the installation's (§10); no entity,
+action, page or fragment tool takes them. The schedule and notification type
+`clegra_later` are the SDK's (§4.2). Identifiers of schedules and notification
+types match `[a-z][a-z0-9_]{0,39}`.
+
+The rules a manifest meets beyond its JSON Schema (§4.1, §4.2, §5.2, §6 rule
+11, §11, §12) are one piece of code, `packages/clegra/spec/src/rules.ts`: the
+SDK runs it when the app is defined (a wrong name fails at start, naming its
+place: `page "x": …`) and the conformance check `manifest.references` (§8)
+runs it from outside.
 
 ## 3. Entities and field meaning
 
 An entity is `{ name, label, plural, description?, icon?, kind?, permission?,
-schema, fields, tools: { list, get }, searchable }`. `kind` says what the
+schema, fields, tools: { list, get }, searchable, visibility? }` (`visibility`:
+§6 rule 11). `kind` says what the
 entity is (§3.1): a kind name, or `{ by, map }` where `by` is a required enum
 field and `map` gives a kind for each of its values. `schema` is the record's
 JSON Schema; `fields` says what each field means:
@@ -199,8 +218,9 @@ names, never a title.
 ## 4. Actions
 
 `{ name, entity?, title, description?, icon?, input, readOnly, confirm,
-permission?, tool }`. With `entity` the action works on one record and its
-tool takes `id` plus `input`; without, it is global. `confirm` is `always`
+permission?, tool, visibility?, targets?, later? }`. With `entity` the action
+works on one record and its tool takes `id` plus `input`; without, it is
+global. `visibility`: §6 rule 11; `targets`: §4.1; `later`: §4.2. `confirm` is `always`
 (the default for writes), `optional` or `never` (always, for reads). A result
 is `{ ok: true, message, record?, data? }`.
 
@@ -216,9 +236,106 @@ A host uses the same keys to show a value before a confirmation: a record by
 its title, a date, a number and money in the person's locale. Tool schemas
 listed to MCP clients stay plain JSON Schema (`label` becomes `title`).
 
+### 4.1 Targets: actions offered on other things
+
+A global action MAY say where a workspace host offers it outside the app: on
+an email, or on a record of a kind held by another app (Clegra's «Azioni»).
+`targets` is a list of `{ target, needs, input?, label? }`:
+
+1. `target` is `mail.message` or `record:<kind>`, `<kind>` a published kind
+   (`kinds.json`) or a namespaced one (§3.1). At most 4 targets per action and
+   12 per app. An action with `entity` has no targets (it has its record).
+2. `needs` names the target's fields the action may receive, and the host
+   sends it only these, ever: for `mail.message` a subset of `subject`, `from`,
+   `to`, `date`, `text`, `attachments`; for `record:<kind>` properties of that
+   kind (`kinds.json`, or the manifest's `kinds`; for another app's namespaced
+   kind, well-formed property names). Always available without being needed:
+   `uri` (the email's or the record's `clegra://` URI) and, for a record,
+   `title`. A name appears once.
+3. `input` is a template of the action's input. Each key MUST be a property
+   of the action's `input`. String values MAY hold placeholders `{field}` or
+   `{field.sub}` (`{from.address}`), each naming `uri`, `title` (records) or a
+   needed field. A value that is exactly one placeholder keeps the field's
+   type; otherwise the text around it is kept and the placeholders are
+   replaced by the values' text. A missing value is empty.
+4. `label` is the item's words (default the action's title), at most 40
+   characters per locale.
+
+The host reads a record's needed properties for the viewer, with the viewer's
+token, from the app that owns the record (the fields whose `as` is the
+property, §3.1). Picking the item opens the action's form filled from the
+template; a write then goes through the confirmation (§7) like any other.
+Everything from an email or another app's record is outsiders' text
+(`untrusted`) to the action's app. A plain MCP client sees none of this: the
+action is its tool, as without targets.
+
+### 4.2 Approve now, act later
+
+An action MAY carry `later: { at, window }`: the person confirms the call now
+and it runs at the time `at` names, as its author, without being asked again.
+
+1. **Declared.** Only on a write whose `confirm` is `always`. `at` names a
+   *required* input property that is a string with `format: date-time`.
+   `window` is whole minutes, 10–10080 (7 days); the manifest always carries
+   it (the SDK's default is 60). An app with such an action has the schedule
+   and the notification type `clegra_later` (below), and a store that keeps
+   later runs.
+2. **Confirmed.** The call is confirmed as any `always` write (§7). The
+   app refuses with `invalid_input` (on `at`) a time more than 5 minutes past
+   or more than 366 days ahead, before anyone is asked. A workspace host's
+   proof then also carries `until`: epoch seconds, `floor(Date.parse(at) /
+   1000) + window × 60` computed from the arguments as sent; the app computes
+   the same and refuses another value (`confirmation_required`, «the proof is
+   for another deadline»). Its `confirmation_required` carries
+   `error.confirm.later: { at, until }`, so the host can say when the call
+   will run and by when.
+3. **Stored, not run.** Instead of calling the handler the app keeps a
+   *later run*: its id (a UUID), the tenant, the tool, the arguments as
+   received and their hash, `at`, `until`, the author (`{ id, name }`, the
+   confirming person), the permissions the action needs that the author held,
+   the proof (with its issuer, subject, installation and call id), and when it
+   was confirmed (the proof's `iat`). It answers `{ ok: true, message:
+   "Scheduled for <at>.", data: { later: { id, at, until } } }`; a repeated
+   call id answers the same (idempotency, §7).
+4. **Run once.** The tool `clegra_later` (input `{}`, only for the
+   installation-level caller, §10) takes the caller's tenant's runs that are
+   due (`at` ≤ now) and *claims* each atomically: a claimed run is never given
+   to anyone again, whatever happens next. For each it checks that the
+   arguments' hash and `at` are still the confirmed ones, that the stored
+   proof verifies against the issuer's keys *as of its confirmation time*,
+   covers these arguments, this call and this `until`, and has that `iat`, and
+   that the author may still use the action with the stored permissions
+   (otherwise `refused`). After `until` the run is `expired`. Otherwise the
+   handler runs with the stored input re-parsed (a record action reads its
+   record again), `ctx.person` = the author, `ctx.permissions` = the stored
+   ones, `ctx.later = { id, at, until, confirmedAt }`, `ctx.schedule =
+   "clegra_later"` and the settings the host sent with this call. The
+   outcome is kept: `done`, `failed`, `expired` or `refused`, with a message.
+   The result is `{ runs: [{ id, tool, at, status, message }] }`, and its
+   notifications (the handlers', the author by default) go out as any result's
+   (§12). An `expired` or `refused` run tells its author with the type
+   `clegra_later` (title: the action's title and «did not run»).
+5. **Cancelled.** A handler of the same tenant MAY cancel a pending run by
+   its id (`ctx.cancelLater(id)`: false when there is none, or it already ran
+   or started).
+6. **Scheduled.** The SDK adds the schedule `{ name: "clegra_later", tool:
+   "clegra_later", every: 5 }` (no `action`) and the notification type
+   `clegra_later` («Scheduled actions that did not run», `default: true`),
+   exactly when an action has `later`; no app declares them itself.
+7. **Plain clients.** A client that is not a workspace host can't produce a
+   proof. There a later action is an `always` write (elicitation where the
+   client supports it, else the client's own approval, guided by
+   `destructiveHint`, §7), and its run is stored with the caller as author and
+   no proof (`proof: null`): the caller's token was verified when the call was
+   confirmed. A run made with the app's own tokens belongs to the app's own
+   tenant, which no workspace host runs: the app runs its tenants' due runs
+   from its own cron (the SDK's `app.runLater(tenant)`; the notifications it
+   returns are the app's to deliver).
+
 ## 5. Pages and fragments
 
-A **page** is `{ name, kind, title, icon?, permission?, params, tool, … }`:
+A **page** is `{ name, kind, title, icon?, permission?, params, tool,
+actions?, badge?, … }` (`actions`, `badge`: §5.2):
 
 | `kind` | Extra keys | Drawn |
 |---|---|---|
@@ -229,7 +346,8 @@ A **page** is `{ name, kind, title, icon?, permission?, params, tool, … }`:
 
 A **fragment** is a small live piece of the app shown in answers and on
 dashboards: `{ type, title, description?, params, template?, view?, tool,
-permission?, actions?, size?, untrusted? }`. Templates are `record` (one per
+permission?, actions?, size?, untrusted?, visibility? }` (`visibility`: §6
+rule 11). Templates are `record` (one per
 entity, `params { id }`), `card`, `stat`, `list`, `chart`; a fragment without
 a template has only a `view`. A fragment instance's URI is
 `clegra://<app>/<type>/<base64url of its params, keys sorted>`.
@@ -336,6 +454,38 @@ over the MCP Apps bridge, with its own `location.origin`; a host that draws
 natively does them itself. A page on another site (`https://…`) is framed as
 it is, with no ticket.
 
+### 5.2 Navigation, page actions and badges
+
+1. **Navigation.** `nav` is a list of sections `{ section?, pages }`, in
+   order: `section` a label (absent: ungrouped), `pages` one or more page
+   names. Every page named exists, is not a `record` page, and appears at most
+   once over all sections. Without `nav` a host shows every non-record page,
+   ungrouped, in declaration order. With `nav`, a page not named is not in the
+   navigation, and is still reachable (links, page actions, record pages).
+2. **Page actions.** A page's `actions` names up to 8 *global* actions (no
+   `entity`), in order; the first is the page's **primary**. A `record` page
+   has none (its record's actions are there). The page's params prefill the
+   action's inputs of the same name. A host draws the primary prominently and
+   the others in a menu; each opens the action's form drawn from its `input`
+   (§4), prefilled, and a read's form shows its result. A write goes through
+   the confirmation (§7).
+3. **Badge.** A page's `badge` names a fragment type with `template: "stat"`
+   whose params have no required key (not on a `record` page). The page's
+   count in the navigation is the fragment's `data.value` (a number), called
+   as the viewer with params `{}`. A badge the viewer can't show is not drawn.
+4. **In the view.** A page's result carries what the generated view needs to
+   draw the same thing in any MCP Apps host: `structuredContent.view.actions`
+   (`[{ tool, title, confirm, input, prefill? }]`, only the actions this caller
+   may use) and `view.nav` (`[{ section?, pages: [{ name, title, tool, badge? }]
+   }]`, `badge` the stat fragment's tool, only the pages this caller may open).
+
+**Host guidance** (non-normative; nothing in the manifest): Clegra derives a
+list page's filters from the fields' meaning: an `enum` field with `filter` is
+a choice, the first date field with `filter` (`format: date` or `date-time`)
+a period sent as `{ gte, lte }` (a date-time as the bounds of the days in the
+workspace's time zone). A list page whose entity has a record page is drawn
+with the record beside the list.
+
 ## 6. The generated MCP server
 
 Streamable HTTP at `mcp.url`. Tools, in this order of derivation:
@@ -348,6 +498,8 @@ Streamable HTTP at `mcp.url`. Tools, in this order of derivation:
 | `<entity>_<action>` or `<action>` | each action | read or write |
 | `open_<page>` | each page except `record` pages (those are `<entity>_get`) | read |
 | `show_<fragment>` | each non-record fragment | read |
+| `clegra_later` | an action with `later` (§4.2) | write; only for the installation (§10) |
+| `clegra_installation`, `clegra_export`, `clegra_delete` | `lifecycle` (§13) | write, read, write; only for the installation (§10) |
 
 Rules:
 
@@ -361,6 +513,23 @@ Rules:
 8. Entity tools (`<entity>_list`, `<entity>_get`) carry `_meta.clegra: { entity, kind? }`, `kind` as in the manifest. With a kind, their description ends with one fixed sentence: `Kind: person.`; with `{ by, map }`, the kinds in the map's order and the field: `Kind: organization or person (by type).`
 9. A list filter on a field with `as` names the property in its description (`Company (worksFor): …`); a key filter says it is exact (`Email: exact email; a value or { in: [...] }`) and carries `format` where JSON Schema has one (`email`).
 10. **Records are named by their title.** In the text a model reads, every record of a list, a get, `search` and `fetch` carries its `title` beside its `uri` (an outsider's title wrapped, §7). A tool of an action on a record takes `id` (required) and `record_title` (optional string, at most 300 characters): the record's title as the model read it, so a client that writes its own approval prompt from the arguments can name the record the person approves. Both descriptions tell the model to name the record by its title, never by its id. `record_title` is a display hint and never trusted: the app names the record from `id` in everything it shows or confirms, never passes the hint to the handler, and refuses the call with `invalid_input` (`fields.record_title`) when the hint names another record (compared without the untrusted wrapper, case, width, quotes and extra spaces). `record_title` is reserved: an action's `input` can't declare it.
+11. **App-only items.** An entity, action or fragment with `visibility: "app"` is for views and the host's own UI, never for a model. Its tools (the entity's list and get, the action's, the fragment's show tool) carry `_meta.ui.visibility: ["app"]` (no `"model"`), `openai/visibility: "private"` and `openai/widgetAccessible: true`. `search` and `fetch` leave its records out (`fetch` answers `not_found`), and no agent of the app may use it (a definition error). A host MUST NOT give such a tool to any model, its own agents included; views and the host's UI still call it. App-only is not access control: a client that ignores `_meta.ui.visibility` lists the tool like any other, so what a client must not call stays behind a permission or `plain: false`.
+12. **The installation's tools** (`clegra_later`, `clegra_installation`, `clegra_export`, `clegra_delete`) carry the same app-only `_meta` and are listed only to the installation-level caller (§10): never to a plain client, never to a person.
+
+### 6.1 What plain MCP clients see
+
+ChatGPT, Claude and any MCP client use the app as a plain MCP server. Of each
+feature they see:
+
+| Feature | A plain MCP client |
+|---|---|
+| Navigation, page actions, badges (§5.2) | The `open_<page>` tools as before. The generated view (MCP Apps hosts, ChatGPT included) draws the navigation, the badges and the page actions from the page's `view`, each action opening its form |
+| `visibility: "app"` (§6 rule 11) | The tools are listed with `_meta.ui.visibility: ["app"]`: a host that follows MCP Apps keeps them from its model and lets views call them; `search` and `fetch` never return their records |
+| Targets (§4.1) | Nothing: the action is its own tool, as without targets |
+| `later` (§4.2) | An `always` write (elicitation, or the client's own approval guided by `destructiveHint`) answered «Scheduled for …»; it runs from the app's own cron (`app.runLater`) |
+| Schedules (§11) | The scheduled action's tool, as any action. A call naming a schedule is refused |
+| Notifications (§12) | Nothing: `_meta.clegra.notifications` is ignored |
+| Lifecycle (§13), `clegra_later` | Nothing: the tools are never listed to them |
 
 ## 7. Enforcement
 
@@ -397,7 +566,8 @@ There is no second sign-in. An app accepts two kinds of token:
 - **A workspace host's token** (`host: "workspace"`) is for one request: it
   MUST carry `jti` and `iat`, live 60 seconds at most, and is accepted once.
 - A call without a `person` has the permissions its token lists, like any
-  other: none unless the token says so.
+  other: none unless the token says so. A workspace host's call for the
+  installation itself is defined in §10.
 
 **The app's own tokens.** The app verifies each one (signature, expiry, and
 `aud` = `auth.resource`, RFC 8707: a token issued for another resource is
@@ -449,8 +619,10 @@ the company server): [host-oauth.md](host-oauth.md), non-normative.
   issuer for the same audience and subject, with `installation`, `tool`,
   `call` (the call id) and `args`: the base64url SHA-256 of the canonical
   JSON (keys sorted at every depth) of the arguments **as sent**, before any
-  parsing or default. Without a valid proof the call fails with
-  `confirmation_required` and `error.confirm` describes what to show;
+  parsing or default; for an action with `later`, also `until` (§4.2).
+  Without a valid proof the call fails with `confirmation_required` and
+  `error.confirm` describes what to show (`{ tool, title, record?, input,
+  later? }`);
 - a plain client that supports MCP elicitation is asked to confirm, with the
   values as a person reads them (labels, titles of referenced records);
 - a plain client that can't elicit: the client's own approval applies, guided
@@ -480,13 +652,17 @@ and `error.pending: true`.
 
 **Host metadata**: one key, `_meta.clegra`.
 
-- Requests MAY carry `{ call, confirmation, settings }`. `settings` are the
-  installation's values (§2) and count only from a workspace host; any other
-  caller gets the defaults.
+- Requests MAY carry `{ call, confirmation, settings, schedule }`. `settings`
+  are the installation's values (§2) and count only from a workspace host;
+  any other caller gets the defaults. `schedule` names the schedule this call
+  is a run of (§11); it counts only from the installation-level caller (§10),
+  and any other call carrying it is refused.
 - Results MAY carry `{ notifications, untrusted, l10n }`:
-  - `notifications`: `[{ title, body?, uri?, to }]`, `to` the ids of people
-    (as the token named them; default the caller). A workspace host delivers
-    them to those people; a plain client ignores them.
+  - `notifications`: `[{ type?, title, body?, uri?, to }]` (§12). `to` is
+    either the ids of people (as the token named them; default the caller's
+    person) or `{ permission }`: everyone of the installation who holds that
+    declared permission. A workspace host delivers them; a plain client
+    ignores them.
   - `untrusted`: JSON pointers into `structuredContent` to every value that
     is outsiders' text. In the result's text those values are wrapped in
     `<untrusted>…</untrusted>` with `&`, `<`, `>` (and their full-width and
@@ -618,7 +794,7 @@ npx clegra check https://crm.example.com --token <a plain caller's bearer>
 |---|---|
 | `manifest.served` | `GET /.well-known/clegra.json` answers 200 with JSON |
 | `manifest.schema` | the manifest validates against the JSON Schema |
-| `manifest.references` | names refer to things the manifest declares; tool names are unique and valid |
+| `manifest.references` | names refer to things the manifest declares; tool names are unique and valid, none reserved; navigation, page actions, badges, app-only items, targets, `later`, schedules and notification types meet their rules (§4.1, §4.2, §5.2, §6 rule 11, §11, §12) |
 | `auth.mcp` | without a token the endpoint answers 401 and points to protected-resource metadata, whose `resource` is the address the app was reached at (or the manifest's `auth.resource`) |
 | `mcp.initialize` | `initialize` succeeds with no extension |
 | `mcp.tools` | tools match the manifest: names, `readOnlyHint`, `destructiveHint`; nothing hidden is listed |
@@ -627,6 +803,8 @@ npx clegra check https://crm.example.com --token <a plain caller's bearer>
 | `mcp.views` | every view a tool names is served as an MCP Apps document |
 | `mcp.titles` | each row of a list's text carries its `uri` and `title`, and the record's text from its get tool the same title; every action tool on a record takes a required string `id` and an optional string `record_title` |
 | `mcp.app-callable` | the tools a view calls (lists, records, actions, pages) don't leave `"app"` out of `_meta.ui.visibility` |
+| `mcp.visibility` | the tools of app-only entities, actions and fragments carry `_meta.ui.visibility: ["app"]`, without `"model"`; `search` finds no record of an app-only entity |
+| `lifecycle.hidden` | `clegra_later`, `clegra_installation`, `clegra_export` and `clegra_delete` are not listed to a plain caller |
 | `mcp.manifest` | the manifest is one MCP resource, identical to the file |
 | `kinds.known` | every unprefixed kind is in `kinds.json` for the `specVersion`; every dotted kind is well-formed |
 | `kinds.properties` | every `as` belongs to the entity's kind (or is universal) with a matching type; single-valued properties appear once; required ones exist; keys are filters; `kinds` definitions are well-formed |
@@ -641,7 +819,9 @@ npx clegra check https://crm.example.com --token <a plain caller's bearer>
 The `kinds.*` checks are skipped, not failed, for an app that declares no
 kinds (and `kinds.keys` when no listed record holds a key value to try);
 `refs.cross` for an app without references to other apps; the `embed.*`
-checks for an app without same-site pages.
+checks for an app without same-site pages; `mcp.visibility` for an app
+without app-only items; `lifecycle.hidden` for an app without lifecycle tools
+or later runs.
 
 An app is conformant when every check passes with a token. Without a token
 only the public checks run: the report says «Incomplete», never «Conformant».
@@ -694,3 +874,123 @@ needs anything from an app beyond §2–§7.
    viewer for whom both URIs resolve `ok`.
 8. **Models.** What a host gives a model from these calls keeps `untrusted`
    marks (§7) and names the source of every record.
+
+## 10. The installation-level caller
+
+Some calls are made by a workspace host for the installation itself, with
+nobody at the screen: schedules (§11), later runs (§4.2) and the lifecycle
+(§13). The **installation-level caller** is exactly:
+
+1. **The token.** A workspace host's token in the trusted-issuer mode (§7:
+   `host: "workspace"`, one request, `jti`), whose `clegra` claim has **no
+   `person`**, with `sub` = `installation:<installation>` and `permissions` =
+   exactly the permission the called action declares (an empty list when it
+   declares none, and for the reserved tools; never more).
+2. **What it may call.** (a) A schedule's tool, with `_meta.clegra.schedule`
+   = that schedule's name; (b) `clegra_later`; (c) the lifecycle tools. The
+   app refuses with `permission_denied` a `schedule` that names no schedule of
+   the app, names a schedule of another tool, or comes from any other caller
+   (a person, a plain client). A person-less workspace call to any other tool
+   is not refused for being one: it has the permissions its token lists, as
+   §7 says (a host uses that for its administrators' checks).
+3. **No confirmation.** None is ever shown or proven: a scheduled action is
+   never `confirm: "always"` (§11), an `optional` write runs, and a later run
+   carries the proof made when the person confirmed it.
+4. **What handlers see.** `ctx.person` is null (in a later run: the run's
+   author), `ctx.schedule` the schedule's name (`clegra_later` in a later
+   run; null in any other call), `ctx.permissions` as the token lists them,
+   `ctx.settings` as the host sent them.
+5. **Results.** Notifications in its results are delivered by the host as
+   any (§12); each says `to`, since there is no person to default to.
+
+Only a workspace host in the trusted-issuer mode can be this caller. An app
+that signs its callers in itself (its own tokens, §7) is never called as the
+installation: a host that connects to it as an OAuth client runs no
+schedules and no lifecycle tools there, and the app runs its own cron.
+
+## 11. Schedules
+
+`schedules` lists `{ name, action?, tool, every, maxSeconds }`: actions the
+workspace host runs as the installation (§10).
+
+1. `name` is an identifier; at most 10 schedules besides the SDK's own
+   `clegra_later` (§4.2), which has no `action`, `tool: "clegra_later"` and
+   `every: 5`.
+2. `action` is a global action whose input accepts `{}` (no required
+   property), and `tool` is its tool. The action is a read, or a write whose
+   `confirm` is `never` or `optional`. A write with `confirm: "always"` is
+   never scheduled: nobody is there to confirm it. The only way to run a
+   confirmed write afterwards is `later` (§4.2).
+3. `every` is whole minutes, 5–1440; `maxSeconds` whole seconds, 1–300 (the
+   SDK's default is 60).
+4. A run is `tools/call` of `tool` with `{}` and `_meta.clegra.schedule` =
+   `name`, by the installation-level caller (§10), with the installation's
+   `settings`.
+
+A host runs a schedule at most once every `every` minutes per installation
+(claimed in its own database, so two of its processes never run it twice),
+within `maxSeconds`, and only while the installation is enabled. It keeps a
+log of the runs (ok or failed, with the message).
+
+## 12. Notifications
+
+A result's `_meta.clegra.notifications` (§7) asks the workspace host to tell
+people of the installation something: `{ type?, title, body?, uri?, to }`,
+`title` and `body` in the caller's language, `uri` a record of the app.
+
+1. **Types.** `notifications` in the manifest lists the types an app sends:
+   `{ type, label, description?, default, permission? }`. People turn a type
+   off (or on) per app. `default: false` keeps it off for a person until they
+   turn it on. With `permission` (a declared one) only its holders receive it,
+   checked by the host on top of `to`.
+2. **Typed or untyped.** An app that declares types names one of them in
+   every notification it sends (the SDK refuses any other: a programming
+   error). An app that declares none sends untyped notifications, which the
+   host files under one type of its own per app. The SDK's `clegra_later`
+   (§4.2) does not count as a declared type: it never makes the app's other
+   notifications typed.
+3. **Recipients.** `to` is a list of person ids, or `{ permission }`: everyone
+   of the installation who holds that declared permission. Without `to` the
+   SDK sends the caller's person; a call without a person (§10) MUST say `to`.
+4. **Reserved.** `clegra_later` is the SDK's type for later runs that did not
+   run (`default: true`); an app declares it only through `later`.
+
+## 13. The app lifecycle
+
+An app MAY be told of its installation's changes and give or delete the
+tenant's data, through three reserved app-only tools that it names in
+`lifecycle` (`{ installation?: "clegra_installation", export?: "clegra_export",
+delete?: "clegra_delete" }`, each optional). Only the installation-level
+caller (§10) is given them (§6 rule 12).
+
+- **`clegra_installation`** `{ state: "enabled" | "disabled" | "uninstalled" }`
+  → `{ ok: true }`. The host calls it after an administrator enables,
+  disables or uninstalls the app. A failure never blocks the administrator's
+  change; the host shows it.
+- **`clegra_export`** `{}` → the tenant's data as one file:
+  `structuredContent` `{ name, contentType, bytes, sha256 }` (`sha256` the
+  lowercase hex SHA-256 of the file's bytes; `name` matches
+  `[A-Za-z0-9][A-Za-z0-9._-]{0,127}`), and among its `content` one MCP
+  embedded resource `{ type: "resource", resource: { uri:
+  "clegra://<app>/export/<name>", mimeType, blob } }` holding the file
+  (base64). `{ empty: true }` when the app keeps nothing for the tenant. At
+  most 512 MiB; a host refuses more, and a file whose size or hash doesn't
+  match.
+- **`clegra_delete`** `{}` → `{ deleted: true, counts? }` (`counts`: what was
+  deleted, by name): everything the app keeps for the tenant, its later runs
+  included. Idempotent: asking again answers the same.
+
+`clegra_export` and `clegra_delete` MUST keep working after `uninstalled`:
+that is when they are needed.
+
+**Host guidance** (non-normative). On uninstall Clegra asks the administrator
+to choose: «Export, then delete in 30 days» (the export is made now and kept
+30 days for download; `clegra_delete` is called after 30 days) or «Delete
+now» (`clegra_delete` now, no export). Without `clegra_export` the choice
+reads «Delete in 30 days» or «Delete now»; without `clegra_delete` the host
+offers the export only, and says the data stay on the app's server. A failed
+export stops the uninstall; a failed delete is retried, with backoff, and
+shown to the administrators. An app without any of these tools is
+uninstalled, enabled and disabled on the host alone, and the host tells the
+administrator in so many words that the app is not told and its data stay on
+its server.
