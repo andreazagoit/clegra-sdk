@@ -7,6 +7,52 @@
  */
 export type StoredCall = { args: string; result?: unknown }
 
+/**
+ * A confirmed call kept to run later («approve now, act later»), exactly as the person confirmed it: its
+ * arguments as received and their hash, when (`at`, as given) and until when (`until`, epoch seconds) it may
+ * run, its author and the permissions it runs with, and the host's signed proof (null when a plain client
+ * confirmed it: no proof exists then) with what re-verifies it (`issuer`, `subject`, `installation`, `call`).
+ */
+export type LaterRun = {
+  id: string
+  /** The tenant (`<installation>@<issuer>`, or the app's own). */
+  tenant: string
+  tool: string
+  args: Record<string, unknown>
+  argsHash: string
+  at: string
+  until: number
+  author: { id: string; name: string } | null
+  permissions: string[]
+  proof: string | null
+  issuer: string
+  subject: string
+  /** The installation as its issuer names it (the proof's `installation`). */
+  installation: string
+  call: string | null
+  /** When the person confirmed it, epoch seconds (the proof's `iat`). */
+  confirmedAt: number
+}
+
+/** How a later run ended. */
+export type LaterOutcome = { status: "done" | "failed" | "expired" | "refused"; message: string }
+
+/**
+ * The store's part for later runs. `claim` is the single-use step: it takes a pending run in one atomic step
+ * (two callers at the same moment: one gets the run, the other null), and a claimed run is never given again.
+ */
+export type LaterStore = {
+  add(run: LaterRun): Promise<void>
+  /** Pending runs of the tenant whose `at` is not after `now`, oldest first, at most `limit`. */
+  due(tenant: string, now: Date, limit: number): Promise<LaterRun[]>
+  claim(id: string, tenant: string): Promise<LaterRun | null>
+  finish(id: string, outcome: LaterOutcome): Promise<void>
+  /** Cancels a pending run of the tenant: false when there is none (unknown, another tenant's, claimed or finished). */
+  cancel(id: string, tenant: string): Promise<boolean>
+  /** Deletes every run of the tenant, whatever its state (the app's data deletion): how many. */
+  clear(tenant: string): Promise<number>
+}
+
 export type IdempotencyStore = {
   /**
    * Starts the call `key` with these arguments, in one atomic step: null
@@ -21,10 +67,58 @@ export type IdempotencyStore = {
   abandon(key: string): Promise<void>
   /** True the first time `key` is seen within `ttlMs`, false after: atomic. */
   once(key: string, ttlMs: number): Promise<boolean>
+  /** Later runs (needed by actions with `later`). */
+  later?: LaterStore
+}
+
+type KeptRun = { run: LaterRun; status: "pending" | "running" | "cancelled" | LaterOutcome["status"]; message?: string }
+
+/** Later runs in memory: what MemoryStore keeps (one process, lost on restart). */
+export class MemoryLater implements LaterStore {
+  readonly #runs = new Map<string, KeptRun>()
+  async add(run: LaterRun) {
+    if (this.#runs.has(run.id)) throw new Error(`later run ${run.id} exists`)
+    this.#runs.set(run.id, { run: structuredClone(run), status: "pending" })
+  }
+  async due(tenant: string, now: Date, limit: number) {
+    return [...this.#runs.values()]
+      .filter((k) => k.status === "pending" && k.run.tenant === tenant && Date.parse(k.run.at) <= now.getTime())
+      .sort((a, b) => Date.parse(a.run.at) - Date.parse(b.run.at))
+      .slice(0, limit)
+      .map((k) => structuredClone(k.run))
+  }
+  // No await between the read and the write: one step on Node's single thread.
+  async claim(id: string, tenant: string) {
+    const k = this.#runs.get(id)
+    if (!k || k.run.tenant !== tenant || k.status !== "pending") return null
+    k.status = "running"
+    return structuredClone(k.run)
+  }
+  async finish(id: string, outcome: LaterOutcome) {
+    const k = this.#runs.get(id)
+    if (k) Object.assign(k, { status: outcome.status, message: outcome.message })
+  }
+  async cancel(id: string, tenant: string) {
+    const k = this.#runs.get(id)
+    if (!k || k.run.tenant !== tenant || k.status !== "pending") return false
+    k.status = "cancelled"
+    return true
+  }
+  async clear(tenant: string) {
+    let n = 0
+    for (const [id, k] of this.#runs) if (k.run.tenant === tenant && this.#runs.delete(id)) n++
+    return n
+  }
+  /** For tests: a run as kept, its state included. */
+  inspect(id: string): (LaterRun & { status: string; message?: string }) | undefined {
+    const k = this.#runs.get(id)
+    return k ? { ...structuredClone(k.run), status: k.status, ...(k.message !== undefined ? { message: k.message } : {}) } : undefined
+  }
 }
 
 export class MemoryStore implements IdempotencyStore {
   readonly #items = new Map<string, { value: StoredCall; until: number }>()
+  readonly later = new MemoryLater()
 
   #live(key: string): StoredCall | undefined {
     const item = this.#items.get(key)
@@ -72,28 +166,97 @@ export class MemoryStore implements IdempotencyStore {
  */
 export type SqlQuery = (text: string, params: unknown[]) => Promise<{ rows: Record<string, unknown>[] } | Record<string, unknown>[]>
 
+/** A table name SqlStore accepts: a plain lowercase SQL name that leaves room for `_later` (and its index names). */
+function checkTable(table: string): string {
+  if (!/^[a-z_][a-z0-9_]{0,44}$/.test(table)) throw new Error(`SqlStore: table "${table}" must be a plain lowercase SQL name, at most 45 characters`)
+  return table
+}
+
+const RUN_COLUMNS = "id, tenant, tool, args, args_hash, at, until, author, permissions, proof, issuer, subject, installation, call, confirmed_at"
+
+function runOf(row: Record<string, unknown>): LaterRun {
+  const json = (v: unknown) => (typeof v === "string" ? (JSON.parse(v) as unknown) : v)
+  return {
+    id: String(row.id),
+    tenant: String(row.tenant),
+    tool: String(row.tool),
+    // Kept as the exact text received: its hash is checked again before it runs.
+    args: JSON.parse(String(row.args)) as Record<string, unknown>,
+    argsHash: String(row.args_hash),
+    at: String(row.at),
+    until: Number(row.until),
+    author: (json(row.author) ?? null) as LaterRun["author"],
+    permissions: (json(row.permissions) ?? []) as string[],
+    proof: row.proof === null || row.proof === undefined ? null : String(row.proof),
+    issuer: String(row.issuer),
+    subject: String(row.subject),
+    installation: String(row.installation),
+    call: row.call === null || row.call === undefined ? null : String(row.call),
+    confirmedAt: Number(row.confirmed_at),
+  }
+}
+
+/** Later runs in the app's Postgres (`<table>_later`): each method one statement; `claim` takes a pending run atomically. */
+class SqlLater implements LaterStore {
+  constructor(
+    private readonly rows: (text: string, params: unknown[]) => Promise<Record<string, unknown>[]>,
+    private readonly table: string,
+  ) {}
+  async add(run: LaterRun) {
+    await this.rows(
+      `INSERT INTO ${this.table} (${RUN_COLUMNS}, due_at, status) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11, $12, $13, $14, $15, $16::timestamptz, 'pending')`,
+      [run.id, run.tenant, run.tool, JSON.stringify(run.args), run.argsHash, run.at, run.until, JSON.stringify(run.author), JSON.stringify(run.permissions), run.proof, run.issuer, run.subject, run.installation, run.call, run.confirmedAt, new Date(Date.parse(run.at)).toISOString()],
+    )
+  }
+  async due(tenant: string, now: Date, limit: number) {
+    const rows = await this.rows(`SELECT ${RUN_COLUMNS} FROM ${this.table} WHERE tenant = $1 AND status = 'pending' AND due_at <= $2::timestamptz ORDER BY due_at LIMIT $3`, [tenant, now.toISOString(), Math.max(1, Math.floor(limit))])
+    return rows.map(runOf)
+  }
+  async claim(id: string, tenant: string) {
+    const [row] = await this.rows(`UPDATE ${this.table} SET status = 'running', claimed_at = now() WHERE id = $1 AND tenant = $2 AND status = 'pending' RETURNING ${RUN_COLUMNS}`, [id, tenant])
+    return row ? runOf(row) : null
+  }
+  async finish(id: string, outcome: LaterOutcome) {
+    await this.rows(`UPDATE ${this.table} SET status = $2, message = $3, finished_at = now() WHERE id = $1`, [id, outcome.status, outcome.message])
+  }
+  async cancel(id: string, tenant: string) {
+    return (await this.rows(`UPDATE ${this.table} SET status = 'cancelled', finished_at = now() WHERE id = $1 AND tenant = $2 AND status = 'pending' RETURNING id`, [id, tenant])).length > 0
+  }
+  async clear(tenant: string) {
+    return (await this.rows(`DELETE FROM ${this.table} WHERE tenant = $1 RETURNING id`, [tenant])).length
+  }
+}
+
 /**
- * A store in the app's own Postgres (one table), for serverless and several
+ * A store in the app's own Postgres (two tables), for serverless and several
  * instances: every method is a single statement, atomic on its own. Create the
- * table once with `SqlStore.schema()` in a migration (the SDK never migrates).
+ * tables once with `SqlStore.schema()` in a migration (the SDK never migrates;
+ * the SQL is idempotent, so a new migration may run it again).
  * Expired rows are taken over in place and swept now and then.
  */
 export class SqlStore implements IdempotencyStore {
   readonly #query: SqlQuery
   readonly #table: string
+  readonly later: LaterStore
   #calls = 0
 
   constructor(query: SqlQuery, options: { table?: string } = {}) {
-    const table = options.table ?? "clegra_store"
-    if (!/^[a-z_][a-z0-9_]{0,62}$/.test(table)) throw new Error(`SqlStore: table "${table}" must be a plain lowercase SQL name`)
+    const table = checkTable(options.table ?? "clegra_store")
     this.#query = query
     this.#table = table
+    this.later = new SqlLater((text, params) => this.#rows(text, params), `${table}_later`)
   }
 
-  /** The table, as SQL for a migration. */
+  /** The tables (`<table>` and `<table>_later`), as SQL for a migration: `CREATE … IF NOT EXISTS`, safe to run again. */
   static schema(table = "clegra_store"): string {
-    if (!/^[a-z_][a-z0-9_]{0,62}$/.test(table)) throw new Error(`SqlStore: table "${table}" must be a plain lowercase SQL name`)
-    return `CREATE TABLE IF NOT EXISTS ${table} (key text PRIMARY KEY, args text NOT NULL, result jsonb, done boolean NOT NULL DEFAULT false, expires_at timestamptz NOT NULL);\nCREATE INDEX IF NOT EXISTS ${table}_expires_at ON ${table} (expires_at);`
+    checkTable(table)
+    const later = `${table}_later`
+    return [
+      `CREATE TABLE IF NOT EXISTS ${table} (key text PRIMARY KEY, args text NOT NULL, result jsonb, done boolean NOT NULL DEFAULT false, expires_at timestamptz NOT NULL);`,
+      `CREATE INDEX IF NOT EXISTS ${table}_expires_at ON ${table} (expires_at);`,
+      `CREATE TABLE IF NOT EXISTS ${later} (id text PRIMARY KEY, tenant text NOT NULL, tool text NOT NULL, args text NOT NULL, args_hash text NOT NULL, at text NOT NULL, due_at timestamptz NOT NULL, until bigint NOT NULL, author jsonb, permissions jsonb NOT NULL, proof text, issuer text NOT NULL, subject text NOT NULL, installation text NOT NULL, call text, confirmed_at bigint NOT NULL, status text NOT NULL DEFAULT 'pending', message text, created_at timestamptz NOT NULL DEFAULT now(), claimed_at timestamptz, finished_at timestamptz);`,
+      `CREATE INDEX IF NOT EXISTS ${later}_due ON ${later} (tenant, due_at) WHERE status = 'pending';`,
+    ].join("\n")
   }
 
   async #rows(text: string, params: unknown[]) {
