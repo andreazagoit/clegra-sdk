@@ -1,5 +1,6 @@
 export { defineApp, type ActionDef, type AgentDef, type App, type AppDefinition, type EntityDef, type FragmentDef, type PageDef } from "./define"
-export { AppError, META_KEY, OWN_ISSUER, type ErrorCode, type PeopleResolver } from "./server"
+export { AppError, META_KEY, OWN_ISSUER, type AppEmbed, type ErrorCode, type PeopleResolver } from "./server"
+export { EmbedError, type EmbedCaller, type EmbedOptions, type EmbedTicket } from "./embed"
 export { ref, ROLES, TONES, type FieldMeta, type Role, type Tone } from "./meaning"
 export { localize, type Label } from "./labels"
 export { argsHash, AuthError, canonicalJson, CONFIRMATION_TYPE, generateSigningKey, signAccessToken, signConfirmation, type AuthOptions, type Caller, type CallerResolver, type HostClaim, type Issuer, type Person, type ResolvedCaller, type ResolveInfo, type SigningKey } from "./auth"

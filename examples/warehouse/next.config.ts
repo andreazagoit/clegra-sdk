@@ -13,6 +13,9 @@ const nextConfig: NextConfig = {
   turbopack: { root: join(here, "../../..") },
   // No generated AGENTS.md in the project.
   agentRules: false,
+  // No page may be framed, except the embedded ones (/embed/*: their frame-ancestors come from proxy.ts), so sign-in
+  // and consent can't be clickjacked.
+  headers: async () => [{ source: "/((?!embed/).*)", headers: [{ key: "Content-Security-Policy", value: "frame-ancestors 'none'" }] }],
 }
 
 // /mcp, /.well-known/modelapp.json and the OAuth metadata → app/api/modelapp/[...path]/route.ts.

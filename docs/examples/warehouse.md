@@ -28,7 +28,8 @@ What it shows:
   `order` is kind `order` (number, date, customer and total as `orderNumber`, `orderDate`, `customer`,
   `totalPrice`). Stock movements have no kind: they are the warehouse's own.
 - **An embedded page.** The page `stock` is `url: "/embed/stock"`: a real page of the app, the stock board, framed by
-  hosts at the app's public origin.
+  hosts at the app's public origin and signed in with a one-minute ticket (spec §5.1): `EMBED_HOSTS` and `embed` in
+  `lib/modelapp.ts`, `embedProxy` in `proxy.ts`, `getEmbedCaller` in `app/embed/stock/page.tsx`.
 - **Its own `resolve`.** better-auth is the authorization server. The app verifies better-auth's access tokens
   itself and reads the person's role live (`lib/modelapp-auth.ts`), following the recipe in [auth.md](../auth.md).
 

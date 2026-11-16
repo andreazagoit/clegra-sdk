@@ -8,7 +8,7 @@ import { after, before, describe, test } from "node:test"
 
 import { decodeJwt, decodeProtectedHeader, generateKeyPair, SignJWT } from "jose"
 import { SqlStore } from "modelapp"
-import { toNextHandlers } from "modelapp/next"
+import { embedProxy, toNextHandlers } from "modelapp/next"
 import { checkApp, formatReport } from "modelapp/spec"
 import { testClient } from "modelapp/testing"
 
@@ -36,6 +36,10 @@ type Rows = { rows: Record<string, unknown>[]; next?: string; total?: number }
 const auth = await getAuth()
 const app = createWarehouseApp({ auth: modelAppAuth(auth) })
 const route = toNextHandlers(app, { publicUrl: SITE })
+// proxy.ts in front of the embedded pages (spec §5.1): the ticket exchange, frame-ancestors on every /embed response.
+const proxy = embedProxy(app, { publicUrl: SITE })
+/** The site as an HTTP client reaches it: /embed through the proxy, everything else through the MAP route. */
+const site = (r: Request) => (new URL(r.url).pathname.startsWith("/embed/") ? proxy(r) : route[r.method as "GET"](r))
 const handler = (request: Request) => auth.handler(request)
 
 const ids: Record<string, { userId: string; orgId: string }> = {}
@@ -285,6 +289,49 @@ describe("fragments and pages", () => {
   })
 })
 
+describe("the embedded stock board (spec §5.1)", () => {
+  const HOST = "https://app.clegra.com"
+  const ticketFor = async (c: Client, origin = HOST) => (await c.call("modelapp_embed", { page: "stock", origin })) as { isError?: boolean; structuredContent?: { action: string; field: string; ticket: string; error?: { code: string } } }
+  const exchange = (t: { action: string; field: string; ticket: string }, origin = HOST) =>
+    proxy(new Request(t.action, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", origin, "sec-fetch-dest": "iframe" }, body: new URLSearchParams({ [t.field]: t.ticket }) }))
+  const viewer = (setCookie: string) => app.embed!.caller("stock", new Request(`${SITE}/embed/stock`, { headers: { cookie: setCookie.split(";")[0]!, "sec-fetch-dest": "iframe" } }))
+
+  test("declared: the hosts that may frame it, the page behind products.view", () => {
+    const m = app.manifest() as unknown as { embed: { path: string; frameAncestors: string[] }; pages: { name: string; permission?: string }[] }
+    assert.equal(m.embed.path, "/embed")
+    assert.ok(m.embed.frameAncestors.includes(HOST) && m.embed.frameAncestors.includes("https://chatgpt.com"))
+    assert.equal(m.pages.find((p) => p.name === "stock")?.permission, "products.view")
+  })
+
+  test("a real token's ticket opens the board for that person and organization, once", async () => {
+    const t = (await ticketFor(ada)).structuredContent!
+    assert.equal(t.action, `${SITE}/embed/_ticket`)
+    const r = await exchange(t)
+    assert.equal(r.status, 303)
+    assert.equal(r.headers.get("location"), `${SITE}/embed/stock`)
+    const cookie = r.headers.get("set-cookie")!
+    assert.match(cookie, /; Path=\/embed\/stock; Max-Age=600; Secure; HttpOnly; SameSite=None; Partitioned$/)
+    const who = await viewer(cookie)
+    assert.equal(who?.installation, aurora)
+    assert.equal(who?.person?.id, ids["ada.fernley@aurora.example"]!.userId)
+    assert.equal((await exchange(t)).status, 401, "a ticket is used once")
+  })
+
+  test("another organization's person gets their own organization; an undeclared host gets no ticket", async () => {
+    const who = await viewer((await exchange((await ticketFor(sophie)).structuredContent!)).headers.get("set-cookie")!)
+    assert.equal(who?.installation, hummingbird)
+    const refused = await ticketFor(ada, "https://evil.example")
+    assert.equal(refused.isError, true)
+  })
+
+  test("every /embed response says who may frame it; other pages may not be framed at all", async () => {
+    const r = await proxy(new Request(`${SITE}/embed/stock`))
+    assert.match(r.headers.get("content-security-policy") ?? "", /^frame-ancestors https:\/\/app\.clegra\.com https:\/\/chatgpt\.com /)
+    const config = (await import("../next.config")).default as { headers: () => Promise<{ source: string; headers: { key: string; value: string }[] }[]> }
+    assert.deepEqual(await config.headers(), [{ source: "/((?!embed/).*)", headers: [{ key: "Content-Security-Policy", value: "frame-ancestors 'none'" }] }])
+  })
+})
+
 describe("MCP authorization (better-auth tokens, verified by the app)", () => {
   test("the metadata: the protected resource names better-auth; its AS metadata is served at the root", async () => {
     const prm = (await (await route.GET(new Request(`${SITE}/.well-known/oauth-protected-resource/mcp`))).json()) as { resource: string; authorization_servers: string[] }
@@ -316,9 +363,9 @@ describe("MCP authorization (better-auth tokens, verified by the app)", () => {
     assert.equal(claims.org, aurora)
     const listed = (await rpc(token, "tools/list")).result as { tools: { name: string }[] }
     assert.ok(listed.tools.some((t) => t.name === "product_list"))
-    const report = await checkApp({ url: SITE, token, fetch: (r) => route[r.method as "GET"](r) })
+    const report = await checkApp({ url: SITE, token, fetch: site })
     assert.ok(report.ok && report.complete, formatReport(report))
-    for (const id of ["kinds.known", "kinds.properties", "kinds.tools", "kinds.keys", "kinds.values"]) assert.ok(report.checks.some((c) => c.id === id && c.ok && !c.skipped), `${id} ran: ${formatReport(report)}`)
+    for (const id of ["kinds.known", "kinds.properties", "kinds.tools", "kinds.keys", "kinds.values", "embed.frame-ancestors", "embed.ticket"]) assert.ok(report.checks.some((c) => c.id === id && c.ok && !c.skipped), `${id} ran: ${formatReport(report)}`)
   })
 
   test("the organization comes from the token only, never from arguments", async () => {

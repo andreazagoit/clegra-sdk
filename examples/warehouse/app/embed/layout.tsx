@@ -1,10 +1,7 @@
-import { requireViewer } from "@/lib/session"
-
 /**
- * Pages made to be framed (a workspace host, an MCP Apps view): no app chrome, a neutral background, compact.
- * For now they use the app's own session cookie; a signed embed ticket for third-party frames comes later.
+ * Pages made to be framed by a host (MAP `url` pages, spec §5.1): no app chrome, a neutral background, compact. Who
+ * looks is the caller of the host's sign-in ticket (`getEmbedCaller`, in each page), never the site's own session.
  */
-export default async function EmbedLayout({ children }: { children: React.ReactNode }) {
-  await requireViewer()
+export default function EmbedLayout({ children }: { children: React.ReactNode }) {
   return <div className="min-h-screen bg-white p-3 text-sm">{children}</div>
 }

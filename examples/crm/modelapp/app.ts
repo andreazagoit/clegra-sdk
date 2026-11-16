@@ -98,6 +98,20 @@ function refused(error: unknown, ctx: Context, closed?: { en: string; it: string
 
 // ------------------------------------------------------------------ the app
 
+/**
+ * Who may frame the CRM's embedded pages (/embed/*, spec §5.1): Clegra's web client, ChatGPT and Claude with the
+ * sandbox origins their MCP Apps views run on, and any local port while developing. Every frame up to the top
+ * must be one of them; a sign-in ticket is issued only for a frame of one of them.
+ */
+export const EMBED_HOSTS = [
+  "https://app.clegra.com",
+  "https://chatgpt.com",
+  "https://*.web-sandbox.oaiusercontent.com",
+  "https://claude.ai",
+  "https://*.claudemcpcontent.com",
+  ...(process.env.NODE_ENV === "production" ? [] : ["http://localhost:*", "http://127.0.0.1:*"]),
+]
+
 export type CrmAppOptions = {
   /** Who may call: the app's own users (`resolve`: better-auth access tokens, modelapp/auth.ts) and workspace hosts (`issuers`). */
   auth: AuthOptions
@@ -115,6 +129,9 @@ export function createCrmApp({ auth, store = new SqlStore((text, params) => data
     instructions: "A CRM. Use search or the *_list tools to find records, *_get for one record, open_pipeline for the overview. Changes need the person's confirmation.",
     auth,
     store,
+    // The board (app/embed/pipeline) framed by hosts, signed in with a one-minute ticket. Its key is derived from the
+    // CRM's one secret (the SDK's HKDF keeps the uses apart).
+    embed: { frameAncestors: EMBED_HOSTS, secret: process.env.BETTER_AUTH_SECRET },
     // Deal owners are person ids: their names, so a host never shows an id.
     people: async (ids, ctx) => personNames(await tenant(ctx), ids),
 
@@ -316,7 +333,7 @@ export function createCrmApp({ auth, store = new SqlStore((text, params) => data
         permission: "deals.values",
         view: { html: () => import("./forecast-view").then((m) => m.forecastHtml) },
       },
-      // A page of the CRM itself (app/embed/pipeline), framed by hosts at the app's own address.
+      // A page of the CRM itself (app/embed/pipeline), framed by hosts at the app's own address with a sign-in ticket.
       board: {
         title: { en: "Board", it: "Bacheca" },
         icon: "kanban",

@@ -103,6 +103,49 @@
       "type": "string",
       "description": "Hosts resolve record and fragment URIs with this tool"
     },
+    "embed": {
+      "description": "Same-site url pages, framed by hosts with a sign-in ticket",
+      "type": "object",
+      "properties": {
+        "tool": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "The MCP tool"
+            },
+            "plain": {
+              "type": "boolean",
+              "description": "Listed to plain MCP clients"
+            }
+          },
+          "required": [
+            "name",
+            "plain"
+          ],
+          "additionalProperties": false,
+          "description": "The tool a host asks for an embed ticket with (spec §5.1)"
+        },
+        "path": {
+          "type": "string",
+          "description": "Where the embed pages live; tickets are posted to <path>/_ticket"
+        },
+        "frameAncestors": {
+          "minItems": 1,
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The hosts that may frame the embed pages (CSP frame-ancestors sources)"
+        }
+      },
+      "required": [
+        "tool",
+        "path",
+        "frameAncestors"
+      ],
+      "additionalProperties": false
+    },
     "searchTool": {
       "type": "string"
     },

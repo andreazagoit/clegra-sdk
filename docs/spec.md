@@ -35,6 +35,7 @@ JSON Schema: [`packages/modelapp/spec/schema/modelapp.schema.json`](../../packag
 | `auth` | `{ resource?, authorizationServers }` (§7). `resource` is the app's own public MCP address: the only token audience it accepts |
 | `view` | The generated `ui://` view that draws lists, records, dashboards, fragments |
 | `resolveTool`, `searchTool?` | Tools a host uses to resolve URIs and to search |
+| `embed?` | `{ tool, path, frameAncestors }`: the app's own pages that hosts frame (§5.1). Present exactly when a page has a same-site `url` |
 | `kinds?` | Definitions of the namespaced kinds this app uses (§3.1) |
 | `entities`, `actions`, `pages`, `fragments`, `agents` | §3–§5 |
 | `permissions` | `{ id, label, description?, default }`; ids are `group.verb` |
@@ -274,6 +275,62 @@ The generated view and the host (MCP Apps, `2026-01-26`):
   (§6 rule 10). After a change made in the view it sends
   `ui/update-model-context` with the result's text, so the model knows in
   its next turn.
+
+### 5.1 Embedded pages: the sign-in ticket
+
+A `custom` page whose `url` is a path on the app's own site (an *embed
+page*) is framed by hosts on other sites, where the app's own session cookie
+is a third-party cookie that browsers block. The viewer is signed in to it
+with a ticket instead:
+
+1. **Declared.** An app with an embed page MUST have `embed` in its manifest:
+   `tool` (`modelapp_embed`), `path` (default `/embed`; every embed page is
+   under it) and `frameAncestors`, the hosts that may frame embed pages, as
+   CSP sources: `https://host[:port]`, `https://*.host`, `'self'`; outside
+   production `http://localhost` and `http://127.0.0.1` (port or `:*`).
+2. **Asked for.** The host, holding the viewer's token for the app, calls
+   `modelapp_embed { page, origin }`: `origin` is the origin of the document
+   that will frame the page and post the ticket. The tool is listed to every
+   caller with `_meta.ui.visibility: ["app"]` (hidden from models). It MUST
+   refuse a page the caller can't open (the page's permission, `plain`), an
+   origin that is opaque (`null`), not a serialized origin, or not matched by
+   `frameAncestors`. It answers `{ page, action, field, ticket, expiresAt }`.
+3. **The ticket** is a JWT (`typ: modelapp-embed+jwt`, HMAC with a key only
+   the app holds), `iss` the app's origin, `aud` the page's absolute URL,
+   `origin`, `jti`, `iat`, `exp` at most 60 seconds after `iat`, and the
+   caller as the app named it (`modelapp: { installation, person,
+   permissions, locale?, host }`), nothing more.
+4. **Posted, never in a URL.** The framing document submits a form with
+   `method="post"`, `action` = `<app origin><path>/_ticket`, `target` = the
+   frame, the ticket in the field `field`. So the ticket is never in an
+   address bar, the history, a server's access log or a `Referer`, and the
+   browser itself states the poster's `Origin`.
+5. **Exchanged once.** The app MUST refuse (a 4xx, no cookie) a request that
+   is not a POST, whose `Sec-Fetch-Dest` is not `iframe`, whose `Origin` is
+   not the ticket's `origin` or no longer matched by `frameAncestors`, and a
+   ticket that is tampered, of another app, for a page that isn't one of its
+   embed pages, expired, issued more than 5 seconds in the future, living
+   longer than 60 seconds, or already used (its `jti` kept, atomically,
+   until it expires: shared by every instance). Otherwise it answers `303` to
+   the page (absolute, from the ticket: never from the request) with
+   `Referrer-Policy: no-referrer`, `Cache-Control: no-store` and a session
+   cookie: `Secure; HttpOnly; SameSite=None; Partitioned` (CHIPS: kept under
+   the host's top-level site only), `Path` = the page's path, no `Domain`, a
+   short `Max-Age` (default 10 minutes, at most an hour), holding the
+   ticket's caller signed with another key than tickets.
+6. **Read by the page.** The page's caller is the session's (scope by its
+   `installation`, as a handler's `ctx`). The session counts only for its own
+   page and never for a top-level navigation (`Sec-Fetch-Dest: document`).
+7. **Framing.** Every response under `path` (the pages, the exchange and its
+   refusals) MUST carry `Content-Security-Policy: frame-ancestors` with
+   exactly the declared sources, and no `X-Frame-Options`. Every frame up to
+   the top must match one, so a host whose view runs in an opaque sandbox
+   frames embed pages from its own document, not from inside that view.
+
+The SDK's view of an embed page (`ui://<app>/pages/<page>`) does steps 2 and 4
+over the MCP Apps bridge, with its own `location.origin`; a host that draws
+natively does them itself. A page on another site (`https://…`) is framed as
+it is, with no ticket.
 
 ## 6. The generated MCP server
 
@@ -572,10 +629,13 @@ npx modelapp check https://crm.example.com --token <a plain caller's bearer>
 | `kinds.tools` | entity tools carry the kind in the description and in `_meta.modelapp`; `search` offers `kind`, keeps to it, and names each result's kind |
 | `refs.cross` | a `ref: { kind }` field's values are record URIs; its text form is `{ uri, kind }`; no `refs` title is sent for it; such an action input is a string |
 | `resolve.foreign` | the resolver answers `not_found` for another app's URI |
+| `embed.frame-ancestors` | (public) an app with same-site pages declares `embed`; each embed page and `GET <path>/_ticket` (refused) answer with `frame-ancestors` exactly the declared sources, no `X-Frame-Options` |
+| `embed.ticket` | a ticket for a declared origin is a ≤ 60 s JWT for the page with a `jti`; an undeclared origin gets none; posted from another `Origin`, a second time, or by a top-level page it is refused; posted right it answers 303 to the page with `Referrer-Policy: no-referrer` and a `Secure; HttpOnly; SameSite=None; Partitioned` cookie scoped to the page's path |
 
 The `kinds.*` checks are skipped, not failed, for an app that declares no
 kinds (and `kinds.keys` when no listed record holds a key value to try);
-`refs.cross` for an app without references to other apps.
+`refs.cross` for an app without references to other apps; the `embed.*`
+checks for an app without same-site pages.
 
 An app is conformant when every check passes with a token. Without a token
 only the public checks run: the report says «Incomplete», never «Conformant».

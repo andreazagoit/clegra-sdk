@@ -5,6 +5,7 @@ import { test } from "node:test"
 
 import "./setup"
 
+import { embedProxy } from "modelapp/next"
 import { testClient } from "modelapp/testing"
 import { checkApp, formatReport } from "modelapp/spec"
 import { and, eq } from "drizzle-orm"
@@ -32,6 +33,10 @@ const app = createCrmApp({
 })
 // Each test its own installation of the dev host: its own fresh copy of the demo data.
 const tenantOf = (installation: string) => `${installation}@modelapp-dev`
+const SITE = "http://127.0.0.1:3920"
+// proxy.ts in front of the embedded pages (spec §5.1); the rest of the site is the MAP route.
+const proxy = embedProxy(app, { publicUrl: SITE })
+const site = (r: Request) => (new URL(r.url).pathname.startsWith("/embed/") ? proxy(r) : app.fetch(r, { remoteAddress: "127.0.0.1" }))
 
 test("the manifest lists the CRM", () => {
   const manifest = app.manifest()
@@ -99,7 +104,7 @@ test("writes reach plain MCP clients only where the app opted in, with honest an
 
 test("the app passes the conformance checks", async () => {
   const token = await app.devToken({ person: "alice", permissions: "all", installation: "conformance" })
-  const report = await checkApp({ url: "http://127.0.0.1:3920", token, fetch: (r) => app.fetch(r, { remoteAddress: "127.0.0.1" }) })
+  const report = await checkApp({ url: SITE, token, fetch: site })
   assert.ok(report.ok && report.complete, formatReport(report))
   assert.ok(report.checks.every((x) => !x.skipped), formatReport(report))
 })
@@ -168,4 +173,27 @@ test("deal owners reach hosts and models by name, never as person ids", async ()
   const id = (made.structuredContent as { record: string }).record.split("/").pop()!
   const seen = await c.call("deal_get", { id })
   assert.deepEqual((seen.structuredContent as { refs: { owner: Record<string, string> } }).refs.owner, { "host-person-9": "Carla Test" })
+})
+
+test("the board is embedded with a sign-in ticket: for one page and frame, once, as the caller resolve named", async () => {
+  const HOST = "https://app.clegra.com"
+  const rep = await testClient(app, { person: "ben", permissions: ["deals.view", "deals.edit", "contacts.edit"], installation: "embed" })
+  const t = (await rep.call("modelapp_embed", { page: "board", origin: HOST })).structuredContent as { action: string; field: string; ticket: string }
+  // The proxy at the address the ticket names (the dev host's test client reaches the app at http://127.0.0.1).
+  const at = embedProxy(app, { publicUrl: new URL(t.action).origin })
+  const post = (origin: string) => at(new Request(t.action, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", origin, "sec-fetch-dest": "iframe" }, body: new URLSearchParams({ [t.field]: t.ticket }) }))
+  assert.equal((await post("https://chatgpt.com")).status, 403, "a ticket for Clegra's frame is refused in ChatGPT's")
+  const r = await post(HOST)
+  assert.equal(r.status, 303)
+  assert.equal(r.headers.get("location"), `${new URL(t.action).origin}/embed/pipeline`)
+  const cookie = r.headers.get("set-cookie")!
+  assert.match(cookie, /^__Secure-modelapp-embed-board=[^;]+; Path=\/embed\/pipeline; Max-Age=600; Secure; HttpOnly; SameSite=None; Partitioned$/)
+  assert.equal((await post(HOST)).status, 401, "used once")
+  const viewer = await app.embed!.caller("board", new Request(`${new URL(t.action).origin}/embed/pipeline`, { headers: { cookie: cookie.split(";")[0]!, "sec-fetch-dest": "iframe" } }))
+  assert.equal(viewer?.installation, tenantOf("embed"))
+  assert.equal(viewer?.person?.id, "ben")
+  assert.equal(viewer?.can("deals.values"), false, "the rep's permissions, not more")
+  // A caller who may not see deals gets no ticket for the board.
+  const outsider = await testClient(app, { person: "ben", permissions: [], installation: "embed" })
+  assert.equal(((await outsider.call("modelapp_embed", { page: "board", origin: HOST })).structuredContent as { error: { code: string } }).error.code, "permission_denied")
 })

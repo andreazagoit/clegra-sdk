@@ -1,21 +1,28 @@
-import { boardDeals, companyNames, STAGES } from "@/lib/crm"
+import { getEmbedCaller } from "modelapp/next"
+
+import { boardDeals, companyNames, isWorkspaceInstallation, provisionWorkspace, STAGES } from "@/lib/crm"
 import { formatDate, formatMoney, STAGE_LABELS } from "@/lib/format"
-import { requireMember } from "@/lib/session"
+import { crmApp } from "@/modelapp"
 
 import { NoAccess } from "../../_components/ui"
 
 export const metadata = { title: "Pipeline board" }
 
-// The pipeline as a board, by stage, with totals. A page of the CRM; also the MAP page `board`.
-// For now it reads the normal session cookie (a signed embed ticket comes later).
+// The pipeline as a board, by stage, with totals: the MAP page `board`, framed by a host. Who looks is the caller the
+// host's sign-in ticket named (spec §5.1), never the CRM's own session: in a frame on another site that cookie is a
+// third-party one and never arrives.
 export default async function PipelineBoard() {
-  const member = await requireMember()
-  if (!member.can("deals.view")) return <NoAccess what="the pipeline" />
-  const money = member.can("deals.values")
-  const deals = await boardDeals(member.orgId)
-  const names = await companyNames(member.orgId, [...new Set(deals.map((d) => d.company))])
+  const caller = await getEmbedCaller(crmApp, "board")
+  if (!caller) return <SignedOut />
+  if (!caller.can("deals.view")) return <NoAccess what="the pipeline" />
+  // The tenant exactly as the MCP handlers get it: an organization, or a workspace host's installation.
+  if (isWorkspaceInstallation(caller.installation)) await provisionWorkspace(caller.installation)
+  const orgId = caller.installation
+  const money = caller.can("deals.values")
+  const deals = await boardDeals(orgId)
+  const names = await companyNames(orgId, [...new Set(deals.map((d) => d.company))])
   return (
-    <div className="grid grid-cols-5 gap-2" data-board>
+    <div className="grid grid-cols-5 gap-2" data-board data-viewer={caller.person?.name ?? ""}>
       {STAGES.map((stage) => {
         const column = deals.filter((d) => d.stage === stage)
         const total = column.reduce((s, d) => s + d.value, 0)
@@ -39,5 +46,17 @@ export default async function PipelineBoard() {
         )
       })}
     </div>
+  )
+}
+
+function SignedOut() {
+  return (
+    <p className="text-zinc-600" data-signed-out>
+      This board opens inside an app that connects to the CRM (Clegra, ChatGPT, Claude). Open it from there, or open{" "}
+      <a href="/" target="_blank" rel="noopener" className="underline">
+        the CRM
+      </a>
+      .
+    </p>
   )
 }

@@ -582,6 +582,37 @@
       }
     },
     {
+      "name": "modelapp_embed",
+      "title": "Embed ticket",
+      "description": "For hosts and the app's views: a one-minute, single-use ticket that signs the viewer in to one of the app's embedded pages, framed by a document of the given origin.",
+      "annotations": {
+        "title": "Embed ticket",
+        "readOnlyHint": true,
+        "idempotentHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "ui": null,
+      "inputSchema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "page": {
+            "type": "string",
+            "description": "The page's name (manifest pages with a same-site url)"
+          },
+          "origin": {
+            "type": "string",
+            "description": "The origin of the document that frames the page and posts the ticket"
+          }
+        },
+        "required": [
+          "page",
+          "origin"
+        ]
+      }
+    },
+    {
       "name": "modelapp_resolve",
       "title": "Resolve",
       "description": "For hosts: fragment and record URIs resolved for the viewer.",
@@ -1415,6 +1446,22 @@
     },
     "view": "ui://crm/view",
     "resolveTool": "modelapp_resolve",
+    "embed": {
+      "tool": {
+        "name": "modelapp_embed",
+        "plain": true
+      },
+      "path": "/embed",
+      "frameAncestors": [
+        "https://app.clegra.com",
+        "https://chatgpt.com",
+        "https://*.web-sandbox.oaiusercontent.com",
+        "https://claude.ai",
+        "https://*.claudemcpcontent.com",
+        "http://localhost:*",
+        "http://127.0.0.1:*"
+      ]
+    },
     "searchTool": "search",
     "entities": [
       {

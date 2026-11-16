@@ -1,15 +1,21 @@
 import assert from "node:assert/strict"
 import { spawn, spawnSync, type ChildProcess } from "node:child_process"
 import { randomBytes } from "node:crypto"
-import { rmSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { createServer } from "node:http"
+import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { after, describe, test } from "node:test"
 import { fileURLToPath } from "node:url"
 
+import { chromium } from "playwright"
+
 // A REAL Next.js run of test/fixture (App Router, withModelApp + toNextHandlers): `next dev`, then `next build` +
 // `next start`. Through the rewrites: `modelapp check` with a token, what a route handler sees of a rewritten
 // request, an SSE stream arriving chunk by chunk. Servers are stopped by PID; the fixture's .next is deleted.
-// Run: npm run test:next (ports 3942 dev, 3943 start; MODELAPP_TEST_NEXT_PORT=<n> uses n and n+1).
+// In next dev, the embedded page in a real Chromium (spec §5.1): a host harness on http://localhost (another site
+// than the app on 127.0.0.1) frames the SDK's url-page view, which asks for a ticket over the bridge and posts it.
+// Run: npm run test:next (ports 3942 dev, 3943 start, 3944 the harness; MODELAPP_TEST_NEXT_PORT=<n> uses n, n+1, n+2).
 
 const here = dirname(fileURLToPath(import.meta.url))
 const fixture = join(here, "fixture")
@@ -17,6 +23,7 @@ const root = join(here, "..", "..", "..")
 const cli = join(here, "..", "spec", "src", "cli.ts")
 const nextBin = join(root, "node_modules", "next", "dist", "bin", "next")
 const token = randomBytes(24).toString("base64url")
+const embedSecret = randomBytes(32).toString("base64url")
 const running = new Set<ChildProcess>()
 const devPort = Number(process.env.MODELAPP_TEST_NEXT_PORT || 3942)
 
@@ -41,7 +48,7 @@ async function serve(mode: "dev" | "start", port: number): Promise<{ base: strin
   const child = spawn(process.execPath, [nextBin, mode, "-p", String(port), "-H", "127.0.0.1"], {
     cwd: fixture,
     detached: true,
-    env: { ...process.env, FIXTURE_TOKEN: token, MODELAPP_PUBLIC_URL: base, NEXT_TELEMETRY_DISABLED: "1" },
+    env: { ...process.env, FIXTURE_TOKEN: token, FIXTURE_EMBED_SECRET: embedSecret, MODELAPP_PUBLIC_URL: base, NEXT_TELEMETRY_DISABLED: "1" },
     stdio: ["ignore", "pipe", "pipe"],
   })
   running.add(child)
@@ -107,11 +114,102 @@ async function expectations(base: string) {
   assert.ok(endAt - firstAt >= 600, `first event at ${firstAt} ms, end at ${endAt} ms: buffered`)
 }
 
+/** An MCP call to the app with the fixture's token (what a host does for its viewer). */
+async function mcp(base: string, method: string, params: Record<string, unknown>) {
+  const r = await fetch(`${base}/mcp`, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }) })
+  const raw = await r.text()
+  return JSON.parse(raw.split("\n").filter((l) => l.startsWith("data:")).map((l) => l.slice(5).trim()).pop() ?? raw) as { result?: Record<string, unknown>; error?: unknown }
+}
+
+/**
+ * The host harness: `/` plays an MCP Apps host (it frames `/view`, the app's url-page view, sandboxed with an origin
+ * of its own, answers ui/initialize and relays tools/call to the app with the viewer's token); `/direct` frames the
+ * page with no ticket; `/probe` frames the unpartitioned-cookie probe.
+ */
+async function harness(base: string, port: number) {
+  const view = ((await mcp(base, "resources/read", { uri: "ui://fixture-notes/pages/board" })).result?.contents as { text: string }[])[0]!.text
+  const host = `<!doctype html><meta charset="utf-8"><iframe id="v" src="/view" sandbox="allow-scripts allow-same-origin allow-forms" style="width:900px;height:400px"></iframe><script>
+addEventListener("message", async (e) => {
+  const m = e.data; const frame = document.getElementById("v").contentWindow; if (e.source !== frame || !m || m.jsonrpc !== "2.0" || m.id === undefined) return;
+  if (m.method === "ui/initialize") return frame.postMessage({ jsonrpc: "2.0", id: m.id, result: { protocolVersion: "2026-01-26", hostInfo: { name: "harness", version: "1" }, hostCapabilities: {}, hostContext: { locale: "en" } } }, "*");
+  if (m.method === "tools/call") { const r = await fetch("/call", { method: "POST", body: JSON.stringify(m.params) }); return frame.postMessage({ jsonrpc: "2.0", id: m.id, result: await r.json() }, "*"); }
+});
+</script>`
+  const server = createServer(async (req, res) => {
+    const html = (body: string) => res.writeHead(200, { "content-type": "text/html" }).end(body)
+    if (req.url === "/") return html(host)
+    if (req.url === "/view") return html(view)
+    if (req.url === "/direct") return html(`<iframe id="d" src="${base}/embed/board"></iframe>`)
+    if (req.url === "/probe") return html(`<iframe id="p" src="${base}/embed/probe"></iframe>`)
+    if (req.url === "/call" && req.method === "POST") {
+      let body = ""
+      for await (const chunk of req) body += chunk
+      const r = await mcp(base, "tools/call", JSON.parse(body))
+      return res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(r.result ?? { isError: true, content: [{ type: "text", text: JSON.stringify(r.error) }] }))
+    }
+    res.writeHead(404).end()
+  })
+  await new Promise<void>((resolve) => server.listen(port, "127.0.0.1", resolve))
+  return { url: `http://localhost:${port}`, close: () => new Promise<void>((resolve) => server.close(() => resolve())) }
+}
+
+async function embedInBrowser(base: string, port: number) {
+  const host = await harness(base, port)
+  // Third-party cookies blocked (Chromium's own setting, in a fresh profile), as Safari and Firefox do and Chrome
+  // users can: only a partitioned cookie can work. (The headless shell ignores the setting: the full Chromium.)
+  const profile = mkdtempSync(join(tmpdir(), "modelapp-embed-profile-"))
+  mkdirSync(join(profile, "Default"))
+  writeFileSync(join(profile, "Default", "Preferences"), JSON.stringify({ profile: { cookie_controls_mode: 1, block_third_party_cookies: true } }))
+  const context = await chromium.launchPersistentContext(profile, { headless: true, channel: "chromium" })
+  const browser = await chromium.launch()
+  try {
+    const page = await context.newPage()
+    await page.goto(host.url)
+    const embedded = page.frameLocator("#v").frameLocator("iframe[name=modelapp-page]").locator("[data-caller]")
+    await embedded.waitFor({ timeout: 30_000 })
+    assert.equal(await embedded.textContent(), "Test person · org-a · notes.view", "the frame of another site is signed in by the ticket")
+    // The browser's cookie store (every partition: Playwright reports each cookie's partition key).
+    const cookies = await context.cookies()
+    const session = cookies.find((c) => c.name === "__Secure-modelapp-embed-board")
+    assert.ok(session, JSON.stringify(cookies))
+    assert.equal(session.path, "/embed/board")
+    assert.equal(session.secure, true)
+    assert.equal(session.httpOnly, true)
+    assert.equal(session.sameSite, "None")
+    assert.equal(session.domain, "127.0.0.1", "a host-only cookie (no Domain)")
+    assert.equal(session.partitionKey, "http://localhost", "the cookie is kept under the host's top-level site only")
+    // The address bar of the frame holds no ticket: it is the page.
+    const frameUrl = page.frames().find((f) => f.name() === "modelapp-page")?.url()
+    assert.equal(frameUrl, `${base}/embed/board`)
+
+    // The session opened top-level, in the same browser: another partition, and not a frame: signed out.
+    const top = await context.newPage()
+    await top.goto(`${base}/embed/board`)
+    assert.equal(await top.locator("[data-caller]").textContent(), "signed out")
+    // The page framed by the same host without a ticket (a browser that never got one): signed out.
+    const fresh = await (await browser.newContext()).newPage()
+    await fresh.goto(`${host.url}/direct`)
+    assert.equal(await fresh.frameLocator("#d").locator("[data-caller]").textContent(), "signed out")
+
+    // A cookie without Partitioned, set and read back inside the same cross-site frame: never sent back.
+    await page.goto(`${host.url}/probe`)
+    await page.frameLocator("#p").locator("[data-probe]").waitFor()
+    await page.reload()
+    assert.equal(await page.frameLocator("#p").locator("[data-probe]").textContent(), "no unpartitioned cookie")
+  } finally {
+    await context.close()
+    await browser.close()
+    await host.close()
+    rmSync(profile, { recursive: true, force: true })
+  }
+}
+
 describe("a real Next.js app (test/fixture)", { concurrency: false }, () => {
   test("next dev", { timeout: 180_000 }, async () => {
     const server = await serve("dev", devPort)
     try {
       await expectations(server.base)
+      await embedInBrowser(server.base, devPort + 2)
     } catch (error) {
       console.error(server.log())
       throw error

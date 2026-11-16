@@ -91,10 +91,15 @@ Work through the TODOs in `modelapp.ts`:
    server must also be reachable there. Add `https://app.example.com/mcp` as a connector and sign in with your own
    sign-in. Lists, records and dashboards show as MCP Apps views. Clients identify themselves with a Client ID
    Metadata Document, so your authorization server must support CIMD (see [auth.md](auth.md)).
-7. **Embedded pages.** A page `{ title, url: "/embed/stock" }` frames a real page of your app inside hosts. It is
-   same-site, so the manifest keeps it relative. Give `/embed/*` a bare layout. The frame is cross-site inside
-   ChatGPT or Claude, so a cookie session won't reach it. Signing people in there is not solved yet (it needs an
-   embed session ticket).
+7. **Embedded pages.** A page `{ title, url: "/embed/stock" }` frames a real page of your app inside hosts. The
+   frame is cross-site there, so your session cookie never reaches it: the host signs the viewer in with a
+   one-minute ticket instead (spec §5.1). Three pieces:
+   - `embed: { frameAncestors: ["https://app.clegra.com", "https://chatgpt.com", …], secret }` in `defineApp`
+     (`secret` default `MODELAPP_EMBED_SECRET`, 32+ characters; the hosts that may frame `/embed/*`);
+   - `proxy.ts`: `export const proxy = embedProxy(app)` with `export const config = { matcher: "/embed/:path*" }`
+     (the ticket exchange at `POST /embed/_ticket`, `frame-ancestors` on every embed response);
+   - in the page: `const caller = await getEmbedCaller(app, "stock")` (null: show "open it from the app"), then
+     scope by `caller.installation`, check `caller.can(…)`. Give `/embed/*` a bare layout.
 
 What needs https: every remote MCP client (Claude, ChatGPT), and any authorization server they reach. What doesn't:
 the Inspector, `modelapp check` and workspace hosts on your machine.

@@ -21,7 +21,7 @@ verified caller, the permissions, the confirmations and the MCP surface.
 | `lib/auth-options.ts`, `lib/auth.ts` | better-auth: email + password, organizations, and the OAuth server for MCP clients (`jwt` + `mcp` + `cimd`) |
 | `lib/site.ts` | The one public address, `MODELAPP_PUBLIC_URL`: the issuer `<origin>/api/auth` and the MCP resource `<origin>/mcp` |
 | `lib/session.ts`, `lib/permissions.ts` | The signed-in member of the active organization; role → permissions |
-| `app/(crm)/…`, `app/embed/pipeline` | Pages and server actions; the board page made to be framed (`proxy.ts` sets its `frame-ancestors`) |
+| `app/(crm)/…`, `app/embed/pipeline` | Pages and server actions; the board page made to be framed, signed in with a host's ticket (`getEmbedCaller`; `proxy.ts`: `embedProxy`, spec §5.1) |
 | `app/sign-in`, `app/oauth/consent` | better-auth's login and consent pages; they also continue an OAuth authorization |
 | `modelapp/app.ts`, `modelapp/index.ts` | The MAP definition, `createCrmApp({ auth, store })`, and the app as served |
 | `modelapp/auth.ts` | The app's own `resolve` for better-auth access tokens, the issuer metadata, workspace hosts (`MODELAPP_ISSUERS`) |

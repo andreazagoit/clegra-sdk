@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs"
 import { Ajv2020 } from "ajv/dist/2020.js"
 
 import { entityKindProblems, keyOf, RECORD_URI, kindDefinitionProblems, kindNameProblem, kindOfRecord, kindSentence, kindsOf, normaliseKey, propertyOf, valueProblem, type EntityKind, type KindDef, type KindField } from "./kinds"
-import { MANIFEST_PATH, META_KEY, PROTOCOL_ID, URI_SCHEME } from "./protocol"
+import { EMBED_EXCHANGE_SEGMENT, EMBED_TICKET_SECONDS, EMBED_TICKET_TYPE, MANIFEST_PATH, META_KEY, PROTOCOL_ID, URI_SCHEME } from "./protocol"
 
 /**
  * CONFORMANCE (spec §8): what any app must do, checked from outside over
@@ -41,6 +41,7 @@ type Manifest = {
   auth: { resource?: string; authorizationServers: string[] }
   resolveTool: string
   searchTool?: string
+  embed?: { tool: ToolRef; path: string; frameAncestors: string[] }
   kinds?: Record<string, KindDef>
   entities: { name: string; kind?: EntityKind; permission?: string; schema: { properties?: Record<string, { items?: { type?: unknown } }> }; fields: ManifestField[]; tools: { list: ToolRef; get: ToolRef }; searchable: boolean }[]
   actions: { name: string; entity?: string; input: { properties?: Record<string, { ref?: unknown }> }; readOnly: boolean; confirm: string; permission?: string; tool: ToolRef }[]
@@ -219,6 +220,34 @@ export async function checkApp(options: Options): Promise<Report> {
     check("auth.mcp", "without a token the endpoint answers 401 and points to OAuth protected-resource metadata", authProblems)
   } else if (anonymous.status === 200) skip("auth.mcp", "without a token the endpoint answers 401 and points to OAuth protected-resource metadata", "the app accepts anonymous callers")
   else check("auth.mcp", "without a token the endpoint answers 401 and points to OAuth protected-resource metadata", `status ${anonymous.status}`)
+
+  // 3b. Embedded pages (spec §5.1): every embed response says who may frame it, the declared hosts and nobody else.
+  const embedPages = manifest.pages.filter((p) => p.kind === "custom" && typeof p.url === "string" && p.url.startsWith("/"))
+  const FA_TITLE = "embed pages and the ticket exchange answer with frame-ancestors = the declared hosts, never X-Frame-Options"
+  if (!embedPages.length && !manifest.embed) skip("embed.frame-ancestors", FA_TITLE, "the app has no pages on its own site")
+  else if (!manifest.embed) check("embed.frame-ancestors", FA_TITLE, `pages ${embedPages.map((p) => p.name).join(", ")} are on the app's own site, but the manifest has no embed (who may frame them, the ticket tool)`)
+  else {
+    const declared = [...manifest.embed.frameAncestors].sort().join(" ")
+    const fa: string[] = []
+    const framing = async (url: string, init: RequestInit, what: string) => {
+      const r = await doFetch(new Request(url, { ...init, redirect: "manual" }))
+      const csp = r.headers.get("content-security-policy") ?? ""
+      const directive = csp.split(";").map((d) => d.trim()).find((d) => d.startsWith("frame-ancestors"))
+      if (!directive) fa.push(`${what}: no Content-Security-Policy frame-ancestors`)
+      else if (directive.split(/\s+/).slice(1).sort().join(" ") !== declared) fa.push(`${what}: ${directive}, the manifest declares ${manifest.embed!.frameAncestors.join(" ")}`)
+      if (r.headers.get("x-frame-options")) fa.push(`${what}: X-Frame-Options ${r.headers.get("x-frame-options")} (it conflicts with frame-ancestors)`)
+      return r
+    }
+    if (manifest.embed.frameAncestors.some((s) => s === "*" || !/^('self'|https?:\/\/)/.test(s))) fa.push(`frameAncestors ${manifest.embed.frameAncestors.join(" ")}: only origins`)
+    for (const p of embedPages) {
+      if (!p.url!.startsWith(`${manifest.embed.path}/`)) fa.push(`page ${p.name}: ${p.url} is not under ${manifest.embed.path}/`)
+      await framing(`${origin}${p.url}`, { headers: { "sec-fetch-dest": "iframe" } }, `GET ${p.url}`)
+    }
+    const exchange = `${origin}${manifest.embed.path}/${EMBED_EXCHANGE_SEGMENT}`
+    const get = await framing(exchange, { headers: { "sec-fetch-dest": "iframe" } }, `GET ${manifest.embed.path}/${EMBED_EXCHANGE_SEGMENT}`)
+    if (get.status < 400) fa.push(`GET ${manifest.embed.path}/${EMBED_EXCHANGE_SEGMENT} answers ${get.status}: a ticket is only ever posted`)
+    check("embed.frame-ancestors", FA_TITLE, fa)
+  }
 
   const token = options.token ?? (anonymous.status === 200 ? undefined : null)
   if (token === null) {
@@ -481,6 +510,68 @@ export async function checkApp(options: Options): Promise<Report> {
       if (t && visibility !== undefined && !(Array.isArray(visibility) && visibility.includes("app"))) p.push(`${t.name}: _meta.ui.visibility ${JSON.stringify(visibility)} leaves out "app": a view's call to it is refused`)
     }
     check("mcp.app-callable", "the tools a view calls (lists, records, actions, pages) are callable from views", p)
+  }
+
+  // 5c. The embed ticket (spec §5.1): one minute, for one page and one framing origin, single use, exchanged only by a
+  // frame posting it from that origin, for a partitioned, HttpOnly session cookie of that page and a 303 to it.
+  const TICKET_TITLE = "an embed ticket is short, single-use, bound to its page and framing origin, and opens a partitioned session cookie"
+  const embed = manifest.embed
+  const page = embed && embedPages.find((p) => byName.has(embed.tool.name) && listed.some((t) => t.name === p.tool.name))
+  if (!embed || !embedPages.length) skip("embed.ticket", TICKET_TITLE, "the app has no pages on its own site")
+  else if (!byName.has(embed.tool.name)) check("embed.ticket", TICKET_TITLE, `${embed.tool.name} is not listed`)
+  else if (!page) skip("embed.ticket", TICKET_TITLE, "this caller may open none of the embed pages")
+  else {
+    const tp: string[] = []
+    const appOrigin = manifest.auth.resource ? new URL(manifest.auth.resource).origin : origin
+    // A framing origin the app declares: an exact one, else one a wildcard or a port wildcard allows.
+    const source = embed.frameAncestors.find((s) => /^https:\/\/[^*]+$/.test(s)) ?? embed.frameAncestors.find((s) => s !== "'self'") ?? "'self'"
+    const frameOrigin = source === "'self'" ? appOrigin : source.replace("://*.", `://${PROTOCOL_ID}-check.`).replace(/:\*$/, ":9")
+    const ask = async (o: string) => {
+      const r = await rpc("tools/call", { name: embed.tool.name, arguments: { page: page.name, origin: o } }, token)
+      const result = r.result as { isError?: boolean; structuredContent?: { action?: string; field?: string; ticket?: string } } | undefined
+      return result?.isError || !result?.structuredContent?.ticket ? null : result.structuredContent
+    }
+    const post = (t: { action?: string; field?: string; ticket?: string }, o: string, dest = "iframe") =>
+      doFetch(new Request(t.action!, { method: "POST", redirect: "manual", headers: { "content-type": "application/x-www-form-urlencoded", origin: o, "sec-fetch-dest": dest }, body: new URLSearchParams({ [t.field ?? "ticket"]: t.ticket! }) }))
+    const first = await ask(frameOrigin)
+    if (!first) tp.push(`${embed.tool.name} gave no ticket for page ${page.name} and origin ${frameOrigin}`)
+    else {
+      if (first.action !== `${appOrigin}${embed.path}/${EMBED_EXCHANGE_SEGMENT}`) tp.push(`the ticket is posted to ${first.action}, not ${appOrigin}${embed.path}/${EMBED_EXCHANGE_SEGMENT}`)
+      try {
+        const [h, p] = first.ticket!.split(".")
+        const header = JSON.parse(Buffer.from(h!, "base64url").toString()) as { alg?: string; typ?: string }
+        const claims = JSON.parse(Buffer.from(p!, "base64url").toString()) as { exp?: number; iat?: number; jti?: string; aud?: unknown; origin?: unknown }
+        if (header.typ !== EMBED_TICKET_TYPE || !header.alg || header.alg === "none") tp.push(`ticket header ${JSON.stringify(header)}`)
+        if (typeof claims.exp !== "number" || typeof claims.iat !== "number" || claims.exp - claims.iat > EMBED_TICKET_SECONDS) tp.push("the ticket lives longer than a minute (or has no exp/iat)")
+        if (!claims.jti) tp.push("the ticket has no jti (single use)")
+        if (claims.aud !== `${appOrigin}${page.url}`) tp.push(`the ticket's aud is ${JSON.stringify(claims.aud)}, not the page ${appOrigin}${page.url}`)
+        if (claims.origin !== frameOrigin) tp.push("the ticket does not name the framing origin")
+      } catch {
+        tp.push("the ticket is not a JWT")
+      }
+      if (await ask(`https://${PROTOCOL_ID}-check.invalid`)) tp.push("a ticket was issued for an origin the app does not declare")
+      const elsewhere = await post(first, `https://${PROTOCOL_ID}-check.invalid`)
+      if (elsewhere.status < 400 || elsewhere.headers.get("set-cookie")) tp.push(`a ticket posted from another origin answers ${elsewhere.status}`)
+      const ok = await post(first, frameOrigin)
+      const cookie = ok.headers.get("set-cookie") ?? ""
+      const attributes = cookie.split(";").map((a) => a.trim().toLowerCase())
+      if (ok.status !== 303) tp.push(`the exchange answers ${ok.status}, not 303`)
+      const location = ok.headers.get("location") ?? ""
+      if (new URL(location, `${appOrigin}/`).href !== `${appOrigin}${page.url}`) tp.push(`the exchange redirects to ${location || "nowhere"}, not to the page ${page.url}`)
+      for (const a of ["secure", "httponly", "samesite=none", "partitioned"]) if (!attributes.includes(a)) tp.push(`the session cookie lacks ${a === "samesite=none" ? "SameSite=None" : a === "httponly" ? "HttpOnly" : a === "partitioned" ? "Partitioned (CHIPS)" : "Secure"}`)
+      const path = attributes.find((a) => a.startsWith("path="))?.slice(5)
+      if (!path || !(page.url! === path || page.url!.startsWith(`${path}/`)) || !(path === embed.path || path.startsWith(`${embed.path}/`))) tp.push(`the session cookie's Path is ${path ?? "missing"}: it must be the embed path or under it`)
+      if (attributes.some((a) => a.startsWith("domain="))) tp.push("the session cookie sets Domain")
+      if (ok.headers.get("referrer-policy") !== "no-referrer") tp.push("the exchange has no Referrer-Policy: no-referrer")
+      const again = await post(first, frameOrigin)
+      if (again.status < 400 || again.headers.get("set-cookie")) tp.push(`a used ticket answers ${again.status} (single use)`)
+      const top = await ask(frameOrigin)
+      if (top) {
+        const r = await post(top, frameOrigin, "document")
+        if (r.status < 400 || r.headers.get("set-cookie")) tp.push(`a ticket posted by a top-level page answers ${r.status} (frames only)`)
+      }
+    }
+    check("embed.ticket", TICKET_TITLE, tp)
   }
 
   // 6. The manifest is also one MCP resource, identical to the file.

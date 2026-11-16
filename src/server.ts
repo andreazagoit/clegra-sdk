@@ -2,10 +2,11 @@ import { AsyncLocalStorage } from "node:async_hooks"
 
 import { createMcpHandler, inputRequired, inputResponse, McpServer, type CallToolResult, type Icon, type ServerContext } from "@modelcontextprotocol/server"
 import { entityKindProblems, keyOf, kindNameProblem, kindDefinitionProblems, kindOfRecord, kindSentence, kindsOf, normaliseKey, type KindDef, type KindField, type Normalisation } from "../spec/src/kinds"
-import { META_KEY, OAUTH_SCOPE, PROTOCOL_ID, RESOLVE_TOOL, URI_SCHEME, uriPrefix } from "../spec/src/protocol"
+import { EMBED_TOOL, META_KEY, OAUTH_SCOPE, PROTOCOL_ID, RESOLVE_TOOL, URI_SCHEME, uriPrefix } from "../spec/src/protocol"
 import { z } from "zod"
 
 import { AuthError, canonicalJson, DEV_ISSUER, DevAuthority, INSTALLATION, isLoopback, signConfirmation, tenantOf, TokenVerifier, type AuthOptions, type Caller, type Person, type RequestTrust } from "./auth"
+import { EmbedAuthority, EmbedError, type EmbedCaller, type EmbedOptions } from "./embed"
 import { MANIFEST_PATH, manifestUri, SPEC_VERSION, type Manifest, type ManifestField } from "./manifest"
 import { isLabel, labelMap, localize, type Label } from "./labels"
 import { fieldsOf, jsonSchemaOf, kindRef, localRef, plainSchema, type FieldInfo } from "./meaning"
@@ -83,6 +84,25 @@ export type ServerOptions = {
   mcp?: (server: McpServer, caller: Caller | null) => void
   /** The names of people of the installation by their ids (the values of `person` fields): what a host shows in place of an id. */
   people?: PeopleResolver
+  /** Pages on the app's own site framed by hosts (spec §5.1): who may frame them, the ticket's signing secret. Required with a same-site `url` page. */
+  embed?: EmbedOptions
+}
+
+/**
+ * The app's embedded pages (spec §5.1), for the route in front of them (`modelapp/next`'s `embedProxy`, or any
+ * server): the ticket exchange, the headers of every embed response, and the caller of a page from its cookie.
+ */
+export type AppEmbed = {
+  /** Where the embed pages live (`/embed`). */
+  readonly path: string
+  /** Where tickets are posted (`/embed/_ticket`). */
+  readonly exchangePath: string
+  /** The headers every embed response carries: `Content-Security-Policy: frame-ancestors <declared hosts>`, `Referrer-Policy: no-referrer`. */
+  headers(): Record<string, string>
+  /** `POST <path>/_ticket`: the ticket for the page's session cookie and a 303 to the page; a refusal page otherwise. */
+  exchange(request: Request): Promise<Response>
+  /** The caller of the embed page `page` for this request (its session cookie), or null. */
+  caller(page: string, request: Request): Promise<EmbedCaller | null>
 }
 
 /** Names by person id, for the ids it knows (spec §3, «People»). An id it leaves out is shown as an unknown person, never as the id. */
@@ -121,7 +141,7 @@ const NAME = /^[a-z][a-z0-9-]{1,39}$/
 const IDENT = /^[a-z][a-z0-9_]{0,39}$/
 const PERMISSION = /^[a-z][a-z0-9_-]{0,39}\.[a-z][a-z0-9_-]{0,39}$/
 const RESERVED_PARAMS = new Set(["query", "sort", "dir", "cursor", "limit", "id"])
-const RESERVED_TOOLS = new Set(["search", "fetch", RESOLVE_TOOL])
+const RESERVED_TOOLS = new Set(["search", "fetch", RESOLVE_TOOL, EMBED_TOOL])
 
 /** The fixed hint on the tools of an entity with cross-app references (spec §3.2): how a model opens such a record. */
 export const CROSS_INPUT_HINT = "An input that takes a record of another app takes its URI (modelapp://<app>/<entity>/<id>), as that app's search or lists give it."
@@ -264,6 +284,7 @@ export class AppServer {
   #manifest: Manifest | null = null
   #devReady: Promise<void> | null = null
   readonly #path: string
+  readonly #embed: EmbedAuthority | null
   #warnedStore = false
   readonly #handler = createMcpHandler(
     (ctx) => {
@@ -291,6 +312,42 @@ export class AppServer {
     this.#verifier = new TokenVerifier(auth, (key, ttlMs) => this.#store.once(key, ttlMs))
     this.#dev = auth.dev ? new DevAuthority(auth.dev === true ? {} : auth.dev, { name: this.name, title: localize(options.title, this.locale, this.locale), allPermissions: () => [...this.#permissions.keys()] }) : null
     if (this.#dev) this.#verifier.useDev(this.#dev)
+    this.#embed = options.embed ? new EmbedAuthority(options.embed, this.#store, () => this.#embedPages()) : null
+  }
+
+  // ------------------------------------------------------------ embedded pages (spec §5.1)
+
+  /** The same-site `url` pages: the ones a ticket opens. */
+  #embedPages(): { name: string; path: string }[] {
+    return [...this.#pages.values()].flatMap((p) => (p.config.kind === "custom" && "url" in p.config && p.config.url.startsWith("/") ? [{ name: p.name, path: p.config.url.split(/[?#]/)[0]! }] : []))
+  }
+
+  /** The app's origin for tickets and sessions: its configured public address, else the one the request reached. */
+  #appOrigin(requestOrigin: string): string {
+    const resource = this.options.auth?.resource
+    return resource ? new URL(resource).origin : requestOrigin
+  }
+
+  /** The embedded pages' side for the route in front of them: null when the app declares no `embed`. */
+  get embed(): AppEmbed | null {
+    const e = this.#embed
+    if (!e) return null
+    return {
+      path: e.path,
+      exchangePath: e.exchangePath,
+      headers: () => e.headers(),
+      exchange: async (request) => {
+        const problem = this.#productionProblem()
+        if (problem) return e.refusal(new EmbedError(500, "misconfigured", problem))
+        return e.exchange(request, this.#appOrigin(this.#origin(request)))
+      },
+      caller: async (page, request) => {
+        const header = request.headers.get("cookie") ?? ""
+        const name = e.cookieName(page)
+        const value = header.split(/;\s*/).find((c) => c.startsWith(`${name}=`))?.slice(name.length + 1)
+        return e.session(page, value, request.headers.get("sec-fetch-dest"), this.#appOrigin(this.#origin(request)))
+      },
+    }
   }
 
   // ------------------------------------------------------------ registration
@@ -377,6 +434,12 @@ export class AppServer {
     }
     if (config.kind === "custom" && "url" in config && !/^https:\/\//.test(config.url) && !/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?\//.test(config.url) && !/^\/(?!\/)[^\s\\]*$/.test(config.url))
       throw new Error(`page "${name}": url must be https, or a path on the app's own site (/embed/…)`)
+    if (config.kind === "custom" && "url" in config && config.url.startsWith("/")) {
+      if (!this.#embed) throw new Error(`page "${name}": a page on the app's own site (${config.url}) is framed by hosts on other sites, so it needs \`embed\` in defineApp (frameAncestors and a signing secret, spec §5.1)`)
+      const path = config.url.split(/[?#]/)[0]!
+      if (!path.startsWith(`${this.#embed.path}/`) || path === this.#embed.exchangePath || !/^(\/[a-z0-9][a-z0-9._~-]*)+$/.test(path)) throw new Error(`page "${name}": url ${config.url} must be a page under ${this.#embed.path}/ (embed.path)`)
+      if (config.url !== path) throw new Error(`page "${name}": url ${config.url}: a same-site embed page is a path without query or fragment`)
+    }
     const tool = config.kind === "record" ? this.#entities.get(config.entity.name)!.tools.get : { name: config.expose?.tool ?? `open_${name}`, plain: config.expose?.plain !== false }
     if (config.kind !== "record") this.#claimTools(tool.name)
     this.#pages.set(name, { name, config: config as unknown as PageConfig, tool })
@@ -1068,7 +1131,8 @@ export class AppServer {
       else if (c.kind === "dashboard") view(this.#pageViewUri(p.name), t(c.title), () => viewHtml(t(c.title), { tool: p.tool.name }))
       if (c.kind === "custom" && "url" in c) {
         const url = absolute(c.url)
-        if (url) view(this.#pageViewUri(p.name), t(c.title), () => urlPageHtml(t(c.title), url), { url })
+        // A same-site page signs the viewer in with a ticket (spec §5.1); a page on another site is framed as it is.
+        if (url) view(this.#pageViewUri(p.name), t(c.title), () => urlPageHtml(t(c.title), url, c.url.startsWith("/") ? { tool: EMBED_TOOL, page: p.name } : null), { url })
       }
       if (c.kind === "custom" && "view" in c) view(this.#pageViewUri(p.name), t(c.title), () => (typeof c.view.html === "function" ? c.view.html() : c.view.html), c.view)
     }
@@ -1223,6 +1287,42 @@ export class AppServer {
             content: text(JSON.stringify({ id: r.uri, title: entity ? this.#markCard(entity, { title }, "", []).title : title, text: JSON.stringify(marked), url: r.uri, metadata: { type: parsed.type, ...(kind ? { kind } : {}) } })),
             structuredContent: entity ? { entity: entity.name, uri: r.uri, record, refs, view: r.template === "record" ? { ...("view" in r ? r.view : {}), title: this.#t(caller, entity.config.label) } : undefined } : { ...r, view: { kind: "fragment", title } },
             ...this.#marks(pointers),
+          }
+        }),
+      )
+    }
+
+    // Embed tickets (spec §5.1): for hosts and the app's own url-page views, hidden from models.
+    const embed = this.#embed
+    if (embed) {
+      const pages = new Map(this.#embedPages().map((e) => [e.name, e]))
+      reg(
+        EMBED_TOOL,
+        {
+          title: "Embed ticket",
+          description: "For hosts and the app's views: a one-minute, single-use ticket that signs the viewer in to one of the app's embedded pages, framed by a document of the given origin.",
+          inputSchema: z.object({ page: z.string().describe("The page's name (manifest pages with a same-site url)"), origin: z.string().describe("The origin of the document that frames the page and posts the ticket") }),
+          annotations: { title: "Embed ticket", readOnlyHint: true, idempotentHint: false, destructiveHint: false, openWorldHint: false },
+          _meta: { ui: { visibility: ["app"] }, "openai/visibility": "private", "openai/widgetAccessible": true },
+        },
+        guard(EMBED_TOOL, async (args) => {
+          const name = String(args.page)
+          const page = this.#pages.get(name)
+          // The same gates as the page's own tool (open_<page>): a page the caller can't open has no ticket either.
+          if (!page || !pages.has(name) || (plainCaller && !page.tool.plain)) return failure("not_found", `No embedded page "${name}".`)
+          if (page.config.permission && !caller.permissions.has(page.config.permission)) return failure("permission_denied", `You may not open ${this.#t(caller, page.config.title)}.`)
+          try {
+            const appOrigin = this.#appOrigin(request.origin ?? "")
+            if (!appOrigin) return failure("internal", "The app's public origin is unknown (set auth.resource).")
+            const ticket = await embed.issue(caller, name, String(args.origin), appOrigin)
+            return { content: text(`A ticket for «${this.#t(caller, page.config.title)}», valid until ${ticket.expiresAt}.`), structuredContent: ticket }
+          } catch (error) {
+            if (!(error instanceof EmbedError)) throw error
+            if (error.code === "misconfigured") {
+              console.error(`[${PROTOCOL_ID}] ${error.message}`)
+              return failure("internal", "The app can't issue embed tickets (misconfigured).")
+            }
+            return failure(error.code === "not_found" ? "not_found" : error.status === 403 ? "permission_denied" : "invalid_input", error.message, error.code === "wrong_origin" ? { fields: { origin: error.message } } : undefined)
           }
         }),
       )
@@ -1533,6 +1633,7 @@ export class AppServer {
       auth: { ...(auth.resource ? { resource: auth.resource } : {}), authorizationServers: auth.authorizationServers ?? (auth.issuers ?? []).map((i) => i.issuer) },
       view: this.#viewUri(),
       resolveTool: RESOLVE_TOOL,
+      ...(this.#embed ? { embed: { tool: { name: EMBED_TOOL, plain: true }, path: this.#embed.path, frameAncestors: [...this.#embed.frameAncestors] } } : {}),
       ...([...this.#entities.values()].some((e) => e.fields.some((f) => f.search)) ? { searchTool: "search" } : {}),
       ...(Object.keys(this.#kinds).length ? { kinds: Object.fromEntries(Object.entries(this.#kinds).map(([k, d]) => [k, { label: L(d.label)!, properties: d.properties }])) } : {}),
       entities,
@@ -1663,6 +1764,9 @@ export class AppServer {
     const problem = this.#productionProblem()
     if (problem) return json({ error: "misconfigured", error_description: problem }, 500)
     const base = this.#path
+    // The embed ticket exchange (spec §5.1), for a server that hands every request here (modelapp/node); Next's proxy
+    // answers it before the route (embedProxy).
+    if (this.#embed && url.pathname === this.#embed.exchangePath) return this.embed!.exchange(request)
     const devHere = Boolean(this.#dev) && isLoopback(info.remoteAddress)
     // In dev the server is whatever address the caller reached it by (a tunnel); otherwise only its configured one.
     const requestResource = `${origin}${base}/mcp`

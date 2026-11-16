@@ -120,6 +120,14 @@ export const manifestSchema = z.object({
     .describe("MCP authorization: the server's own address (the token audience) and who issues tokens"),
   view: z.string().describe("The generated ui:// view for lists, records, dashboards and fragments"),
   resolveTool: z.string().describe("Hosts resolve record and fragment URIs with this tool"),
+  embed: z
+    .object({
+      tool: toolRef.describe("The tool a host asks for an embed ticket with (spec §5.1)"),
+      path: z.string().describe("Where the embed pages live; tickets are posted to <path>/_ticket"),
+      frameAncestors: z.array(z.string()).min(1).describe("The hosts that may frame the embed pages (CSP frame-ancestors sources)"),
+    })
+    .optional()
+    .describe("Same-site url pages, framed by hosts with a sign-in ticket"),
   searchTool: z.string().optional(),
   kinds: z
     .record(z.string(), z.object({ label: labelMap, properties: z.record(z.string(), z.object({ type: z.enum(PROPERTY_TYPES), many: z.boolean().optional(), key: z.boolean().optional() })) }))

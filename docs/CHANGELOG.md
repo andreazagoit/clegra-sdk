@@ -5,6 +5,21 @@ changelog in [future/CHANGELOG.md](future/CHANGELOG.md).
 
 ## Unreleased (1.0 draft)
 
+### Embedded pages: the sign-in ticket (spec §5.1)
+
+- A same-site `url` page is signed in with a ticket, not the app's session cookie (a third-party cookie in a host's
+  frame). The host (or the SDK's url-page view, over the MCP Apps bridge) calls `modelapp_embed { page, origin }`
+  with the viewer's token: a one-minute HS256 JWT for that page and framing origin, carrying the caller as
+  `resolve` named it. The frame POSTs it to `/embed/_ticket` (never in a URL); the app checks `Origin`,
+  `Sec-Fetch-Dest: iframe`, signature, page, expiry (5 s skew) and single use (`store.once`), then answers 303 to
+  the page with a `Secure; HttpOnly; SameSite=None; Partitioned` cookie for the page's path.
+- `defineApp({ embed: { frameAncestors, secret?, path?, sessionSeconds? } })`, required with a same-site page;
+  manifest `embed: { tool, path, frameAncestors }`. Every embed response carries `frame-ancestors` = the declared
+  hosts, never `X-Frame-Options`.
+- `modelapp/next`: `embedProxy(app)` (proxy.ts) and `getEmbedCaller(app, page)`; core `app.embed`.
+- Conformance: `embed.frame-ancestors` (public) and `embed.ticket`.
+- Examples: `EMBED_FRAME_ANCESTORS` is gone; the hosts are declared in code; the boards read `getEmbedCaller`.
+
 ### The `modelapp` package is built for npm
 
 - The tarball ships ESM JavaScript with `.d.ts` files and source maps (`dist/`), not TypeScript source: a
