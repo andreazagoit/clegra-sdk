@@ -198,7 +198,9 @@ describe("the generated clegra.ts", () => {
     const failed = report.checks.filter((c) => !c.ok)
     assert.deepEqual(failed.map((c) => c.id), ["auth.mcp"], JSON.stringify(failed))
     assert.match(failed[0]!.detail!, /names no authorization server/)
-    assert.ok(report.checks.filter((c) => c.id.startsWith("mcp.")).every((c) => c.ok && !c.skipped))
+    // Every MCP check ran, but mcp.visibility, which has nothing to check in an app without app-only items.
+    assert.ok(report.checks.filter((c) => c.id.startsWith("mcp.")).every((c) => c.ok && (!c.skipped || c.id === "mcp.visibility")))
+    assert.equal(report.checks.find((c) => c.id === "mcp.visibility")?.skipped, true)
 
     const call = (bearer: string, name: string, args: Record<string, unknown>) =>
       app.fetch(new Request("http://localhost:3000/mcp", { method: "POST", headers: { authorization: `Bearer ${bearer}`, "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }) }))
