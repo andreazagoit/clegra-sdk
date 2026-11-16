@@ -4,8 +4,8 @@
 > authorization server». This page shows how to meet them with the sign-in you already have.
 
 An MCP client (Claude, ChatGPT, the MCP Inspector) connects to `https://app.example.com/mcp` as an OAuth client.
-Each person signs in once with your app's own sign-in and gets an access token for your MCP server. clegra
-answers the `401`, serves the protected-resource metadata (RFC 9728) and enforces everything after that point. Your
+Each person signs in once with your app's own sign-in and gets an access token for your MCP server. The `clegra`
+package answers the `401`, serves the protected-resource metadata (RFC 9728) and enforces everything after that point. Your
 code does one thing: it says whether a token is good and who it belongs to.
 
 ```ts
@@ -28,7 +28,7 @@ The contract:
 - `installation` is the tenant your handlers scope by (`ctx.installation`): an organization, a workspace, an account.
   It must come from the verified token or your database. Never take it from a request parameter. It must match
   `[A-Za-z0-9._:-]{1,128}`.
-- `permissions` are ids you declared under `permissions`, or `"all"`. clegra drops ids you didn't declare. Map them
+- `permissions` are ids you declared under `permissions`, or `"all"`. The SDK drops ids you didn't declare. Map them
   from your roles, and read the roles live when you can, so a removed member loses access on the next call.
 - `subject` (optional, default `person.id`): idempotency of writes is kept per subject.
 - Return `null` for a token that isn't yours. Throw `AuthError("reason")` to refuse with a reason; the reason goes
@@ -285,7 +285,7 @@ export const appAuth: AuthOptions = {
 ```
 
 The gaps: `resource` is off by default, and dynamic CIMD is Early Access. Auth0 permission names are Auth0's own,
-so name your MAP permissions the same (`deals.view`) or map between them. Not confirmed: whether the metadata lists
+so name your app's permissions the same (`deals.view`) or map between them. Not confirmed: whether the metadata lists
 `client_id_metadata_document_supported` once CIMD is on.
 
 ### (d) WorkOS AuthKit

@@ -1,6 +1,7 @@
 # Quickstart
 
-> Clegra apps: an app that is also an MCP server. One package, `clegra` (ESM JavaScript with its
+> A Clegra app is an app that Clegra draws natively and that is also a plain MCP server for ChatGPT, Claude and any
+> MCP client. One package, `clegra` (ESM JavaScript with its
 > types, Node 20+; not on npm yet: until it is, install its tarball, see [RELEASE.md](RELEASE.md)). For a Next.js app that already has data and a sign-in: **five
 > minutes to see it, a day to ship it.**
 
@@ -61,7 +62,7 @@ npx clegra check http://localhost:3000 --token <CLEGRA_LOCAL_TOKEN>
 `NODE_ENV` is not `production`. `next build`, `next start` and every deployment (Vercel previews included) set
 `production`, and then the bearer is refused whatever the environment holds. In production without
 `CLEGRA_PUBLIC_URL`, every request gets a `500 misconfigured` that names the missing setting. The token is random
-per project and lives in `.env.local`, which Next's `.gitignore` keeps out of git. clegra's own dev sign-in
+per project and lives in `.env.local`, which Next's `.gitignore` keeps out of git. The SDK's own dev sign-in
 (`auth.dev`, a sign-in page for test people) does **not** exist under Next: it trusts only loopback callers, and a
 route handler can't know the caller's address, so `toNextHandlers` refuses it. `auth.anonymous` (no token at all) is
 not used either. It has no production guard, and with it nobody ever gets a `401`.
@@ -106,7 +107,7 @@ the Inspector, `clegra check` and workspace hosts on your machine.
 
 ## Without Next.js: one file, `listen`
 
-The same object runs on Node's own HTTP server. There, clegra's dev sign-in works, because the socket tells it
+The same object runs on Node's own HTTP server. There, the SDK's dev sign-in works, because the socket tells it
 the caller's address:
 
 ```ts

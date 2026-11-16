@@ -5,19 +5,19 @@
 > where the two differ.
 
 A small shop's warehouse: **products**, **stock movements** and customer **orders**. It is an ordinary Next.js App
-Router app with its own sign-in (better-auth with organizations, the organization being the tenant), to which MAP was
-added. It exists to show that MAP doesn't care about the data layer: the [CRM](crm.md) uses Drizzle, the warehouse
+Router app with its own sign-in (better-auth with organizations, the organization being the tenant), made a
+Clegra app afterwards. It exists to show that the data layer is the app's own choice: the [CRM](crm.md) uses Drizzle, the warehouse
 uses **plain SQL**.
 
 What it shows:
 
 - **Plain SQL, no ORM.** The app has one `sql(text, params)` and one `transaction(fn)` over `pg` or PGlite
   (`lib/db.ts`), and its functions (`listProducts`, `registerMovement`, `confirmOrder`, … in `lib/warehouse.ts`)
-  always take the tenant first. The MAP definition (`lib/clegra.ts`) calls those same functions with
+  always take the tenant first. The app definition (`lib/clegra.ts`) calls those same functions with
   `ctx.installation`. Filters, sort, search and the cursor arrive already checked, and the list functions turn them
   into SQL.
 - **A field permission.** `product.purchaseCost` carries `permission: "products.cost"`, which admins have and members
-  don't. clegra keeps it out of members' rows and records, and refuses it in their filters, sorts and search. The
+  don't. The SDK keeps it out of members' rows and records, and refuses it in their filters, sorts and search. The
   `stock_value` fragment, which is computed at purchase cost, requires the same permission.
 - **A confirmed action.** `confirm_order` takes all of an order's goods out of stock at once, so it is
   `confirm: "always"`. The person confirms in the host, and a plain client that can elicit is asked by the server.

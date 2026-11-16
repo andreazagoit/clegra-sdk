@@ -1,13 +1,14 @@
-# AI guide: building a Clegra apps app
+# AI guide: building a Clegra app
 
 > For coding agents. This one file is enough to write a correct app.
-> A Clegra app is an app that is also an MCP server. One package, `clegra`; normative text in [spec.md](spec.md).
+> A Clegra app is an app that Clegra draws natively and that is also a plain MCP server for ChatGPT, Claude and any
+> MCP client. One package, `clegra`; normative text in [spec.md](spec.md).
 
 ## The model
 
 You write **one object**, `defineApp({ … })` (exported by name, `app`, in a Next.js app). The SDK turns
-it into (a) a JSON manifest at `/.well-known/clegra.json` that workspace
-hosts draw natively and (b) a plain MCP server at `/mcp` with tools and MCP
+it into (a) a JSON manifest at `/.well-known/clegra.json` that Clegra (the
+workspace host) draws natively and (b) a plain MCP server at `/mcp` with tools and MCP
 Apps views for ChatGPT, Claude and any MCP client. Permissions, field
 visibility, confirmations and idempotency are enforced by the SDK before your
 handlers run. There is no other authoring API.
@@ -21,7 +22,7 @@ handlers run. There is no other authoring API.
 | `clegra/node` | `listen(app, { port })`: Node's own HTTP server |
 | `clegra/testing` | `testClient(app, …)` |
 | `clegra/spec` | `checkApp`, `formatReport`: the conformance checks |
-| CLI | `npx clegra init` (adds MAP to a Next.js app), `npx clegra check <url> --token <bearer>` |
+| CLI | `npx clegra init` (makes a Next.js app a Clegra app), `npx clegra check <url> --token <bearer>` |
 
 ## In a Next.js app (App Router)
 
@@ -70,7 +71,7 @@ export default defineApp({
     resolve: async (token, request, { resource }) => ({ installation: "org_1", person: { id, name }, permissions: [...] }), // your own users' tokens: verify (signature, exp, aud === resource), map to a caller, or null
     authorizationServers: ["https://crm.example.com/api/auth"], // your auth library's OAuth server, named in the protected-resource metadata
     serve: async (request) => null,                          // optional: answer your authorization server's RFC 8414 metadata at the root; null otherwise
-    issuers: [{ issuer: "https://host.example.com" }],       // optional: workspace hosts (tokens with the clegra claim)
+    issuers: [{ issuer: "https://host.example.com" }],       // optional: Clegra nodes as workspace hosts (tokens with the clegra claim)
   },
   path: "/api/clegra",             // optional, never under Next: where MCP lives with app.fetch elsewhere (default /mcp at the root)
   store: new SqlStore(query),        // optional: idempotency + one-time token ids in your Postgres (serverless, several instances)

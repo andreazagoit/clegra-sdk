@@ -1,9 +1,28 @@
 # Changelog
 
-MAP 1.0 and the `modelapp` package (not published yet). Newest first. The larger earlier drafts keep their own
-changelog in [future/CHANGELOG.md](future/CHANGELOG.md).
+Clegra apps 1.0 and the `clegra` package (not published yet). Newest first. Entries older than the rename below keep
+the names of their time (`modelapp`, MAP, docs/map): they are history.
 
 ## Unreleased (1.0 draft)
+
+### Renamed to Clegra apps and the `clegra` package
+
+- Clegra apps are Clegra's own developer platform, not an open standard: the spec is «Clegra apps — specification»
+  (1.0 draft), and nothing in it asks other hosts to implement it. Every app is still a plain, conformant MCP server
+  (tools, MCP Apps views, OAuth) that ChatGPT, Claude and any MCP client use, plus a manifest Clegra draws natively.
+- One npm package, `clegra` (was `modelapp`): `clegra`, `clegra/next`, `clegra/node`, `clegra/testing`,
+  `clegra/spec`; the CLI is `npx clegra init` and `npx clegra check <url>`.
+- Wire names: manifest `/.well-known/clegra.json`; URIs `clegra://<app>/<entity>/<id>`; `_meta.clegra`, the
+  `clegra` token claim and OAuth scope; JWT `typ` `clegra-confirm+jwt`, `clegra-embed+jwt`,
+  `clegra-embed-session+jwt`; tools `clegra_resolve`, `clegra_embed`; cookie `__Secure-clegra-embed-<page>`; JSON
+  Schema `clegra.schema.json` (`urn:clegra:manifest:1.0`).
+- Next.js: the mount is `app/api/clegra/[...path]` (`/api/clegra`); `withClegra`, `clegraRewrites`,
+  `WithClegraOptions`. The SDK's store table is `clegra_store`; environment variables are `CLEGRA_*`
+  (`CLEGRA_PUBLIC_URL`, `CLEGRA_ISSUERS`, `CLEGRA_EMBED_SECRET`, `CLEGRA_LOCAL_TOKEN`, `CLEGRA_DEV`,
+  `CLEGRA_OAUTH_*`; the pack guard reads `CLEGRA_PUBLISH=approved`).
+- The documentation moved from docs/map to docs/developers; the earlier, larger drafts (docs/map/future) are gone.
+  The examples live in `examples/apps/crm` and `examples/apps/warehouse`; root scripts `npm run clegra:test`,
+  `clegra:crm`, `clegra:schema`, `clegra:check`.
 
 ### Kinds in a workspace host: the rules made precise (spec §9; docs/map/kinds.md)
 

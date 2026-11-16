@@ -44,7 +44,7 @@ machine). Then, in a fresh Next.js App Router app (the repository's Next, React 
 tarball installed: `npx clegra init`, `next dev` + `npx clegra check --token <the local bearer>`, `next build`
 + `next start` + `npx clegra check` (the local bearer refused in production), a plain Node ESM script importing
 every entry and running an app with `testClient`, and `tsc` with `moduleResolution` `bundler` and `node16`
-(clegra's own `.d.ts` with `skipLibCheck` off). The folder must have no `node_modules` or `package.json` above it.
+(the package's own `.d.ts` with `skipLibCheck` off). The folder must have no `node_modules` or `package.json` above it.
 It uses `--port` and `--port + 1` (and `--port + 2`, a closed port, for the guard). `--keep` keeps the app's
 `node_modules`.
 

@@ -4,8 +4,8 @@
 
 A small sales team's CRM — **companies**, **contacts**, **deals**, **calls** — built the way a developer
 already builds a web app: Next.js (App Router), its own sign-in (better-auth: email + password,
-organizations as tenants), its own database (Drizzle on Postgres; an embedded PGlite locally). MAP is
-added on top in one file, `clegra/app.ts`, over the functions the pages already use.
+organizations as tenants), its own database (Drizzle on Postgres; an embedded PGlite locally). The Clegra
+app is added on top in one file, `clegra/app.ts`, over the functions the pages already use.
 
 **The pitch:** the page's «Mark as won» button and the MCP tool `deal_mark_won` call the same
 `markWon(orgId, dealId)` in `lib/crm.ts`. Nothing is written twice; the SDK adds the tenant from the
@@ -15,7 +15,7 @@ verified caller, the permissions, the confirmations and the MCP surface.
 
 | File | What it is |
 |---|---|
-| `db/schema.ts` | The CRM's tables (every row has `org_id`), `tenants`, `people`, the MAP store table. `db/auth-schema.ts` is better-auth's, generated |
+| `db/schema.ts` | The CRM's tables (every row has `org_id`), `tenants`, `people`, the SDK's store table (`clegra_store`). `db/auth-schema.ts` is better-auth's, generated |
 | `lib/db.ts` | Postgres (postgres.js) with `DATABASE_URL`; PGlite in `.data/` without; production without it is an error |
 | `lib/crm.ts` | The app's functions: `listDeals(orgId, query)` (filters, search, sort, paging in SQL), `markWon`, `setStage`, `logCall`, `createDeal`, pipeline totals, workspace provisioning |
 | `lib/auth-options.ts`, `lib/auth.ts` | better-auth: email + password, organizations, and the OAuth server for MCP clients (`jwt` + `mcp` + `cimd`) |
@@ -23,7 +23,7 @@ verified caller, the permissions, the confirmations and the MCP surface.
 | `lib/session.ts`, `lib/permissions.ts` | The signed-in member of the active organization; role → permissions |
 | `app/(crm)/…`, `app/embed/pipeline` | Pages and server actions; the board page made to be framed, signed in with a host's ticket (`getEmbedCaller`; `proxy.ts`: `embedProxy`, spec §5.1) |
 | `app/sign-in`, `app/oauth/consent` | better-auth's login and consent pages; they also continue an OAuth authorization |
-| `clegra/app.ts`, `clegra/index.ts` | The MAP definition, `createCrmApp({ auth, store })`, and the app as served |
+| `clegra/app.ts`, `clegra/index.ts` | The app definition, `createCrmApp({ auth, store })`, and the app as served |
 | `clegra/auth.ts` | The app's own `resolve` for better-auth access tokens, the issuer metadata, workspace hosts (`CLEGRA_ISSUERS`) |
 | `app/api/clegra/[...path]/route.ts`, `next.config.ts` | `toNextHandlers` and `withClegra`: MCP at `/mcp`, metadata under `/.well-known/` |
 | `test/` | The lib on PGlite, the MCP surface (`mcp.snapshot.json`), real OAuth tokens (`oauth.test.ts`) |
@@ -80,7 +80,7 @@ Both are just values of `org_id`; `tenants` records which kind each one is.
 cd examples/apps/crm
 npm run setup     # .env.local with generated secrets (if missing), migrations, demo data
 npm run dev       # http://localhost:3920 — «Enter as Alice Morgan (sales manager)» on /sign-in
-npm test          # lib + MAP tests on in-memory PGlite
+npm test          # lib + Clegra app tests on in-memory PGlite
 ```
 
 Demo accounts: Alice Morgan (admin, every permission) and Ben Carter (member, no money) in *Orbit Sales*;

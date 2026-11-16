@@ -1,8 +1,11 @@
-# Clegra apps — specification 1.0
+# Clegra apps — specification
 
-> Draft (2026-11-14). Normative; MUST, SHOULD and MAY as in RFC 2119.
-> The Clegra apps describes apps that are also MCP servers. Its technical name is
-> `clegra` (manifest path, URI scheme, `_meta` key, token claim, resolve tool).
+> Version 1.0, draft (2026-11-14). Normative; MUST, SHOULD and MAY as in RFC 2119.
+> Clegra apps are Clegra's own developer platform: apps that Clegra draws natively
+> in its workspace and that are, at the same time, plain MCP servers that ChatGPT,
+> Claude and any MCP client use as they are. The package `clegra` builds them; this
+> page is the contract they meet. The wire name is `clegra` (manifest path, URI
+> scheme, `_meta` key, token claim, OAuth scope, resolve tool).
 > Anything not on this page is not part of 1.0.
 
 ## 1. What it is
@@ -10,16 +13,17 @@
 An **app** is described once, as one definition: entities, actions, pages,
 fragments, agents, permissions, settings. The definition has two halves:
 
-- the **manifest**: pure JSON, no code. A host that understands it (a
-  *workspace host*) reads it with one fetch and draws the app natively: pages
-  in its navigation, records as cards, actions behind a confirmation, agents.
+- the **manifest**: pure JSON, no code. The *workspace host* (Clegra: the
+  node of the company or person that installed the app; «host» below) reads it
+  with one fetch and draws the app natively: pages in its navigation, records
+  as cards, actions behind a confirmation, agents.
 - the **handlers** (`get`, `list`, `run`, `data`), reached through a **plain
   MCP server** generated from the same definition: tools with correct
   annotations and MCP Apps `ui://` views. ChatGPT, Claude and any MCP client
   use it as they use any MCP server.
 
 **No MCP extension is required or announced.** An MCP client never needs the
-manifest; a workspace host needs nothing beyond the manifest and MCP.
+manifest; the workspace host needs nothing beyond the manifest and MCP.
 
 ## 2. The manifest
 
@@ -657,9 +661,9 @@ needs anything from an app beyond §2–§7.
    installation's life (other apps store URIs that carry it). When another app
    of the workspace is named as a renamed app's own `name`, the host MUST NOT
    send the renamed app a URI of that other app (it would read as its own):
-   it refuses the call instead. (A public registry that
-   lists apps may give them globally unique, publisher-verified names; that is
-   a listing, outside this protocol.)
+   it refuses the call instead. (A public directory of
+   apps may give them globally unique, publisher-verified names; that is a
+   listing, outside this specification.)
 2. **Caller.** Every call a host makes to list, search, match or resolve
    across apps MUST be made for the viewer, with the viewer's token for that
    app. A host MUST NOT show a person data obtained with another caller's
