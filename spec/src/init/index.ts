@@ -5,12 +5,14 @@ import { dirname, join, resolve } from "node:path"
 import { configWarnings, wrapNextConfig } from "./next-config"
 import { detectProject, importPathFor, InitError, clegraPath, routePath, type Project } from "./project"
 import { envLines, LOCAL_TOKEN_ENV, clegraFile, nextConfigFile, routeFile } from "./templates"
+import { initUi } from "./ui"
 
 /**
  * `clegra init`: the clegra package added to an existing Next.js App Router app. It writes `clegra.ts`, the route
  * `app/api/clegra/[...path]/route.ts`, wraps next.config with `withClegra`, and puts a local bearer in
- * `.env.local`. It never overwrites a file: what exists is left as it is, and what it can't do safely it prints
- * for you to do by hand. `dryRun` prints the same and writes nothing.
+ * `.env.local`. With `ui`, also clegra/ui: its web libraries in package.json, its stylesheet after Tailwind (ui.ts).
+ * It never overwrites a file: what exists is left as it is, and what it can't do safely it prints for you to do by
+ * hand. `dryRun` prints the same and writes nothing.
  */
 
 export { InitError }
@@ -19,7 +21,7 @@ export type InitStep = { verb: "create" | "edit" | "skip" | "by hand"; path: str
 
 export type InitResult = { project: Project; steps: InitStep[]; warnings: string[]; next: string[]; token: string | null }
 
-export type InitOptions = { cwd: string; dryRun?: boolean }
+export type InitOptions = { cwd: string; dryRun?: boolean; ui?: boolean }
 
 export function runInit(options: InitOptions): InitResult {
   const root = resolve(options.cwd)
@@ -85,6 +87,15 @@ export function runInit(options: InitOptions): InitResult {
   }
   if (!project.envIgnored) warnings.push(".gitignore does not keep .env.local out of git: add `.env*.local` to it")
 
+  // 5. clegra/ui (--ui).
+  let installUi = false
+  if (options.ui) {
+    const ui = initUi(project, write)
+    steps.push(...ui.steps)
+    warnings.push(...ui.warnings)
+    installUi = ui.install
+  }
+
   if (project.oldZod) warnings.push(`zod ${project.oldZod} is installed: clegra needs zod 4 (npm i zod@4)`)
   if (project.proxy) warnings.push(`${project.proxy} runs before every route: let /mcp, /.well-known/* and /api/clegra/* through without a session (MCP clients send a bearer token, never your cookies)`)
 
@@ -92,6 +103,7 @@ export function runInit(options: InitOptions): InitResult {
   const shown = write ? token : "<generated on a real run>"
   const next = [
     ...(project.missing.length ? [`npm i ${project.missing.join(" ")}`] : []),
+    ...(installUi ? ["npm install   (clegra/ui's libraries, added to package.json)"] : []),
     `npm run dev   (then ${base}/.well-known/clegra.json is the manifest, ${base}/mcp the MCP server)`,
     `npx clegra check ${base} --token ${shown}`,
     `MCP Inspector: npx @modelcontextprotocol/inspector, Streamable HTTP, ${base}/mcp, header Authorization: Bearer ${shown}`,
@@ -119,14 +131,15 @@ export function formatInit(result: InitResult, dryRun: boolean): string {
 
 export function initMain(args: string[]): number {
   const dryRun = args.includes("--dry-run")
-  const unknown = args.filter((a) => a.startsWith("--") && a !== "--dry-run")
+  const ui = args.includes("--ui")
+  const unknown = args.filter((a) => a.startsWith("--") && a !== "--dry-run" && a !== "--ui")
   const dirs = args.filter((a) => !a.startsWith("--"))
   if (unknown.length || dirs.length > 1) {
-    console.error("usage: clegra init [dir] [--dry-run]")
+    console.error("usage: clegra init [dir] [--ui] [--dry-run]")
     return 2
   }
   try {
-    console.log(formatInit(runInit({ cwd: dirs[0] ?? process.cwd(), dryRun }), dryRun))
+    console.log(formatInit(runInit({ cwd: dirs[0] ?? process.cwd(), dryRun, ui }), dryRun))
     return 0
   } catch (error) {
     if (error instanceof InitError) {
