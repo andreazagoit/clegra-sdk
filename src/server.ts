@@ -2031,6 +2031,7 @@ export class AppServer {
     const everyone: Caller = { installation: "manifest", installationId: "manifest", person: null, permissions: new Set(this.#permissions.keys()), host: "workspace", issuer: "", subject: "" }
     const pages = this.#allPages().map((p) => {
       const c = p.config
+      const { actions: pageActions, badge: pageBadge } = c as { actions?: ActionHandle[]; badge?: string }
       const base = {
         name: p.name,
         kind: c.kind,
@@ -2038,8 +2039,9 @@ export class AppServer {
         ...(c.icon ? { icon: c.icon } : c.kind === "record" || c.kind === "list" ? (this.#entities.get(c.entity.name)!.config.icon ? { icon: this.#entities.get(c.entity.name)!.config.icon } : {}) : {}),
         ...perm(c.permission, `page "${p.name}"`),
         params: plainSchema(jsonSchemaOf(this.#pageParams(p, everyone), "input")) as Record<string, unknown>,
-        ...(c.kind !== "record" && c.actions?.length ? { actions: c.actions.map((h) => this.#actions.get(h.tool)?.name ?? h.name) } : {}),
-        ...(c.kind !== "record" && c.badge !== undefined ? { badge: c.badge } : {}),
+        // Also on a record page, where the rules refuse them (a definition error, not a silent drop).
+        ...(pageActions?.length ? { actions: pageActions.map((h) => this.#actions.get(h.tool)?.name ?? h.name) } : {}),
+        ...(pageBadge !== undefined ? { badge: pageBadge } : {}),
       }
       const override = c.kind !== "custom" && c.view ? { view: this.#pageViewUri(p.name) } : {}
       if (c.kind === "list") return { ...base, entity: c.entity.name, columns: c.columns, tool: p.tool, ...override }
