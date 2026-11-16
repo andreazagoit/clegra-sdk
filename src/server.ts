@@ -2145,8 +2145,11 @@ export class AppServer {
     return this.#dev
   }
 
-  /** A dev access token (tests, local hosts). `host: "workspace"` makes the SDK ask for confirmation proofs. */
-  async devToken(input: { person?: string | Person; permissions?: string[] | "all"; host?: "workspace" | "plain"; installation?: string; locale?: string } = {}): Promise<string> {
+  /**
+   * A dev access token (tests, local hosts). `host: "workspace"` makes the SDK ask for confirmation proofs.
+   * `person: null` with `host: "workspace"`: the installation-level caller (schedules, later runs, lifecycle tools).
+   */
+  async devToken(input: { person?: string | Person | null; permissions?: string[] | "all"; host?: "workspace" | "plain"; installation?: string; locale?: string } = {}): Promise<string> {
     const dev = await this.#devStarted()
     return dev.token({ ...input, audience: DEV_ISSUER })
   }
