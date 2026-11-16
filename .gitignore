@@ -1,0 +1,3 @@
+# Copied in by `npm pack` (scripts/prepack.mjs) from docs/map/CHANGELOG.md and taken away after (scripts/postpack.mjs).
+# dist/ and .package.repo.json: the root .gitignore (packages/*/dist/, packages/*/.package.repo.json).
+/CHANGELOG.md

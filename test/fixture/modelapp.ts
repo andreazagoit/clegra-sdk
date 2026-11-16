@@ -23,6 +23,13 @@ export const app = defineApp({
     },
   },
   permissions: { "notes.view": { label: "See notes", default: true } },
+  // The embedded page (app/embed/board): framed by the test's host harness on http://localhost (another site than
+  // 127.0.0.1), signed in with a ticket. Development origins are refused in production: next start declares none.
+  embed: {
+    frameAncestors: process.env.NODE_ENV === "production" ? ["https://host.example"] : ["http://localhost:*"],
+    secret: process.env.FIXTURE_EMBED_SECRET,
+  },
+  pages: { board: { title: "Board", url: "/embed/board", permission: "notes.view" } },
   entities: {
     note: {
       label: "Note",

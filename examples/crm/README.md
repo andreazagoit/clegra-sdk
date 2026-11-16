@@ -53,10 +53,9 @@ organization.
 | Variable | |
 |---|---|
 | `MODELAPP_PUBLIC_URL` | The public origin. better-auth (`<origin>/api/auth`, the issuer) and MCP (`<origin>/mcp`) both derive from it. Required in production, https |
-| `BETTER_AUTH_SECRET` | Required. Long and random |
+| `BETTER_AUTH_SECRET` | Required. Long and random. The embed tickets' signing key is derived from it too |
 | `DATABASE_URL` | Postgres. Required in production (a Neon pooled URL with `sslmode=require` works) |
 | `DEMO_PASSWORD`, `DEMO_SIGNIN=1` | The demo accounts' password (used by the seed) and the one-click sign-in |
-| `EMBED_FRAME_ANCESTORS` | Origins that may frame `/embed/*`, besides the CRM itself |
 | `MODELAPP_ISSUERS` | Workspace hosts (e.g. a Clegra node) whose tokens are accepted, as `issuer\|jwksUri`, comma-separated. Each installation gets its own copy of the demo data |
 
 A missing variable is an error, never a silent fallback.

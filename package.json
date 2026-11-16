@@ -3,8 +3,20 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Model App Protocol (MAP): one typed object \u2014 defineApp({ entities, actions, pages, fragments, agents, \u2026 }) \u2014 becomes a JSON manifest for workspace hosts and a plain, conformant MCP server (tools, annotations, MCP Apps views) for ChatGPT, Claude and any MCP client. Also: Next.js route handlers and rewrites (modelapp/next), a Node server (modelapp/node), a test client (modelapp/testing), the conformance checks (modelapp/spec) and the `modelapp check` CLI. Spec: docs/map/spec.md.",
+  "description": "Model App Protocol (MAP): one typed object — defineApp({ entities, actions, pages, fragments, agents, … }) — becomes a JSON manifest for workspace hosts and a plain, conformant MCP server (tools, annotations, MCP Apps views) for ChatGPT, Claude and any MCP client. Also: Next.js route handlers and rewrites (modelapp/next), a Node server (modelapp/node), a test client (modelapp/testing), the conformance checks (modelapp/spec) and the `modelapp check` CLI. Spec: docs/map/spec.md.",
   "license": "MIT",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "mcp-server",
+    "mcp-apps",
+    "chatgpt-apps",
+    "claude",
+    "manifest",
+    "nextjs",
+    "oauth",
+    "sdk"
+  ],
   "engines": {
     "node": ">=20"
   },
@@ -14,16 +26,29 @@
     "./next": "./src/next/index.ts",
     "./node": "./src/node.ts",
     "./testing": "./src/testing.ts",
-    "./spec": "./spec/src/conformance.ts"
+    "./spec": "./spec/src/conformance.ts",
+    "./modelapp.schema.json": "./spec/schema/modelapp.schema.json",
+    "./kinds.json": "./spec/kinds.json",
+    "./package.json": "./package.json"
   },
   "bin": {
-    "modelapp": "./spec/src/cli.ts"
+    "modelapp": "spec/src/cli.ts"
   },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
   "scripts": {
+    "build": "node scripts/build.mjs",
     "typecheck": "tsc -p tsconfig.json",
     "test": "tsx --test \"{src,spec/src}/**/*.test.ts\"",
     "test:next": "tsx --test test/next.test.ts",
-    "schema": "tsx scripts/schema.ts"
+    "pack:check": "node scripts/pack-check.mjs",
+    "schema": "tsx scripts/schema.ts",
+    "prepack": "node scripts/prepack.mjs",
+    "postpack": "node scripts/postpack.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "^2.4.0",

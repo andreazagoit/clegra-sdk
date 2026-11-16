@@ -3,6 +3,7 @@ import type { z } from "zod"
 
 import type { EntityKind } from "../spec/src/kinds"
 import type { AuthOptions, Caller } from "./auth"
+import type { EmbedOptions } from "./embed"
 import type { Label } from "./labels"
 import { AppServer, type PeopleResolver } from "./server"
 import type { IdempotencyStore } from "./store"
@@ -163,10 +164,15 @@ export type AppDefinition<E extends Schemas, A extends Schemas, F extends Schema
    * person field holds the name itself.
    */
   people?: PeopleResolver
+  /**
+   * Pages on the app's own site that hosts frame (spec §5.1): the hosts that may frame them (`frameAncestors`), the
+   * signing secret (default `MODELAPP_EMBED_SECRET`), their path (default `/embed`). Required with a same-site `url` page.
+   */
+  embed?: EmbedOptions
 }
 
 /** What defineApp returns: the app, ready to serve. */
-export type App = Pick<AppServer, "name" | "locale" | "manifest" | "fetch" | "start" | "devMode" | "uri" | "fragmentUri" | "parseUri" | "createMcpServer" | "devToken" | "devConfirmation">
+export type App = Pick<AppServer, "name" | "locale" | "manifest" | "fetch" | "start" | "devMode" | "uri" | "fragmentUri" | "parseUri" | "createMcpServer" | "devToken" | "devConfirmation" | "embed">
 
 const confirmOf = (c: boolean | Confirm | undefined): Confirm | undefined => (c === true ? "always" : c === false ? "never" : c)
 

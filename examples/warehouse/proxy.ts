@@ -1,27 +1,12 @@
-import { NextResponse } from "next/server"
+import { embedProxy } from "modelapp/next"
+
+import { warehouseApp } from "@/lib/app"
 
 /**
- * Who may frame the embeddable pages (/embed/*): `Content-Security-Policy: frame-ancestors` from
- * EMBED_FRAME_ANCESTORS (space-separated origins, e.g. "https://chatgpt.com https://claude.ai"), read per request.
- * Default 'self'. Every other page may not be framed at all.
+ * The embedded pages (/embed/*, spec §5.1): `POST /embed/_ticket` exchanges a host's sign-in ticket for the page's
+ * partitioned session cookie, and every /embed response says who may frame it (frame-ancestors: the hosts declared in
+ * lib/modelapp.ts). Every other page may not be framed at all (next.config.ts).
  */
-const SOURCE = /^(?:'self'|'none'|https:\/\/[A-Za-z0-9.*-]+(?::\d+)?|http:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?)$/
+export const proxy = embedProxy(warehouseApp)
 
-export function proxy(request: Request) {
-  let ancestors = "'none'"
-  if (new URL(request.url).pathname.startsWith("/embed/")) {
-    const listed = (process.env.EMBED_FRAME_ANCESTORS ?? "").split(/\s+/).filter(Boolean)
-    const wrong = listed.filter((s) => !SOURCE.test(s))
-    // A wrong entry is a configuration error, said as one (never guessed around).
-    if (wrong.length) return new Response(`EMBED_FRAME_ANCESTORS is misconfigured: not origins: ${wrong.join(" ")}`, { status: 500 })
-    ancestors = listed.length ? listed.join(" ") : "'self'"
-  }
-  const response = NextResponse.next()
-  response.headers.set("content-security-policy", `frame-ancestors ${ancestors}`)
-  return response
-}
-
-export const config = {
-  // Pages only: not the API (MCP, better-auth), not Next's assets.
-  matcher: ["/((?!api/|mcp|\\.well-known/|_next/|favicon.ico).*)"],
-}
+export const config = { matcher: "/embed/:path*" }

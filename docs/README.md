@@ -19,12 +19,14 @@ export default defineApp({ name, title, version, locale, auth, permissions, sett
 |---|---|
 | [spec.md](spec.md) | The specification (normative, short) |
 | [quickstart.md](quickstart.md) | Next.js in 5 minutes (`npx modelapp init`), a day to ship; standalone Node; tests |
+| [kinds.md](kinds.md) | Kinds: when they pay off, third parties' dotted kinds, the promotion rule, what Clegra does with them |
 | [auth.md](auth.md) | Your sign-in as the authorization server, your `auth.resolve`: better-auth, Clerk, Auth0, WorkOS |
 | [ai-guide.md](ai-guide.md) ([llms.txt](llms.txt)) | The single-file reference for coding agents |
 | [examples/crm.md](examples/crm.md) | A CRM: Next.js, better-auth, Drizzle; code in [`examples/modelapp/crm`](../../examples/modelapp/crm) |
 | [examples/warehouse.md](examples/warehouse.md) | A warehouse: Next.js, better-auth, plain SQL; code in [`examples/modelapp/warehouse`](../../examples/modelapp/warehouse) |
 | [`packages/modelapp/spec`](../../packages/modelapp/spec) | The manifest's JSON Schema and the conformance checks, independent of the SDK |
 | [CHANGELOG.md](CHANGELOG.md) | What changed in 1.0 and the `modelapp` package |
+| [RELEASE.md](RELEASE.md) | What the `modelapp` tarball ships, the pack check, the publish guard and publish day |
 | [future/](future/README.md) | Earlier, larger drafts: non-normative, not part of 1.0 |
 
 **Status.** One package, [`packages/modelapp`](../../packages/modelapp) (`modelapp`, MIT, not published yet):

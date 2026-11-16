@@ -14,7 +14,7 @@ const { password, users } = await import("./setup")
 import { and, eq } from "drizzle-orm"
 import { verifyOAuthQueryParams } from "@better-auth/oauth-provider"
 import { decodeJwt, decodeProtectedHeader, generateKeyPair, SignJWT } from "jose"
-import { toNextHandlers } from "modelapp/next"
+import { embedProxy, toNextHandlers } from "modelapp/next"
 import { checkApp, formatReport } from "modelapp/spec"
 
 import { deals, member, user } from "../db/schema"
@@ -28,7 +28,11 @@ import { oauthAccessToken } from "../scripts/oauth-flow"
 
 const RESOURCE = `${SITE}/mcp`
 const ISSUER = `${SITE}/api/auth`
-const route = toNextHandlers(createCrmApp({ auth: crmAuth() }), { publicUrl: SITE })
+const crm = createCrmApp({ auth: crmAuth() })
+const route = toNextHandlers(crm, { publicUrl: SITE })
+// proxy.ts in front of the embedded pages (spec §5.1): the site as an HTTP client reaches it.
+const proxy = embedProxy(crm, { publicUrl: SITE })
+const site = (r: Request) => (new URL(r.url).pathname.startsWith("/embed/") ? proxy(r) : route[r.method as "GET"](r))
 const handler = (request: Request) => auth().handler(request)
 
 const accounts = { alice: "alice@orbit.example", ben: "ben@orbit.example", emma: "emma@kestrel.example" }
@@ -84,7 +88,7 @@ describe("the CRM's own users, with better-auth access tokens", () => {
     assert.equal(deals.rows.length, 5)
     assert.equal(deals.rows.find((d) => d.id === "d1")!.value, 18000)
     assert.deepEqual(deals.refs.owner, { [users.alice]: "Alice Morgan", [users.ben]: "Ben Carter" })
-    const report = await checkApp({ url: SITE, token: t.accessToken, fetch: (r) => route[r.method as "GET"](r) })
+    const report = await checkApp({ url: SITE, token: t.accessToken, fetch: site })
     assert.ok(report.ok && report.complete, formatReport(report))
   })
 
@@ -314,7 +318,7 @@ describe("the CRM's own users, with better-auth access tokens", () => {
       const headers = new Headers()
       for (const [k, v] of Object.entries(req.headers)) if (v !== undefined) headers.set(k, Array.isArray(v) ? v.join(", ") : v)
       const request = new Request(`${SITE}${req.url}`, { method: req.method, headers, ...(chunks.length ? { body: Buffer.concat(chunks) } : {}) })
-      const response = req.url!.startsWith("/api/auth/") ? await handler(request) : await route[(req.method ?? "GET") as "GET"](request)
+      const response = req.url!.startsWith("/api/auth/") ? await handler(request) : await site(request)
       const out: Record<string, string | string[]> = {}
       response.headers.forEach((v, k) => (out[k] = v))
       if (response.headers.getSetCookie().length) out["set-cookie"] = response.headers.getSetCookie()

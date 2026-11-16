@@ -5,6 +5,40 @@ changelog in [future/CHANGELOG.md](future/CHANGELOG.md).
 
 ## Unreleased (1.0 draft)
 
+### Kinds in a workspace host: the rules made precise (spec §9; docs/map/kinds.md)
+
+- §9.1 names: a host gives a clashing app another name at install time and keeps it (other apps store URIs that carry
+  it); it translates URIs both ways on every call and refuses, rather than sends, a URI an app could misread as its own.
+- §9.4 sources: `not-linked` is a source state for an app that signs people in itself when the viewer has not linked
+  their account; a reference the viewer can't resolve for that reason reads `no-access`.
+- docs/map/kinds.md: when kinds pay off, third parties' dotted kinds, and the promotion rule (two independent apps, a
+  host behaviour that uses it, precise keys, schema.org names; additive only).
+
+### Embedded pages: the sign-in ticket (spec §5.1)
+
+- A same-site `url` page is signed in with a ticket, not the app's session cookie (a third-party cookie in a host's
+  frame). The host (or the SDK's url-page view, over the MCP Apps bridge) calls `modelapp_embed { page, origin }`
+  with the viewer's token: a one-minute HS256 JWT for that page and framing origin, carrying the caller as
+  `resolve` named it. The frame POSTs it to `/embed/_ticket` (never in a URL); the app checks `Origin`,
+  `Sec-Fetch-Dest: iframe`, signature, page, expiry (5 s skew) and single use (`store.once`), then answers 303 to
+  the page with a `Secure; HttpOnly; SameSite=None; Partitioned` cookie for the page's path.
+- `defineApp({ embed: { frameAncestors, secret?, path?, sessionSeconds? } })`, required with a same-site page;
+  manifest `embed: { tool, path, frameAncestors }`. Every embed response carries `frame-ancestors` = the declared
+  hosts, never `X-Frame-Options`.
+- `modelapp/next`: `embedProxy(app)` (proxy.ts) and `getEmbedCaller(app, page)`; core `app.embed`.
+- Conformance: `embed.frame-ancestors` (public) and `embed.ticket`.
+- Examples: `EMBED_FRAME_ANCESTORS` is gone; the hosts are declared in code; the boards read `getEmbedCaller`.
+
+### The `modelapp` package is built for npm
+
+- The tarball ships ESM JavaScript with `.d.ts` files and source maps (`dist/`), not TypeScript source: a
+  `next.config` importing `modelapp/next` from `node_modules` now loads (Node refuses `.ts` there). Every entry has
+  `types` and `default` conditions; `moduleResolution` `bundler` and `node16` both resolve it. The CLI is
+  `dist/spec/src/cli.js` with a `node` shebang; the JSON Schema and `kinds.json` ship next to the code
+  (`modelapp/modelapp.schema.json`, `modelapp/kinds.json`).
+- `withModelApp` no longer adds `modelapp` to `transpilePackages`: the package is JavaScript.
+- Not published yet: see [RELEASE.md](RELEASE.md).
+
 ### The generated view in hosts (spec §5)
 
 - **Clicking a row in ChatGPT looked dead.** The view now finishes `ui/initialize` before any `tools/call`

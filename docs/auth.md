@@ -334,6 +334,21 @@ export const appAuth: AuthOptions = {
 The gaps: no permissions in the token, so there is one lookup per call (cache it). Not confirmed: whether the
 metadata announces CIMD once it is on, and which SDK call returns the person's name.
 
+## Embedded pages: no second sign-in either
+
+A page of your app framed by a host (`url: "/embed/…"`, spec §5.1) never sees your session cookie: the frame is on
+another site, and browsers block that cookie there. You don't add a sign-in for it. The host, which already holds the
+viewer's token, asks your app for a one-minute ticket (`modelapp_embed`); your app checks the token with the same
+`resolve` as every call, and the ticket carries exactly the caller `resolve` returned (installation, person,
+permissions). The frame posts it to `/embed/_ticket` and gets a partitioned cookie for that page only.
+
+- Your part: `embed: { frameAncestors, secret }` in `defineApp`, `embedProxy(app)` in `proxy.ts`,
+  `getEmbedCaller(app, "<page>")` in the page. The secret signs tickets and sessions (HKDF-derived keys: your one
+  app secret, e.g. better-auth's, may be reused). Without it the tool and the exchange answer `misconfigured`.
+- The page's permissions are the ticket's for the session's life (10 minutes by default, `embed.sessionSeconds`):
+  re-read anything live (membership, role) in the page when that matters.
+- Used tickets are kept in the app's `store` (`SqlStore`'s `modelapp_store` table): no new table.
+
 ## Locally, before any of this
 
 `npx modelapp init` writes a `resolve` that also accepts one bearer from `.env.local` (`MODELAPP_LOCAL_TOKEN`). It is

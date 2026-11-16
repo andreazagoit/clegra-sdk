@@ -1,24 +1,13 @@
-import { NextResponse } from "next/server"
+import { embedProxy } from "modelapp/next"
+
+import { crmApp } from "./modelapp"
 
 /**
- * Who may frame the embeddable pages (/embed/*): EMBED_FRAME_ANCESTORS, origins separated by spaces or commas
- * (e.g. `https://chatgpt.com https://claude.ai`); default the CRM itself. Read at run time. Every other page may
- * not be framed at all (next.config.ts), so sign-in and consent can't be clickjacked.
+ * The embedded pages (/embed/*, spec §5.1): `POST /embed/_ticket` exchanges a host's sign-in ticket for the page's
+ * partitioned session cookie, and every /embed response says who may frame it (frame-ancestors: the hosts the CRM
+ * declares in modelapp/app.ts). Every other page may not be framed at all (next.config.ts), so sign-in and consent
+ * can't be clickjacked.
  */
-function frameAncestors(): string {
-  const listed = (process.env.EMBED_FRAME_ANCESTORS ?? "").split(/[\s,]+/).filter(Boolean)
-  for (const origin of listed) {
-    if (origin === "'self'") continue
-    const url = URL.canParse(origin) ? new URL(origin) : null
-    if (!url || url.origin !== origin || (url.protocol !== "https:" && url.hostname !== "localhost")) throw new Error(`EMBED_FRAME_ANCESTORS: "${origin}" is not an https origin`)
-  }
-  return ["'self'", ...listed.filter((o) => o !== "'self'")].join(" ")
-}
-
-export function proxy() {
-  const response = NextResponse.next()
-  response.headers.set("content-security-policy", `frame-ancestors ${frameAncestors()}`)
-  return response
-}
+export const proxy = embedProxy(crmApp)
 
 export const config = { matcher: "/embed/:path*" }

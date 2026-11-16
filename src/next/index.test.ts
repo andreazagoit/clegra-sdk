@@ -220,10 +220,10 @@ describe("withModelApp: rewrites and config", () => {
     assert.deepEqual(await rewritesOf(config), { beforeFiles: ours, afterFiles: [theirs], fallback: [] })
   })
 
-  test("transpilePackages: the SDK added, the app's kept, no duplicates; other keys untouched", () => {
-    const config = withModelApp({ transpilePackages: ["some-ui", "modelapp"], reactStrictMode: true })
-    assert.deepEqual(config.transpilePackages, ["some-ui", "modelapp"])
-    assert.deepEqual(withModelApp({}).transpilePackages, ["modelapp"])
+  test("the rest of the config is kept as it is (the package ships JavaScript: no transpilePackages)", () => {
+    const config = withModelApp({ transpilePackages: ["some-ui"], reactStrictMode: true })
+    assert.deepEqual(config.transpilePackages, ["some-ui"])
+    assert.equal(withModelApp({}).transpilePackages, undefined)
     assert.equal(config.reactStrictMode, true)
   })
 

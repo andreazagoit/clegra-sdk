@@ -148,7 +148,8 @@ export default defineApp({
     deal: { record: "deal", sections: [{ title: "Deal", fields: ["name", "stage", "value"] }] },   // optional: every entity has a default record page
     pipeline: { title: "Pipeline", dashboard: [{ type: "pipeline_total", params: {}, size: "small" }, { type: "deal", params: { id: "d1" } }] },
     forecast: { title: "Forecast", permission: "deals.values", view: { html: () => loadHtml() } }, // your MCP Apps document
-    site: { title: "Site", url: "https://app.example.com/embed" },                                 // your site, isolated frame; https only
+    site: { title: "Site", url: "https://app.example.com/embed" },                                 // another site, isolated frame; https only
+    board: { title: "Board", url: "/embed/board", permission: "deals.view" },                      // a page of THIS app: needs `embed` (below)
   },
 
   agents: {
@@ -272,7 +273,7 @@ change).
 10. Dev auth (`auth: { dev: true }`) is for `listen()` and tests only: off unless you set it, refused when `NODE_ENV=production`, answers only callers on a loopback address, refused by `toNextHandlers`. In production give `auth.resource`: your server's public MCP address, the only audience tokens are accepted for. In `resolve`, check signature, expiry, issuer and `aud === resource` (a single audience); return null or throw `AuthError` to refuse.
 11. `ctx.installation` is the tenant: what `auth.resolve` said (your organization id), or a host's installation bound to that host (`<installation>@<issuer>`). Use it as an opaque key; never take a tenant from a parameter.
 12. In `list`, search `query.text` only in `query.textFields`; in a fragment's `data`, leave out values the caller may not see (`ctx.can`): template data are yours, the SDK only drops items whose `uri` is out of the caller's reach.
-13. Your data access is yours (any DB/ORM). Pages with `url` may be same-site paths (`/embed/pipeline`).
+13. Your data access is yours (any DB/ORM). Pages with `url` may be same-site paths (`/embed/pipeline`): then `defineApp({ embed: { frameAncestors: [the host origins], secret } })` (secret default `MODELAPP_EMBED_SECRET`), `proxy.ts` = `export const proxy = embedProxy(app); export const config = { matcher: "/embed/:path*" }`, and in the page `const caller = await getEmbedCaller(app, "<page name>")` (null → "open it from the app"; scope by `caller.installation`). Never read your own session cookie there: the host's frame is cross-site (spec §5.1).
 
 ## Common mistakes
 

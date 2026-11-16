@@ -64,6 +64,7 @@ function makeApp(auth: Partial<AuthOptions> = {}, path?: string) {
       },
     },
     pages: { board: { title: "Board", url: "/embed/board" } },
+    embed: { frameAncestors: ["https://host.test"], secret: "a-test-secret-for-embedded-pages-0123456789" },
   })
 }
 
@@ -164,7 +165,8 @@ describe("path prefix and same-site pages", () => {
     assert.equal(page.url, "/embed/board")
     const c = await testClient(app, { token: "tok-admin-a" })
     const [view] = await c.readResource("ui://notes/pages/board")
-    assert.ok(view?.text?.includes('src="http://127.0.0.1/embed/board"'), view?.text)
+    // Signed in with a ticket (spec §5.1, embed.test.ts): the view frames the page at the app's own origin.
+    assert.ok(view?.text?.includes('{"url":"http://127.0.0.1/embed/board","embed":{"tool":"modelapp_embed","page":"board"}}'), view?.text)
     assert.deepEqual((view?._meta?.ui as { csp: { frameDomains: string[] } }).csp.frameDomains, ["http://127.0.0.1"])
   })
 
@@ -176,7 +178,9 @@ describe("path prefix and same-site pages", () => {
 describe("conformance with a resolver", () => {
   test("the app passes the checks with one of its own tokens", async () => {
     const app = makeApp()
-    const report = await checkApp({ url: "https://notes.test", token: "tok-admin-a", fetch: (r) => app.fetch(r) })
+    // The embed page itself is the app's own (a framework serves it, with the embed headers).
+    const fetch = async (r: Request) => (new URL(r.url).pathname === "/embed/board" ? new Response("board", { headers: app.embed!.headers() }) : app.fetch(r))
+    const report = await checkApp({ url: "https://notes.test", token: "tok-admin-a", fetch })
     assert.ok(report.ok && report.complete, formatReport(report))
   })
 })

@@ -117,15 +117,15 @@ person then goes through these steps:
    - `MODELAPP_PUBLIC_URL`: the production origin, e.g. `https://warehouse.example.com`
    - `BETTER_AUTH_SECRET` (`openssl rand -base64 32`)
    - `DEMO_PASSWORD` and `DEMO_SIGNIN=1`, for a demo
-   - optionally `EMBED_FRAME_ANCESTORS`
    - optionally `MODELAPP_ISSUERS`: workspace hosts (e.g. a Clegra node) whose tokens are
      accepted, as `issuer|jwksUri`, comma-separated. Each installation gets its own copy of the
      demo data
 3. Deploy, then run the token script and `modelapp check` against the public URL.
 
 Nothing is written to disk at runtime: sessions, OAuth clients, signing keys, rate limits and
-MAP's idempotency store all live in Postgres. `/embed/*` pages may be framed only by the origins
-in `EMBED_FRAME_ANCESTORS` (default `'self'`); every other page can't be framed at all.
+MAP's idempotency store (also the used embed tickets) all live in Postgres. `/embed/*` pages may be
+framed only by the hosts declared in `lib/modelapp.ts` (`EMBED_HOSTS`), signed in with a one-minute ticket
+(spec §5.1); every other page can't be framed at all.
 
 ## Tests
 

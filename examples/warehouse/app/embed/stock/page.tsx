@@ -1,24 +1,36 @@
 import type { Metadata } from "next"
+import { getEmbedCaller } from "modelapp/next"
 
+import { warehouseApp } from "@/lib/app"
+import { sql } from "@/lib/db"
 import { STOCK_STATUS_LABELS } from "@/lib/labels"
-import { requireViewer } from "@/lib/session"
+import { isWorkspaceInstallation, provisionWorkspace } from "@/lib/tenants"
 import { listProducts, type StockStatus } from "@/lib/warehouse"
 
 export const metadata: Metadata = { title: "Stock board" }
 
 const BAR: Record<StockStatus, string> = { ok: "bg-teal-600", low: "bg-amber-500", out: "bg-red-600" }
 
-/** Every product's stock against its reorder level, lowest first: a board to frame. */
+/** Every product's stock against its reorder level, lowest first: a board a host frames (the MAP page `stock`). */
 export default async function StockBoard() {
-  const viewer = await requireViewer()
-  const { rows } = await listProducts(viewer.orgId, { sort: { field: "stock", dir: "asc" }, limit: 200 })
+  // The caller the host's sign-in ticket named (spec §5.1): in a frame on another site the site's own session cookie
+  // is a third-party one and never arrives.
+  const caller = await getEmbedCaller(warehouseApp, "stock")
+  if (!caller) return <p className="text-stone-600" data-signed-out>This board opens inside an app that connects to the warehouse (Clegra, ChatGPT, Claude). Open it from there.</p>
+  if (!caller.can("products.view")) return <p className="text-stone-600">You may not see the stock.</p>
+  // The tenant exactly as the MCP handlers get it: an organization, or a workspace host's installation (its own copy
+  // of the demo company, made on its first call).
+  const tenantId = caller.installation
+  if (isWorkspaceInstallation(tenantId)) await provisionWorkspace(tenantId)
+  const [org] = await sql<{ name: string | null }>(`SELECT o.name FROM tenant t LEFT JOIN "organization" o ON o.id = t.organization_id WHERE t.id = $1`, [tenantId])
+  const { rows } = await listProducts(tenantId, { sort: { field: "stock", dir: "asc" }, limit: 200 })
   const ordered = [...rows].sort((a, b) => a.stock / Math.max(a.reorderLevel, 1) - b.stock / Math.max(b.reorderLevel, 1))
   const counts = { ok: 0, low: 0, out: 0 }
   for (const p of rows) counts[p.stockStatus]++
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <p className="font-semibold">Stock levels · {viewer.orgName}</p>
+        <p className="font-semibold" data-viewer={caller.person?.name ?? ""}>Stock levels · {org?.name ?? "Workspace"}</p>
         <p className="flex gap-3 text-xs text-stone-500">
           {(["out", "low", "ok"] as const).map((s) => (
             <span key={s} className="flex items-center gap-1">
