@@ -5,6 +5,29 @@ the names of their time (the `modelapp` package, docs/map): they are history.
 
 ## Unreleased (1.0 draft)
 
+### Pages people use every day, work on a clock, and the app lifecycle (spec §4.1, §4.2, §5.2, §10–§13)
+
+- Navigation and page actions: a top-level `nav` (sections of pages), a page's `actions` (global actions drawn as
+  forms, prefilled from the page's parameters; the first is the page's primary) and `badge` (a `stat` fragment whose
+  value is the count). The generated view draws them too. A host derives filters (enum and date fields) and the
+  list-beside-record layout itself.
+- `visibility: "app"` on entities, actions and fragments: their tools are callable by views and the host's own UI,
+  never given to a model.
+- Targets: an action offered on an email (`mail.message`) or on a record of a kind in any app (`record:<kind>`), with
+  the fields it needs and a template that fills its form.
+- Approve now, act later: `later: { at, window }` on a confirmed write. The confirmation's proof also binds the
+  deadline (`until`); the run is stored through the store (`SqlStore` gains a `_later` table: re-run
+  `SqlStore.schema()` in a migration), runs once from the reserved `clegra_later` schedule, the person who approved
+  as its author, and is refused after its deadline or if its stored arguments no longer match the proof.
+- The installation-level caller (a workspace host's token with no person and exactly the called action's permission),
+  `schedules` (a global action every 5–1440 minutes; never an `always` write), declared notification types and
+  `to: { permission }`.
+- The app lifecycle: reserved app-only tools `clegra_installation`, `clegra_export` and `clegra_delete`, called by
+  a workspace host as the installation when it is enabled, disabled or uninstalled («export, then delete in 30 days»
+  or «delete now»).
+- `clegra/testing`: `installationClient`, `.schedule()`, `.runLater()`, `.exportData()`; conformance checks
+  `mcp.visibility` and `lifecycle.hidden`; `manifest.references` covers the new rules.
+
 ### Renamed to Clegra apps and the `clegra` package
 
 - Clegra apps are Clegra's own developer platform, not an open standard: the spec is «Clegra apps — specification»
