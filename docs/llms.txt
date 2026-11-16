@@ -10,6 +10,7 @@
 
 - [Specification](spec.md): the manifest, kinds and cross-app references, the generated MCP server, enforcement, conformance, the workspace host across apps (normative, short)
 - [Quickstart](quickstart.md): Next.js in 5 minutes (`npx clegra init`), a day to ship; standalone Node; tests
+- [UI](ui.md): `clegra/ui`, Clegra's components for React and React Native, the theme and `<ClegraProvider>` for an app's own view; `npx clegra init --ui`, Tailwind 4 setup, tokens
 - [Auth](auth.md): your sign-in as the authorization server, your `auth.resolve`; recipes for better-auth, Clerk, Auth0, WorkOS
 - [CRM example](examples/crm.md): Next.js, better-auth, Drizzle; code in `examples/apps/crm/clegra/app.ts`
 - [Warehouse example](examples/warehouse.md): Next.js, better-auth, plain SQL; code in `examples/apps/warehouse/lib/clegra.ts`

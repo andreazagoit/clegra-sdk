@@ -5,6 +5,17 @@ the names of their time (the `modelapp` package, docs/map): they are history.
 
 ## Unreleased (1.0 draft)
 
+### `clegra/ui`: the design library in the package
+
+- Clegra's design library is part of `clegra` (it was the separate, unpublished `@clegra/ui`): `clegra/ui/components/*`
+  (web and React Native, with the `react-native` and `ios` conditions), `clegra/ui/react/*`, `clegra/ui/react-native/*`,
+  `clegra/ui/frame`, `clegra/ui/tokens`, `clegra/ui/hooks/*`, `clegra/ui/primitives`, `clegra/ui/base-ui/*`,
+  `clegra/ui/native/{theme,overlay,icons,icon-context}`, `clegra/ui/metro`, and the stylesheets
+  `clegra/ui/styles.css` (Tailwind 4 entry; it sources its own components), `theme.css`, `shadcn.css`, `prebuilt.css`.
+- Its UI libraries (React, Base UI, lucide, recharts, … and React Native's) are optional peer dependencies, never
+  bundled: an app that only serves MCP installs none of them. `npx clegra init --ui` adds the web ones to a Next.js
+  app and imports the stylesheet after Tailwind. Docs: [ui.md](ui.md). The package now ships `NOTICE.md`.
+
 ### Renamed to Clegra apps and the `clegra` package
 
 - Clegra apps are Clegra's own developer platform, not an open standard: the spec is «Clegra apps — specification»
