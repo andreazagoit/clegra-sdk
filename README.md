@@ -1,8 +1,8 @@
 # clegra
 
-The Clegra apps SDK. MIT. You write one typed object, `defineApp({ entities, actions, pages, fragments,
-agents, … })`. It becomes a JSON manifest for workspace hosts and a plain, conformant MCP server for ChatGPT, Claude
-and any MCP client. Spec: [docs/developers/spec.md](../../docs/developers/spec.md).
+The package Clegra apps are built with. MIT. You write one typed object, `defineApp({ entities, actions, pages,
+fragments, agents, … })`. It becomes a plain, conformant MCP server (tools, MCP Apps views, OAuth) for ChatGPT, Claude
+and any MCP client, and a JSON manifest Clegra reads to draw the app natively in its workspace. Spec: [docs/developers/spec.md](../../docs/developers/spec.md).
 
 ```sh
 npm i clegra zod
