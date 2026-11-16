@@ -21,8 +21,7 @@ the names of their time (the `modelapp` package, docs/map): they are history.
   (`CLEGRA_PUBLIC_URL`, `CLEGRA_ISSUERS`, `CLEGRA_EMBED_SECRET`, `CLEGRA_LOCAL_TOKEN`, `CLEGRA_DEV`,
   `CLEGRA_OAUTH_*`; the pack guard reads `CLEGRA_PUBLISH=approved`).
 - The documentation moved from docs/map to docs/developers; the earlier, larger drafts (docs/map/future) are gone.
-  The examples live in `examples/apps/crm` and `examples/apps/warehouse`; root scripts `npm run clegra:test`,
-  `clegra:crm`, `clegra:schema`, `clegra:check`.
+  The two reference apps (the CRM and the warehouse) and the repository's scripts follow the new names.
 
 ### Kinds in a workspace host: the rules made precise (spec §9; docs/map/kinds.md)
 
