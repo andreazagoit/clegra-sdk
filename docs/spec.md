@@ -367,7 +367,9 @@ Document, the person signs in to the app and consents once, and Clegra keeps
 the refresh token on the person's behalf. It then also reads the manifest to
 draw the app natively. Confirmations to such an app follow MCP (annotations
 and elicitation, below); a workspace host's proof applies only to tokens of
-the trusted-issuer mode. (Clegra's side of this is not built yet.)
+the trusted-issuer mode. How Clegra does it (where its client documents and
+redirect URI live, which client authentication, the tokens kept per person on
+the company server): [host-oauth.md](host-oauth.md), non-normative.
 
 **Permissions and visibility**
 
