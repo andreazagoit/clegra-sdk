@@ -16,7 +16,9 @@ export const SALES_TEAM_DATA: DemoData = {
     // VAT numbers are invented (GB000…): no real company has them. `erpCustomer` points into an invented ERP app.
     { id: "co1", name: "Hartley Engineering", city: "Manchester", industry: "manufacturing", vatId: "GB000000001", website: "https://hartley-engineering.example", erpCustomer: "modelapp://erp/customer/1001" },
     { id: "co2", name: "Greenfield Retail", city: "London", industry: "retail", vatId: "GB000000002", website: "https://greenfield-retail.example", erpCustomer: "modelapp://erp/customer/1002" },
-    { id: "co3", name: "Lane Studio", city: "Bristol", industry: "services", website: "https://lane-studio.example" },
+    // An Italian VAT number, invented: the same as a customer of Azienda Prova's simulated ERP (dev/erp-mock
+    // seed «prova», Birrificio Nuvola), so a host with both apps finds them «Also in» each other by the key.
+    { id: "co3", name: "Lane Studio", city: "Bristol", industry: "services", vatId: "IT00000000005", website: "https://lane-studio.example" },
     { id: "co4", name: "Pixel Lab", city: "Cambridge", industry: "software", vatId: "GB000000004", website: "https://pixellab.example" },
   ],
   contacts: [
