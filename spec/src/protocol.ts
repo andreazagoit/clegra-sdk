@@ -41,3 +41,16 @@ export const EMBED_COOKIE_PREFIX = `__Secure-${PROTOCOL_ID}-embed-`
 /** How long a ticket lives at most, in seconds, and the clock skew allowed when it is checked. */
 export const EMBED_TICKET_SECONDS = 60
 export const EMBED_SKEW_SECONDS = 5
+
+// The reserved app-only tools only the installation-level caller (a workspace host's token with no person) is given.
+
+/** Runs the stored «approve now, act later» runs that are due; also the name of its schedule. */
+export const LATER_TOOL = `${PROTOCOL_ID}_later`
+/** Tells the app its installation was enabled, disabled or uninstalled. */
+export const INSTALLATION_TOOL = `${PROTOCOL_ID}_installation`
+/** The tenant's data, as one file. */
+export const EXPORT_TOOL = `${PROTOCOL_ID}_export`
+/** Deletes everything the app keeps for the tenant. */
+export const DELETE_TOOL = `${PROTOCOL_ID}_delete`
+/** Every reserved tool name of the installation-level caller. */
+export const INSTALLATION_TOOLS = [LATER_TOOL, INSTALLATION_TOOL, EXPORT_TOOL, DELETE_TOOL] as const

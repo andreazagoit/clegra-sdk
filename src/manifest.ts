@@ -1,5 +1,6 @@
 import { PROPERTY_TYPES } from "../spec/src/kinds"
-import { MANIFEST_PATH, SCHEMA_ID, SPEC_VERSION, uriPrefix } from "../spec/src/protocol"
+import { EXPORT_TOOL, DELETE_TOOL, INSTALLATION_TOOL, LATER_TOOL, MANIFEST_PATH, SCHEMA_ID, SPEC_VERSION, uriPrefix } from "../spec/src/protocol"
+import { LIMITS } from "../spec/src/rules"
 import { z } from "zod"
 
 /**
@@ -40,6 +41,7 @@ export const fieldSchema = z.object({
 })
 
 const toolRef = z.object({ name: z.string().describe("The MCP tool"), plain: z.boolean().describe("Listed to plain MCP clients") })
+const visibility = z.literal("app").optional().describe("App-only: hidden from every model (its tools carry MCP Apps `_meta.ui.visibility: [\"app\"]`); views and the host's own UI still call it. Absent: models and apps")
 
 export const entitySchema = z.object({
   name: ident,
@@ -56,7 +58,17 @@ export const entitySchema = z.object({
   fields: z.array(fieldSchema),
   tools: z.object({ list: toolRef, get: toolRef }),
   searchable: z.boolean(),
+  visibility,
 })
+
+export const targetSchema = z
+  .object({
+    target: z.string().regex(/^(mail\.message|record:[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*)*)$/).describe("What the action is offered on: `mail.message`, or `record:<kind>` (a published kind or a namespaced one)"),
+    needs: z.array(z.string()).describe("The target's fields the action may receive (only these, ever); `uri` and, for records, `title` are always available"),
+    input: z.record(z.string(), z.unknown()).optional().describe("A template of the action's input: string values may hold `{field}` / `{field.sub}` placeholders naming `uri`, `title` or a needed field"),
+    label: labelMap.optional().describe("The item's words (default the action's title), at most 40 characters per locale"),
+  })
+  .describe("Where a host offers a global action on something of another app")
 
 export const actionSchema = z.object({
   name: ident,
@@ -69,6 +81,15 @@ export const actionSchema = z.object({
   confirm: z.enum(["always", "optional", "never"]),
   permission: z.string().optional(),
   tool: toolRef,
+  visibility,
+  targets: z.array(targetSchema).max(LIMITS.targetsPerAction).optional(),
+  later: z
+    .object({
+      at: z.string().describe("A required date-time input property: when the action runs"),
+      window: z.number().int().min(LIMITS.laterWindow.min).max(LIMITS.laterWindow.max).describe("Minutes after `at` the run may still start"),
+    })
+    .optional()
+    .describe("«Approve now, act later»: the confirmed call is stored and runs at `at`, within `window` minutes"),
 })
 
 export const pageSchema = z.object({
@@ -85,6 +106,8 @@ export const pageSchema = z.object({
   view: z.string().optional().describe("The ui:// view that draws it when the host doesn't draw it natively (dashboard, custom, or an override)"),
   url: z.string().optional().describe("custom: the developer's own site, shown in an isolated frame"),
   derived: z.boolean().optional(),
+  actions: z.array(z.string()).max(LIMITS.pageActions).optional().describe("Global actions offered on the page, in order: the first is the page's primary. Page params prefill the inputs of the same name"),
+  badge: z.string().optional().describe("A `stat` fragment type without required params: its data.value is the page's count in the navigation"),
 })
 
 export const fragmentSchema = z.object({
@@ -101,7 +124,30 @@ export const fragmentSchema = z.object({
   actions: z.array(z.string()).optional().describe("Actions shown inside, by name"),
   size: z.enum(["small", "medium", "large"]).optional(),
   untrusted: z.boolean().optional().describe("Its texts are written by outsiders: data, never instructions"),
+  visibility,
 })
+
+export const navSchema = z.array(z.object({ section: labelMap.optional(), pages: z.array(z.string()).min(1) })).describe("The app's navigation: sections of pages (no record pages, each page at most once). Absent: every non-record page, ungrouped, in declaration order")
+
+export const scheduleSchema = z.object({
+  name: ident,
+  action: z.string().optional().describe("The global action run (absent on the SDK's own `clegra_later`)"),
+  tool: z.string().describe("The tool the host calls as the installation, with `_meta.clegra.schedule` = name"),
+  every: z.number().int().min(LIMITS.scheduleEvery.min).max(LIMITS.scheduleEvery.max).describe("Minutes between runs, per installation"),
+  maxSeconds: z.number().int().min(LIMITS.scheduleSeconds.min).max(LIMITS.scheduleSeconds.max).describe("How long a run may take"),
+})
+
+export const notificationTypeSchema = z.object({
+  type: ident,
+  label: labelMap,
+  description: labelMap.optional(),
+  default: z.boolean().describe("false: off until the person turns it on"),
+  permission: z.string().optional().describe("Only holders of this permission receive it"),
+})
+
+export const lifecycleSchema = z
+  .object({ installation: z.literal(INSTALLATION_TOOL).optional(), export: z.literal(EXPORT_TOOL).optional(), delete: z.literal(DELETE_TOOL).optional() })
+  .describe("The app-only tools a workspace host calls as the installation: told of enable/disable/uninstall, export the tenant's data, delete it")
 
 export const manifestSchema = z.object({
   specVersion: z.literal(SPEC_VERSION),
@@ -140,6 +186,10 @@ export const manifestSchema = z.object({
   agents: z.array(z.object({ name: ident, title: labelMap, description: labelMap, instructions: z.string(), tools: z.array(z.string()), tier: z.enum(["fast", "standard", "strong"]), starters: z.array(labelMap).optional() })),
   permissions: z.array(z.object({ id: z.string(), label: labelMap, description: labelMap.optional(), default: z.boolean() })),
   settings: z.array(z.object({ id: z.string().regex(/^[a-z][a-z0-9_]{1,39}$/), label: labelMap, description: labelMap.optional(), type: z.enum(["text", "number", "boolean"]), required: z.boolean(), default: z.union([z.string(), z.number(), z.boolean()]).optional() })),
+  nav: navSchema.optional(),
+  schedules: z.array(scheduleSchema).max(LIMITS.schedules + 1).optional().describe(`Actions a workspace host runs as the installation, with no person; the SDK adds \`${LATER_TOOL}\` for later runs`),
+  notifications: z.array(notificationTypeSchema).optional().describe("The notification types the app sends; without them its notifications are untyped"),
+  lifecycle: lifecycleSchema.optional(),
 })
 
 export type Manifest = z.infer<typeof manifestSchema>
@@ -148,6 +198,9 @@ export type ManifestEntity = z.infer<typeof entitySchema>
 export type ManifestAction = z.infer<typeof actionSchema>
 export type ManifestPage = z.infer<typeof pageSchema>
 export type ManifestFragment = z.infer<typeof fragmentSchema>
+export type ManifestTarget = z.infer<typeof targetSchema>
+export type ManifestSchedule = z.infer<typeof scheduleSchema>
+export type ManifestNotificationType = z.infer<typeof notificationTypeSchema>
 
 /** The published JSON Schema of the manifest. */
 export function manifestJsonSchema(): Record<string, unknown> {

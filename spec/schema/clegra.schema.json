@@ -477,6 +477,11 @@
           },
           "searchable": {
             "type": "boolean"
+          },
+          "visibility": {
+            "description": "App-only: hidden from every model (its tools carry MCP Apps `_meta.ui.visibility: [\"app\"]`); views and the host's own UI still call it. Absent: models and apps",
+            "type": "string",
+            "const": "app"
           }
         },
         "required": [
@@ -564,6 +569,77 @@
             "required": [
               "name",
               "plain"
+            ],
+            "additionalProperties": false
+          },
+          "visibility": {
+            "description": "App-only: hidden from every model (its tools carry MCP Apps `_meta.ui.visibility: [\"app\"]`); views and the host's own UI still call it. Absent: models and apps",
+            "type": "string",
+            "const": "app"
+          },
+          "targets": {
+            "maxItems": 4,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "type": "string",
+                  "pattern": "^(mail\\.message|record:[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)*)$",
+                  "description": "What the action is offered on: `mail.message`, or `record:<kind>` (a published kind or a namespaced one)"
+                },
+                "needs": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "The target's fields the action may receive (only these, ever); `uri` and, for records, `title` are always available"
+                },
+                "input": {
+                  "description": "A template of the action's input: string values may hold `{field}` / `{field.sub}` placeholders naming `uri`, `title` or a needed field",
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {}
+                },
+                "label": {
+                  "description": "The item's words (default the action's title), at most 40 characters per locale",
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "target",
+                "needs"
+              ],
+              "additionalProperties": false,
+              "description": "Where a host offers a global action on something of another app"
+            }
+          },
+          "later": {
+            "description": "«Approve now, act later»: the confirmed call is stored and runs at `at`, within `window` minutes",
+            "type": "object",
+            "properties": {
+              "at": {
+                "type": "string",
+                "description": "A required date-time input property: when the action runs"
+              },
+              "window": {
+                "type": "integer",
+                "minimum": 10,
+                "maximum": 10080,
+                "description": "Minutes after `at` the run may still start"
+              }
+            },
+            "required": [
+              "at",
+              "window"
             ],
             "additionalProperties": false
           }
@@ -688,6 +764,18 @@
           },
           "derived": {
             "type": "boolean"
+          },
+          "actions": {
+            "description": "Global actions offered on the page, in order: the first is the page's primary. Page params prefill the inputs of the same name",
+            "maxItems": 8,
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "badge": {
+            "description": "A `stat` fragment type without required params: its data.value is the page's count in the navigation",
+            "type": "string"
           }
         },
         "required": [
@@ -796,6 +884,11 @@
           "untrusted": {
             "description": "Its texts are written by outsiders: data, never instructions",
             "type": "boolean"
+          },
+          "visibility": {
+            "description": "App-only: hidden from every model (its tools carry MCP Apps `_meta.ui.visibility: [\"app\"]`); views and the host's own UI still call it. Absent: models and apps",
+            "type": "string",
+            "const": "app"
           }
         },
         "required": [
@@ -974,6 +1067,143 @@
         ],
         "additionalProperties": false
       }
+    },
+    "nav": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "section": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "A label per locale (BCP 47 → text)"
+          },
+          "pages": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "pages"
+        ],
+        "additionalProperties": false
+      },
+      "description": "The app's navigation: sections of pages (no record pages, each page at most once). Absent: every non-record page, ungrouped, in declaration order"
+    },
+    "schedules": {
+      "description": "Actions a workspace host runs as the installation, with no person; the SDK adds `clegra_later` for later runs",
+      "maxItems": 11,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{0,39}$"
+          },
+          "action": {
+            "description": "The global action run (absent on the SDK's own `clegra_later`)",
+            "type": "string"
+          },
+          "tool": {
+            "type": "string",
+            "description": "The tool the host calls as the installation, with `_meta.clegra.schedule` = name"
+          },
+          "every": {
+            "type": "integer",
+            "minimum": 5,
+            "maximum": 1440,
+            "description": "Minutes between runs, per installation"
+          },
+          "maxSeconds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 300,
+            "description": "How long a run may take"
+          }
+        },
+        "required": [
+          "name",
+          "tool",
+          "every",
+          "maxSeconds"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "notifications": {
+      "description": "The notification types the app sends; without them its notifications are untyped",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{0,39}$"
+          },
+          "label": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "A label per locale (BCP 47 → text)"
+          },
+          "description": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "A label per locale (BCP 47 → text)"
+          },
+          "default": {
+            "type": "boolean",
+            "description": "false: off until the person turns it on"
+          },
+          "permission": {
+            "description": "Only holders of this permission receive it",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "label",
+          "default"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "lifecycle": {
+      "type": "object",
+      "properties": {
+        "installation": {
+          "type": "string",
+          "const": "clegra_installation"
+        },
+        "export": {
+          "type": "string",
+          "const": "clegra_export"
+        },
+        "delete": {
+          "type": "string",
+          "const": "clegra_delete"
+        }
+      },
+      "additionalProperties": false,
+      "description": "The app-only tools a workspace host calls as the installation: told of enable/disable/uninstall, export the tenant's data, delete it"
     }
   },
   "required": [
