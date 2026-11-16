@@ -20,7 +20,9 @@
   "engines": {
     "node": ">=20"
   },
-  "sideEffects": false,
+  "sideEffects": [
+    "**/*.css"
+  ],
   "exports": {
     ".": "./src/index.ts",
     "./next": "./src/next/index.ts",
@@ -29,6 +31,238 @@
     "./spec": "./spec/src/conformance.ts",
     "./clegra.schema.json": "./spec/schema/clegra.schema.json",
     "./kinds.json": "./spec/kinds.json",
+    "./ui/components/*": {
+      "react-native": {
+        "types": "./ui/components/*.native.tsx",
+        "ios": "./ui/components/*.ios.tsx",
+        "default": "./ui/components/*.native.tsx"
+      },
+      "types": "./ui/components/*.tsx",
+      "default": "./ui/components/*.tsx"
+    },
+    "./ui/react/components/*": {
+      "types": "./ui/components/*.tsx",
+      "default": "./ui/components/*.tsx"
+    },
+    "./ui/react-native/components/*": {
+      "types": "./ui/components/*.native.tsx",
+      "ios": "./ui/components/*.ios.tsx",
+      "default": "./ui/components/*.native.tsx"
+    },
+    "./ui/base-ui/*": {
+      "react-native": {
+        "types": "./ui/base-ui/*.native.tsx",
+        "ios": "./ui/base-ui/*.ios.tsx",
+        "default": "./ui/base-ui/*.native.tsx"
+      },
+      "types": "./ui/base-ui/*.tsx",
+      "default": "./ui/base-ui/*.tsx"
+    },
+    "./ui/react/base-ui/*": {
+      "types": "./ui/base-ui/*.tsx",
+      "default": "./ui/base-ui/*.tsx"
+    },
+    "./ui/react-native/base-ui/*": {
+      "types": "./ui/base-ui/*.native.tsx",
+      "ios": "./ui/base-ui/*.ios.tsx",
+      "default": "./ui/base-ui/*.native.tsx"
+    },
+    "./ui/hooks/*": {
+      "react-native": {
+        "types": "./ui/hooks/*.native.ts",
+        "default": "./ui/hooks/*.native.ts"
+      },
+      "types": "./ui/hooks/*.ts",
+      "default": "./ui/hooks/*.ts"
+    },
+    "./ui/react/hooks/*": {
+      "types": "./ui/hooks/*.ts",
+      "default": "./ui/hooks/*.ts"
+    },
+    "./ui/react-native/hooks/*": {
+      "types": "./ui/hooks/*.native.ts",
+      "default": "./ui/hooks/*.native.ts"
+    },
+    "./ui/primitives": {
+      "react-native": {
+        "types": "./ui/primitives.native.tsx",
+        "default": "./ui/primitives.native.tsx"
+      },
+      "types": "./ui/primitives.tsx",
+      "default": "./ui/primitives.tsx"
+    },
+    "./ui/react/primitives": {
+      "types": "./ui/primitives.tsx",
+      "default": "./ui/primitives.tsx"
+    },
+    "./ui/react-native/primitives": {
+      "types": "./ui/primitives.native.tsx",
+      "default": "./ui/primitives.native.tsx"
+    },
+    "./ui/drawn/components/*": {
+      "types": "./ui/components/*.native.tsx",
+      "default": "./ui/components/*.native.tsx"
+    },
+    "./ui/drawn/base-ui/*": {
+      "types": "./ui/base-ui/*.native.tsx",
+      "default": "./ui/base-ui/*.native.tsx"
+    },
+    "./ui/frame": {
+      "types": "./ui/frame/index.ts",
+      "default": "./ui/frame/index.ts"
+    },
+    "./ui/tokens": {
+      "types": "./ui/tokens.ts",
+      "default": "./ui/tokens.ts"
+    },
+    "./ui/native/chat-context": {
+      "types": "./ui/native/chat-context.ts",
+      "default": "./ui/native/chat-context.ts"
+    },
+    "./ui/native/checkbox-el": {
+      "types": "./ui/native/checkbox-el.tsx",
+      "default": "./ui/native/checkbox-el.tsx"
+    },
+    "./ui/native/expo-ui-accordion": {
+      "types": "./ui/native/expo-ui-accordion.tsx",
+      "default": "./ui/native/expo-ui-accordion.tsx"
+    },
+    "./ui/native/expo-ui-alert-dialog": {
+      "types": "./ui/native/expo-ui-alert-dialog.tsx",
+      "default": "./ui/native/expo-ui-alert-dialog.tsx"
+    },
+    "./ui/native/expo-ui-button": {
+      "types": "./ui/native/expo-ui-button.tsx",
+      "default": "./ui/native/expo-ui-button.tsx"
+    },
+    "./ui/native/expo-ui-calendar": {
+      "types": "./ui/native/expo-ui-calendar.tsx",
+      "default": "./ui/native/expo-ui-calendar.tsx"
+    },
+    "./ui/native/expo-ui-chart": {
+      "types": "./ui/native/expo-ui-chart.tsx",
+      "default": "./ui/native/expo-ui-chart.tsx"
+    },
+    "./ui/native/expo-ui-context-menu": {
+      "types": "./ui/native/expo-ui-context-menu.tsx",
+      "default": "./ui/native/expo-ui-context-menu.tsx"
+    },
+    "./ui/native/expo-ui-controls": {
+      "types": "./ui/native/expo-ui-controls.tsx",
+      "default": "./ui/native/expo-ui-controls.tsx"
+    },
+    "./ui/native/expo-ui-dialog": {
+      "types": "./ui/native/expo-ui-dialog.tsx",
+      "default": "./ui/native/expo-ui-dialog.tsx"
+    },
+    "./ui/native/expo-ui-drawer": {
+      "types": "./ui/native/expo-ui-drawer.tsx",
+      "default": "./ui/native/expo-ui-drawer.tsx"
+    },
+    "./ui/native/expo-ui-dropdown-menu": {
+      "types": "./ui/native/expo-ui-dropdown-menu.tsx",
+      "default": "./ui/native/expo-ui-dropdown-menu.tsx"
+    },
+    "./ui/native/expo-ui-input": {
+      "types": "./ui/native/expo-ui-input.tsx",
+      "default": "./ui/native/expo-ui-input.tsx"
+    },
+    "./ui/native/expo-ui-menu": {
+      "types": "./ui/native/expo-ui-menu.tsx",
+      "default": "./ui/native/expo-ui-menu.tsx"
+    },
+    "./ui/native/expo-ui-menubar": {
+      "types": "./ui/native/expo-ui-menubar.tsx",
+      "default": "./ui/native/expo-ui-menubar.tsx"
+    },
+    "./ui/native/expo-ui-popover": {
+      "types": "./ui/native/expo-ui-popover.tsx",
+      "default": "./ui/native/expo-ui-popover.tsx"
+    },
+    "./ui/native/expo-ui-progress": {
+      "types": "./ui/native/expo-ui-progress.tsx",
+      "default": "./ui/native/expo-ui-progress.tsx"
+    },
+    "./ui/native/expo-ui-select": {
+      "types": "./ui/native/expo-ui-select.tsx",
+      "default": "./ui/native/expo-ui-select.tsx"
+    },
+    "./ui/native/expo-ui-separator": {
+      "types": "./ui/native/expo-ui-separator.tsx",
+      "default": "./ui/native/expo-ui-separator.tsx"
+    },
+    "./ui/native/expo-ui-slider": {
+      "types": "./ui/native/expo-ui-slider.tsx",
+      "default": "./ui/native/expo-ui-slider.tsx"
+    },
+    "./ui/native/expo-ui-spinner": {
+      "types": "./ui/native/expo-ui-spinner.tsx",
+      "default": "./ui/native/expo-ui-spinner.tsx"
+    },
+    "./ui/native/expo-ui-switch": {
+      "types": "./ui/native/expo-ui-switch.tsx",
+      "default": "./ui/native/expo-ui-switch.tsx"
+    },
+    "./ui/native/expo-ui-tabs": {
+      "types": "./ui/native/expo-ui-tabs.tsx",
+      "default": "./ui/native/expo-ui-tabs.tsx"
+    },
+    "./ui/native/expo-ui-toggle-group": {
+      "types": "./ui/native/expo-ui-toggle-group.tsx",
+      "default": "./ui/native/expo-ui-toggle-group.tsx"
+    },
+    "./ui/native/expo-ui-toggle": {
+      "types": "./ui/native/expo-ui-toggle.tsx",
+      "default": "./ui/native/expo-ui-toggle.tsx"
+    },
+    "./ui/native/form-context": {
+      "types": "./ui/native/form-context.tsx",
+      "default": "./ui/native/form-context.tsx"
+    },
+    "./ui/native/icon-context": {
+      "types": "./ui/native/icon-context.ts",
+      "default": "./ui/native/icon-context.ts"
+    },
+    "./ui/native/icons": {
+      "types": "./ui/native/icons.ts",
+      "default": "./ui/native/icons.ts"
+    },
+    "./ui/native/lucide": {
+      "types": "./ui/native/lucide.ts",
+      "default": "./ui/native/lucide.ts"
+    },
+    "./ui/native/overlay": {
+      "types": "./ui/native/overlay.tsx",
+      "default": "./ui/native/overlay.tsx"
+    },
+    "./ui/native/sf-symbols": {
+      "types": "./ui/native/sf-symbols.ts",
+      "default": "./ui/native/sf-symbols.ts"
+    },
+    "./ui/native/slot": {
+      "types": "./ui/native/slot.tsx",
+      "default": "./ui/native/slot.tsx"
+    },
+    "./ui/native/theme": {
+      "types": "./ui/native/theme.ts",
+      "default": "./ui/native/theme.ts"
+    },
+    "./ui/native/toast": {
+      "types": "./ui/native/toast.ts",
+      "default": "./ui/native/toast.ts"
+    },
+    "./ui/native/tw": {
+      "types": "./ui/native/tw.ts",
+      "default": "./ui/native/tw.ts"
+    },
+    "./ui/native/use-tw": {
+      "types": "./ui/native/use-tw.ts",
+      "default": "./ui/native/use-tw.ts"
+    },
+    "./ui/metro": "./ui/metro.cjs",
+    "./ui/styles.css": "./ui/styles.css",
+    "./ui/theme.css": "./ui/theme.css",
+    "./ui/shadcn.css": "./ui/shadcn.css",
     "./package.json": "./package.json"
   },
   "bin": {
@@ -42,13 +276,14 @@
   ],
   "scripts": {
     "build": "node scripts/build.mjs",
-    "typecheck": "tsc -p tsconfig.json",
-    "test": "tsx --test \"{src,spec/src}/**/*.test.ts\"",
+    "typecheck": "tsc -p tsconfig.json && tsc -p ui/tsconfig.json",
+    "test": "tsx --test \"{src,spec/src,ui}/**/*.test.ts\"",
     "test:next": "tsx --test test/next.test.ts",
     "pack:check": "node scripts/pack-check.mjs",
     "schema": "tsx scripts/schema.ts",
     "prepack": "node scripts/prepack.mjs",
-    "postpack": "node scripts/postpack.mjs"
+    "postpack": "node scripts/postpack.mjs",
+    "test:ui": "tsx --test \"ui/**/*.test.ts\""
   },
   "dependencies": {
     "@modelcontextprotocol/server": "^2.4.0",
@@ -56,11 +291,99 @@
     "jose": "^6.2.13"
   },
   "peerDependencies": {
+    "@base-ui/react": "^1.9.0",
+    "@expo/ui": ">=58",
+    "@shadcn/react": "^0.3.1",
+    "class-variance-authority": "^0.7.1",
+    "cmdk": "^1.1.1",
+    "cn": "^0.5.0",
+    "date-fns": "^4.4.0",
+    "embla-carousel-react": "^8.6.0",
+    "input-otp": "^1.5.0",
+    "lucide-react": "^1.60.0",
+    "lucide-react-native": ">=1",
     "next": ">=15",
+    "next-themes": "^0.4.6",
+    "react": "^19",
+    "react-day-picker": "^10.0.2",
+    "react-dom": "^19",
+    "react-native": ">=0.88",
+    "react-native-svg": ">=15",
+    "react-resizable-panels": "^4.16.1",
+    "recharts": "^3.10.1",
+    "sonner": "^2.0.8",
+    "tailwindcss": "^4",
+    "tw-animate-css": "^1.4.0",
     "zod": "^4.0.0"
   },
   "peerDependenciesMeta": {
+    "@base-ui/react": {
+      "optional": true
+    },
+    "@expo/ui": {
+      "optional": true
+    },
+    "@shadcn/react": {
+      "optional": true
+    },
+    "class-variance-authority": {
+      "optional": true
+    },
+    "cmdk": {
+      "optional": true
+    },
+    "cn": {
+      "optional": true
+    },
+    "date-fns": {
+      "optional": true
+    },
+    "embla-carousel-react": {
+      "optional": true
+    },
+    "input-otp": {
+      "optional": true
+    },
+    "lucide-react": {
+      "optional": true
+    },
+    "lucide-react-native": {
+      "optional": true
+    },
     "next": {
+      "optional": true
+    },
+    "next-themes": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    },
+    "react-day-picker": {
+      "optional": true
+    },
+    "react-dom": {
+      "optional": true
+    },
+    "react-native": {
+      "optional": true
+    },
+    "react-native-svg": {
+      "optional": true
+    },
+    "react-resizable-panels": {
+      "optional": true
+    },
+    "recharts": {
+      "optional": true
+    },
+    "sonner": {
+      "optional": true
+    },
+    "tailwindcss": {
+      "optional": true
+    },
+    "tw-animate-css": {
       "optional": true
     }
   },
