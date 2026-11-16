@@ -272,6 +272,7 @@
     "dist",
     "README.md",
     "LICENSE",
+    "NOTICE.md",
     "CHANGELOG.md"
   ],
   "scripts": {
@@ -389,6 +390,9 @@
   },
   "devDependencies": {
     "@electric-sql/pglite": "0.5.16",
-    "next": "16.4.3"
+    "@tailwindcss/postcss": "4.3.3",
+    "next": "16.4.3",
+    "postcss": "^8.5.32",
+    "tailwindcss": "4.3.3"
   }
 }
