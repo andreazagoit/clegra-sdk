@@ -17,7 +17,7 @@ Not on npm yet: [docs/developers/RELEASE.md](../../docs/developers/RELEASE.md) s
 | `clegra` | `defineApp`, `AuthError`, `SqlStore`, `MemoryStore`, types. Framework-agnostic (`app.fetch(request)`) |
 | `clegra/next` | `toNextHandlers`, `withClegra`, `clegraRewrites`; `embedProxy`, `getEmbedCaller` for embedded pages (`next` is an optional peer dependency) |
 | `clegra/node` | `listen(app)`: the app on Node's own HTTP server |
-| `clegra/testing` | `testClient(app)`: JSON-RPC to `app.fetch` with dev tokens |
+| `clegra/testing` | `testClient(app)`: JSON-RPC to `app.fetch` with dev tokens; `installationClient(app)` for schedules, later runs and lifecycle tools |
 | `clegra/spec` | `checkApp`, `formatReport`: the conformance checks |
 | CLI | `npx clegra init [dir] [--dry-run]`; `npx clegra check <url> [--token …]` (or `CLEGRA_TOKEN`) |
 
@@ -132,6 +132,79 @@ use init's bearer (`CLEGRA_LOCAL_TOKEN`) or your own sign-in, or run the app wit
 words every app shares (spec §3.1; the vocabulary is `spec/kinds.json`, written with `npm run schema`). Key filters
 (`email`, `vatID`, `gtin`, `uid`) reach `list` normalised and must be matched exactly. `ref.kind("organization")`
 holds the URI of a record in any app (spec §3.2). Both are optional: apps without them are unchanged.
+
+## Navigation, page actions, schedules, notifications
+
+All optional; names are checked by TypeScript and again when the app starts (a wrong one fails with its place named).
+
+```ts
+defineApp({
+  …,
+  pages: {
+    tasks: { title: "Tasks", list: "task", columns: ["title"], actions: ["add_task"], badge: "open_count" },
+    board: { title: "Board", dashboard: [{ type: "open_count", params: {} }] },
+  },
+  nav: [{ section: "Work", pages: ["tasks", "board"] }],      // without nav: every non-record page, in order
+  schedules: { digest: { action: "send_digest", every: 60 } }, // minutes; a read or a write that isn't confirm: "always"
+  notifications: { digest: { label: "Daily digest", permission: "tasks.view", default: false } },
+})
+```
+
+- **Page `actions`**: global actions shown on the page, the first one as its primary. Page params fill in the
+  action's inputs that have the same names. The generated view draws them as buttons that open the action's form.
+  The page's `view` carries them, and the app's `nav` too.
+- **`badge`**: a `stat` fragment with no required params. Its `value` is the page's count in the navigation.
+- **`visibility: "app"`** on an entity, action or fragment: its tools are for views and the host's own UI only.
+  They carry MCP Apps `_meta.ui.visibility: ["app"]`, `search`/`fetch` leave the records out, and agents can't use it.
+- **`schedules`**: the workspace host calls the action as the installation, with no person and
+  `_meta.clegra.schedule`. Handlers see `ctx.schedule`.
+- **`ctx.notify({ type, title, to })`**: once the app declares `notifications`, every notification names one of
+  them. `to` takes person ids or `{ permission }`. A call with no person must say `to`.
+- **`targets`** on a global action: offered on an email (`mail.message`) or a record of a kind
+  (`record:organization`). The input template is filled from the fields the target `needs` (`{subject}`,
+  `{from.address}`, `{uri}`, `{title}`).
+
+## Approve now, act later
+
+```ts
+publish: {
+  title: "Publish", input: z.object({ text: z.string(), when: z.iso.datetime() }),
+  later: { at: "when", window: 60 },            // a write with confirm "always"; window 10–10080 minutes
+  run: (input, ctx) => { /* ctx.later: { id, at, until, confirmedAt }; ctx.person: who confirmed it */ },
+}
+```
+
+When the person confirms, the call is stored instead of run. The store keeps the arguments as they were confirmed
+and the host's proof (`until` = `at` + `window`). The answer is `{ data: { later: { id, at, until } } }`.
+
+The SDK adds the schedule `clegra_later`, run every 5 minutes. Each due run is claimed once. Its arguments and proof
+are checked again (the proof as of when it was confirmed), and then it runs as its author before `until`. If it can't
+run (expired or refused), the author gets a `clegra_later` notification.
+
+- Cancel a run with `ctx.cancelLater(id)`.
+- Without a workspace host, `app.runLater(tenant)` runs the due runs from your own cron.
+- A plain client can't produce a proof. Its confirmation is kept without one.
+- The store needs a `later` part. `MemoryStore` and `SqlStore` have one. `SqlStore.schema()` returns both tables
+  (`<table>`, `<table>_later`) and is safe to run again in a new migration.
+
+## Lifecycle
+
+```ts
+lifecycle: {
+  installation: (state, ctx) => {},                                     // "enabled" | "disabled" | "uninstalled"
+  export: (ctx) => ({ contentType: "application/json", body: json }),  // or null: nothing kept
+  delete: (ctx) => ({ counts: { tasks: 12 } }),                        // idempotent; also after uninstall
+}
+```
+
+These become the app-only tools `clegra_installation`, `clegra_export` (one embedded file with its sha256) and
+`clegra_delete`. Only the installation itself is given them: a workspace host's token with no person. `clegra_delete`
+also removes the tenant's later runs.
+
+```ts
+const host = await installationClient(app)   // clegra/testing
+await host.schedule("digest"); await host.runLater(); const { file } = await host.exportData()
+```
 
 ## Tests
 

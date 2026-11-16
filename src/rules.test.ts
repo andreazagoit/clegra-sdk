@@ -3,7 +3,7 @@ import { test } from "node:test"
 
 import { z } from "zod"
 
-import { defineApp, type AppDefinition } from "./index"
+import { defineApp } from "./index"
 
 /** Every rule of spec/src/rules.ts fails at definition time, naming the place (the conformance checks run the same rules). */
 
@@ -24,14 +24,14 @@ const fragments = {
 }
 
 // Loosely typed on purpose: these definitions are wrong, and the point is the error each one gets at run time.
-const make = (extra: Record<string, unknown>) => () => defineApp({ name: "rules", title: "Rules", version: "1", entities, actions, fragments, ...extra } as unknown as AppDefinition<typeof entities, typeof actions, typeof fragments, string>)
+const make = (extra: Record<string, unknown>) => () => defineApp({ name: "rules", title: "Rules", version: "1", entities, actions, fragments, ...extra } as never)
 const pages = { list: { title: "Tasks", list: "task", columns: ["title"] }, board: { title: "Board", dashboard: [] }, task: { record: "task" } }
 
 test("a valid definition with every new key holds", () => {
   const app = make({
     pages: { ...pages, list: { ...pages.list, actions: ["add", "read"], badge: "count" } },
     nav: [{ section: "Work", pages: ["list"] }, { pages: ["board"] }],
-    schedules: { nightly: { action: "read", every: 1440, maxSeconds: 300 }, cleanup: { action: "add" === "add" ? "read" : "read", every: 5 } },
+    schedules: { nightly: { action: "read", every: 1440, maxSeconds: 300 }, cleanup: { action: "read", every: 5 } },
     notifications: { done: { label: "Done" } },
   })()
   assert.equal(app.manifest().schedules!.length, 2)
