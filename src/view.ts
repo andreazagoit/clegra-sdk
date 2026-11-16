@@ -50,6 +50,8 @@ th.sort{cursor:pointer;user-select:none;white-space:nowrap}th.sort:hover{color:v
 .req{color:#c62828}.ferr{color:#c62828;font-size:12px;min-height:0}.bad{border-color:#c62828}form.act label{display:block}
 #status{position:sticky;top:0;z-index:2;margin:12px 12px 0;padding:7px 10px;border-radius:8px;font-size:13px;background:var(--bg2);color:var(--fg2);border:1px solid var(--line)}#status[hidden]{display:none}#status.error{color:#c62828;border-color:#c62828}
 tr.link:focus-visible td{outline:2px solid var(--accent);outline-offset:-2px}tr[aria-busy=true] td{opacity:.55}
+nav.nav{display:grid;gap:4px;margin:0 0 10px}.navlabel{font-size:12px;margin-right:2px}button.navitem{padding:3px 10px;font-size:13px}button.navitem[aria-current=page]{border-color:var(--fg);font-weight:600}button.navitem[aria-busy=true]{opacity:.55}
+.count{margin-left:6px;font-size:12px;color:var(--fg2);font-variant-numeric:tabular-nums}.pageacts{margin:0 0 10px}
 `
 
 const SCRIPT = `
@@ -91,11 +93,11 @@ const SCRIPT = `
   const fail = (e) => { const text = String((e && e.message) || e || "Failed"); if (!shown) { notice(null); root.innerHTML = '<div class="box err">' + esc(text) + "</div>"; resize(); } else notice(text, "error"); };
   // The view's own few words (what the app's labels don't cover), in the host's language when the view has it.
   const STR = {
-    en: { opening: "Opening…", working: "Working…", refused: "The host refused the call ({n}).", noAnswer: "The host did not answer ({n}).", noData: "The host returned no data for the view ({n}).", noBridge: "This host does not connect the view to the app", required: "Required", tooShort: "At least {n} characters", tooLong: "At most {n} characters", min: "At least {n}", max: "At most {n}", date: "Enter a date", number: "Enter a number", search: "Search…", choose: "Choose…", none: "No results", done: "Done.", noAccess: "No access", notAvailable: "Not available", sortBy: "Sort by {n}", unknownPerson: "Unknown person", refGone: "Deleted", refUnreachable: "App not answering", refUnknownApp: "App not in this workspace", recordUri: "A record URI: clegra://app/entity/id" },
-    it: { opening: "Apertura…", working: "In corso…", refused: "L'host ha rifiutato la chiamata ({n}).", noAnswer: "L'host non ha risposto ({n}).", noData: "L'host non ha restituito dati per la vista ({n}).", noBridge: "Questo host non collega la vista all'app", required: "Obbligatorio", tooShort: "Almeno {n} caratteri", tooLong: "Al massimo {n} caratteri", min: "Almeno {n}", max: "Al massimo {n}", date: "Inserisci una data", number: "Inserisci un numero", search: "Cerca…", choose: "Scegli…", none: "Nessun risultato", done: "Fatto.", noAccess: "Nessun accesso", notAvailable: "Non disponibile", sortBy: "Ordina per {n}", unknownPerson: "Persona sconosciuta", refGone: "Eliminato", refUnreachable: "L'app non risponde", refUnknownApp: "App non presente in questo spazio", recordUri: "L'URI di un record: clegra://app/entità/id" },
-    es: { opening: "Abriendo…", working: "En curso…", refused: "El host rechazó la llamada ({n}).", noAnswer: "El host no respondió ({n}).", noData: "El host no devolvió datos para la vista ({n}).", noBridge: "Este host no conecta la vista con la app", required: "Obligatorio", tooShort: "Al menos {n} caracteres", tooLong: "Como máximo {n} caracteres", min: "Al menos {n}", max: "Como máximo {n}", date: "Introduce una fecha", number: "Introduce un número", search: "Buscar…", choose: "Elige…", none: "Sin resultados", done: "Hecho.", noAccess: "Sin acceso", notAvailable: "No disponible", sortBy: "Ordenar por {n}", unknownPerson: "Persona desconocida", refGone: "Eliminado", refUnreachable: "La app no responde", refUnknownApp: "App que no está en este espacio", recordUri: "La URI de un registro: clegra://app/entidad/id" },
-    fr: { opening: "Ouverture…", working: "En cours…", refused: "L'hôte a refusé l'appel ({n}).", noAnswer: "L'hôte n'a pas répondu ({n}).", noData: "L'hôte n'a renvoyé aucune donnée pour la vue ({n}).", noBridge: "Cet hôte ne relie pas la vue à l'app", required: "Obligatoire", tooShort: "Au moins {n} caractères", tooLong: "Au plus {n} caractères", min: "Au moins {n}", max: "Au plus {n}", date: "Saisissez une date", number: "Saisissez un nombre", search: "Rechercher…", choose: "Choisir…", none: "Aucun résultat", done: "Fait.", noAccess: "Pas d'accès", notAvailable: "Non disponible", sortBy: "Trier par {n}", unknownPerson: "Personne inconnue", refGone: "Supprimé", refUnreachable: "L'app ne répond pas", refUnknownApp: "App absente de cet espace", recordUri: "L'URI d'un enregistrement : clegra://app/entité/id" },
-    de: { opening: "Wird geöffnet…", working: "Wird ausgeführt…", refused: "Der Host hat den Aufruf abgelehnt ({n}).", noAnswer: "Der Host hat nicht geantwortet ({n}).", noData: "Der Host hat keine Daten für die Ansicht geliefert ({n}).", noBridge: "Dieser Host verbindet die Ansicht nicht mit der App", required: "Erforderlich", tooShort: "Mindestens {n} Zeichen", tooLong: "Höchstens {n} Zeichen", min: "Mindestens {n}", max: "Höchstens {n}", date: "Datum eingeben", number: "Zahl eingeben", search: "Suchen…", choose: "Auswählen…", none: "Keine Ergebnisse", done: "Erledigt.", noAccess: "Kein Zugriff", notAvailable: "Nicht verfügbar", sortBy: "Sortieren nach {n}", unknownPerson: "Unbekannte Person", refGone: "Gelöscht", refUnreachable: "App antwortet nicht", refUnknownApp: "App nicht in diesem Arbeitsbereich", recordUri: "Die URI eines Datensatzes: clegra://app/entität/id" },
+    en: { pages: "Pages", dateTime: "Enter a date and time", opening: "Opening…", working: "Working…", refused: "The host refused the call ({n}).", noAnswer: "The host did not answer ({n}).", noData: "The host returned no data for the view ({n}).", noBridge: "This host does not connect the view to the app", required: "Required", tooShort: "At least {n} characters", tooLong: "At most {n} characters", min: "At least {n}", max: "At most {n}", date: "Enter a date", number: "Enter a number", search: "Search…", choose: "Choose…", none: "No results", done: "Done.", noAccess: "No access", notAvailable: "Not available", sortBy: "Sort by {n}", unknownPerson: "Unknown person", refGone: "Deleted", refUnreachable: "App not answering", refUnknownApp: "App not in this workspace", recordUri: "A record URI: clegra://app/entity/id" },
+    it: { pages: "Pagine", dateTime: "Inserisci data e ora", opening: "Apertura…", working: "In corso…", refused: "L'host ha rifiutato la chiamata ({n}).", noAnswer: "L'host non ha risposto ({n}).", noData: "L'host non ha restituito dati per la vista ({n}).", noBridge: "Questo host non collega la vista all'app", required: "Obbligatorio", tooShort: "Almeno {n} caratteri", tooLong: "Al massimo {n} caratteri", min: "Almeno {n}", max: "Al massimo {n}", date: "Inserisci una data", number: "Inserisci un numero", search: "Cerca…", choose: "Scegli…", none: "Nessun risultato", done: "Fatto.", noAccess: "Nessun accesso", notAvailable: "Non disponibile", sortBy: "Ordina per {n}", unknownPerson: "Persona sconosciuta", refGone: "Eliminato", refUnreachable: "L'app non risponde", refUnknownApp: "App non presente in questo spazio", recordUri: "L'URI di un record: clegra://app/entità/id" },
+    es: { pages: "Páginas", dateTime: "Introduce fecha y hora", opening: "Abriendo…", working: "En curso…", refused: "El host rechazó la llamada ({n}).", noAnswer: "El host no respondió ({n}).", noData: "El host no devolvió datos para la vista ({n}).", noBridge: "Este host no conecta la vista con la app", required: "Obligatorio", tooShort: "Al menos {n} caracteres", tooLong: "Como máximo {n} caracteres", min: "Al menos {n}", max: "Como máximo {n}", date: "Introduce una fecha", number: "Introduce un número", search: "Buscar…", choose: "Elige…", none: "Sin resultados", done: "Hecho.", noAccess: "Sin acceso", notAvailable: "No disponible", sortBy: "Ordenar por {n}", unknownPerson: "Persona desconocida", refGone: "Eliminado", refUnreachable: "La app no responde", refUnknownApp: "App que no está en este espacio", recordUri: "La URI de un registro: clegra://app/entidad/id" },
+    fr: { pages: "Pages", dateTime: "Saisissez une date et une heure", opening: "Ouverture…", working: "En cours…", refused: "L'hôte a refusé l'appel ({n}).", noAnswer: "L'hôte n'a pas répondu ({n}).", noData: "L'hôte n'a renvoyé aucune donnée pour la vue ({n}).", noBridge: "Cet hôte ne relie pas la vue à l'app", required: "Obligatoire", tooShort: "Au moins {n} caractères", tooLong: "Au plus {n} caractères", min: "Au moins {n}", max: "Au plus {n}", date: "Saisissez une date", number: "Saisissez un nombre", search: "Rechercher…", choose: "Choisir…", none: "Aucun résultat", done: "Fait.", noAccess: "Pas d'accès", notAvailable: "Non disponible", sortBy: "Trier par {n}", unknownPerson: "Personne inconnue", refGone: "Supprimé", refUnreachable: "L'app ne répond pas", refUnknownApp: "App absente de cet espace", recordUri: "L'URI d'un enregistrement : clegra://app/entité/id" },
+    de: { pages: "Seiten", dateTime: "Datum und Uhrzeit eingeben", opening: "Wird geöffnet…", working: "Wird ausgeführt…", refused: "Der Host hat den Aufruf abgelehnt ({n}).", noAnswer: "Der Host hat nicht geantwortet ({n}).", noData: "Der Host hat keine Daten für die Ansicht geliefert ({n}).", noBridge: "Dieser Host verbindet die Ansicht nicht mit der App", required: "Erforderlich", tooShort: "Mindestens {n} Zeichen", tooLong: "Höchstens {n} Zeichen", min: "Mindestens {n}", max: "Höchstens {n}", date: "Datum eingeben", number: "Zahl eingeben", search: "Suchen…", choose: "Auswählen…", none: "Keine Ergebnisse", done: "Erledigt.", noAccess: "Kein Zugriff", notAvailable: "Nicht verfügbar", sortBy: "Sortieren nach {n}", unknownPerson: "Unbekannte Person", refGone: "Gelöscht", refUnreachable: "App antwortet nicht", refUnknownApp: "App nicht in diesem Arbeitsbereich", recordUri: "Die URI eines Datensatzes: clegra://app/entität/id" },
   };
   const tr = (k, n) => String((STR[String(locale).split("-")[0].toLowerCase()] || STR.en)[k] || STR.en[k]).replace("{n}", n === undefined ? "" : n);
   // The app's labels in the reader's language (hostContext.locale): each call sends its labels' other locales (_meta.${PROTOCOL_ID}.l10n); English when the app lacks the reader's.
@@ -168,11 +170,11 @@ const SCRIPT = `
       const num = p.type === "number" || p.type === "integer";
       // A record of another app: its URI (a workspace host offers its own picker over every app of the kind).
       if (p.ref && p.ref.kind) return "<label>" + label + "<br><input" + attrs + ' type="text" placeholder="${PROTOCOL_ID}://…" spellcheck="false"></label>' + err;
-      return "<label>" + label + "<br><input" + attrs + ' type="' + (num ? "number" : p.format === "date" ? "date" : "text") + '"' + (num && p.type === "number" ? ' step="any"' : "") + (typeof p.minimum === "number" ? ' min="' + p.minimum + '"' : "") + (typeof p.maximum === "number" ? ' max="' + p.maximum + '"' : "") + (typeof p.maxLength === "number" ? ' maxlength="' + p.maxLength + '"' : "") + "></label>" + err; }).join("") + '<div class="row"><button class="primary" type="button">' + esc(L(action.title)) + "</button></div>";
+      return "<label>" + label + "<br><input" + attrs + ' type="' + (num ? "number" : p.format === "date" ? "date" : p.format === "date-time" ? "datetime-local" : "text") + '"' + (num && p.type === "number" ? ' step="any"' : "") + (typeof p.minimum === "number" ? ' min="' + p.minimum + '"' : "") + (typeof p.maximum === "number" ? ' max="' + p.maximum + '"' : "") + (typeof p.maxLength === "number" ? ' maxlength="' + p.maxLength + '"' : "") + "></label>" + err; }).join("") + '<div class="row"><button class="primary" type="button">' + esc(L(action.title)) + "</button></div>";
     // The latest ask per field wins: an earlier, slower answer (the first full list) never replaces what was searched after it.
     const asked = {};
     const loadRef = async (k, q) => {
-      const p = props[k]; const sel = f.elements[k]; if (!sel) return; const keep = sel.value; const turn = asked[k] = (asked[k] || 0) + 1;
+      const p = props[k]; const sel = f.elements[k]; if (!sel) return; const keep = sel.value || sel.dataset.prefill || ""; const turn = asked[k] = (asked[k] || 0) + 1;
       try { const r = await callTool(p.ref.tool, Object.assign({ limit: 25 }, q ? { query: q } : {})); if (turn !== asked[k] || errorOf(r)) return; const rows = resultOf(r).rows || [];
         sel.innerHTML = '<option value="">' + esc(tr(rows.length ? "choose" : "none")) + "</option>" + rows.map((row) => '<option value="' + esc(row.id) + '">' + esc(row[p.ref.title] === undefined || row[p.ref.title] === null ? row.id : row[p.ref.title]) + "</option>").join("");
         if (keep && rows.some((row) => row.id === keep)) sel.value = keep; else if (q && rows.length === 1) sel.value = rows[0].id; resize(); } catch {}
@@ -181,6 +183,7 @@ const SCRIPT = `
       if (v === "") return required.has(k) ? tr("required") : null;
       if (p.type === "number" || p.type === "integer") { const n = Number(v); if (!Number.isFinite(n) || (p.type === "integer" && !Number.isInteger(n))) return tr("number"); if (typeof p.minimum === "number" && n < p.minimum) return tr("min", fmt(p.minimum)); if (typeof p.maximum === "number" && n > p.maximum) return tr("max", fmt(p.maximum)); return null; }
       if (p.format === "date" && !/^\\d{4}-\\d{2}-\\d{2}$/.test(v)) return tr("date");
+      if (p.format === "date-time" && !Number.isFinite(Date.parse(v))) return tr("dateTime");
       if (p.ref && p.ref.kind && typeof p.pattern === "string" && !new RegExp(p.pattern).test(v)) return tr("recordUri");
       if (typeof p.minLength === "number" && v.length < p.minLength) return tr("tooShort", p.minLength);
       if (typeof p.maxLength === "number" && v.length > p.maxLength) return tr("tooLong", p.maxLength);
@@ -189,10 +192,16 @@ const SCRIPT = `
     f.onsubmit = (e) => e.preventDefault();
     f.querySelector("button.primary").onclick = () => {
       const args = {}; const errs = {};
-      for (const k of keys) { const el = f.elements[k]; const p = props[k]; if (!el) continue; const bad = check(k, el); if (bad) errs[k] = bad; if (p.type === "boolean") args[k] = el.checked; else if (el.value !== "") args[k] = (p.type === "number" || p.type === "integer") ? Number(el.value) : el.value; }
+      for (const k of keys) { const el = f.elements[k]; const p = props[k]; if (!el) continue; const bad = check(k, el); if (bad) errs[k] = bad; if (p.type === "boolean") args[k] = el.checked; else if (el.value !== "") args[k] = (p.type === "number" || p.type === "integer") ? Number(el.value) : p.format === "date-time" ? new Date(el.value).toISOString() : el.value; }
       if (showErrors(f, errs)) { const first = f.querySelector(".bad"); if (first && first.focus) first.focus(); return; }
       run(args, f);
     };
+    // A page action's inputs start from the page's params of the same name (prefill); a picker keeps its value until its options arrive.
+    const pre = action.prefill || {};
+    for (const k of keys) { const v = pre[k]; const el = f.elements[k]; if (v === undefined || v === null || !el) continue;
+      if (props[k].type === "boolean") el.checked = Boolean(v); else if (props[k].ref && props[k].ref.tool) el.dataset.prefill = String(v);
+      else if (props[k].format === "date-time") { const d = new Date(String(v)); if (Number.isFinite(d.getTime())) el.value = new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16); }
+      else el.value = String(v); }
     container.appendChild(f);
     for (const k of keys) if (props[k].ref && props[k].ref.tool) { loadRef(k, ""); const box = f.querySelector('[data-ref-search="' + k + '"]'); let timer; if (box) box.oninput = () => { clearTimeout(timer); timer = setTimeout(() => loadRef(k, box.value.trim()), 250); }; }
     resize();
@@ -202,6 +211,37 @@ const SCRIPT = `
     const bar = document.createElement("div"); bar.className = "row actions";
     for (const a of actions) { const b = document.createElement("button"); b.textContent = L(a.title); b.onclick = () => actionForm(el, a, record, recordTitle); bar.appendChild(b); }
     el.appendChild(bar);
+  }
+  // A page's own actions (view.actions), at its top: the first is its primary; each opens its form, prefilled from the page's params.
+  function pageActions(v) {
+    if (!v.actions || !v.actions.length) return null;
+    const el = document.createElement("div"); el.className = "pageacts";
+    const bar = document.createElement("div"); bar.className = "row";
+    v.actions.forEach((a, i) => { const b = document.createElement("button"); if (i === 0) b.className = "primary"; b.textContent = L(a.title); b.onclick = () => actionForm(el, a, null, ""); bar.appendChild(b); });
+    el.appendChild(bar);
+    return el;
+  }
+  // The app's navigation (view.nav): its sections as a compact menu; a page opens through its own tool (open_<page>), a badge shows its count.
+  const badges = {};
+  function navBar(v) {
+    const sections = (v.nav || []).filter((x) => x && Array.isArray(x.pages) && x.pages.length);
+    if (sections.reduce((n, x) => n + x.pages.length, 0) < 2) return;
+    const nav = document.createElement("nav"); nav.className = "nav"; nav.setAttribute("aria-label", tr("pages"));
+    for (const sec of sections) {
+      const g = document.createElement("div"); g.className = "row";
+      if (sec.section) { const h = document.createElement("span"); h.className = "muted navlabel"; h.textContent = L(sec.section); g.appendChild(h); }
+      for (const pg of sec.pages) {
+        const b = document.createElement("button"); b.className = "navitem"; b.textContent = L(pg.title);
+        if (pg.name === v.page) b.setAttribute("aria-current", "page");
+        if (pg.badge) { const c = document.createElement("span"); c.className = "count"; c.dataset.badge = pg.badge; if (badges[pg.badge] !== undefined) c.textContent = badges[pg.badge]; b.appendChild(c); }
+        b.onclick = () => open(pg.tool, {}, b, true);
+        g.appendChild(b);
+      }
+      nav.appendChild(g);
+    }
+    root.appendChild(nav);
+    const tools = [...new Set([...nav.querySelectorAll("[data-badge]")].map((c) => c.dataset.badge))];
+    for (const tool of tools) callTool(tool, {}).then((r) => { if (errorOf(r)) return; const d = resultOf(r).data; if (!d || typeof d.value !== "number") return; badges[tool] = new Intl.NumberFormat(locale).format(d.value); nav.querySelectorAll('[data-badge="' + tool + '"]').forEach((c) => { c.textContent = badges[tool]; }); resize(); }, (e) => console.warn("[${PROTOCOL_ID}] badge " + tool, e));
   }
   // A change made in the view, told to the model for its next turn (MCP Apps ui/update-model-context: the host keeps the
   // last one). The text is the app's own result text, as the model would have read it from the call.
@@ -215,11 +255,12 @@ const SCRIPT = `
   // Where «back» returns: the lists and searches a record was opened from, each with the call that draws it again.
   const trail = [];
   const reload = async () => { if (!lastCall) return; const r = await callTool(lastCall.name, lastCall.args); const e = errorOf(r); if (e) throw new Error(e); render(resultOf(r)); };
-  const open = async (name, args, el) => {
+  // fresh: a page opened from the navigation starts a new trail («back» returns within a page, not across pages).
+  const open = async (name, args, el, fresh) => {
     const from = { s: last, call: lastCall };
     if (el) el.setAttribute("aria-busy", "true");
     notice(tr("opening"), "busy");
-    try { const r = await callTool(name, args); const e = errorOf(r); if (e) return fail(e); const s = resultOf(r); if (!s || !s.view) return fail(tr("noData", name)); if (from.s) trail.push(from); lastCall = { name, args }; notice(null); render(s); }
+    try { const r = await callTool(name, args); const e = errorOf(r); if (e) return fail(e); const s = resultOf(r); if (!s || !s.view) return fail(tr("noData", name)); if (fresh) trail.length = 0; else if (from.s) trail.push(from); lastCall = { name, args }; notice(null); render(s); }
     catch (e) { fail(e); }
     finally { if (el) el.removeAttribute("aria-busy"); }
   };
@@ -263,6 +304,7 @@ const SCRIPT = `
     if (s && s.error) { root.innerHTML = '<div class="box err">' + esc(L(s.error.message) || s.error.code) + "</div>"; return resize(); }
     if (!v) { root.innerHTML = '<div class="box muted">' + esc(JSON.stringify(s)) + "</div>"; return resize(); }
     if (v.kind === "list") {
+      navBar(v);
       const box = document.createElement("div"); box.className = "box";
       const cols = v.columns;
       box.innerHTML = "<h2>" + esc(L(v.title)) + (typeof s.total === "number" ? ' <span class="muted">· ' + esc(s.total) + "</span>" : "") + "</h2>" +
@@ -272,6 +314,7 @@ const SCRIPT = `
         (s.rows || []).map((r, i) => '<tr class="link" tabindex="0" data-i="' + i + '">' + cols.map((c) => "<td" + (c.role === "amount" || c.type === "number" ? ' class="num"' : "") + ">" + fmt(r[c.name], c) + "</td>").join("") + "</tr>").join("") +
         "</tbody></table>" + ((s.rows || []).length ? "" : '<p class="muted">—</p>');
       if (v.tool && !lastCall) lastCall = { name: v.tool, args: v.args || {} };
+      const acts = pageActions(v); if (acts) box.insertBefore(acts, box.querySelector("table"));
       box.querySelectorAll("tr.link").forEach((row) => { const go = () => open(v.getTool, { id: s.rows[Number(row.dataset.i)].id }, row); row.onclick = go; row.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); } }; });
       box.querySelectorAll("th.sort").forEach((th) => { const go = async () => { const field = th.dataset.sort; const args = Object.assign({}, v.args || {}, { sort: field, dir: v.sort && v.sort.field === field && v.sort.dir === "asc" ? "desc" : "asc" }); delete args.cursor;
         notice(tr("opening"), "busy"); try { const r = await callTool(v.tool, args); const e = errorOf(r); if (e) return fail(e); lastCall = { name: v.tool, args }; notice(null); render(resultOf(r)); } catch (e) { fail(e); } };
@@ -285,7 +328,10 @@ const SCRIPT = `
     } else if (v.kind === "fragment") {
       root.appendChild(fragmentBox(Object.assign({ title: v.title }, s)));
     } else if (v.kind === "dashboard") {
+      if (v.tool && !lastCall) lastCall = { name: v.tool, args: v.args || {} };
+      navBar(v);
       const h = document.createElement("h2"); h.textContent = L(v.title); root.appendChild(h);
+      const acts = pageActions(v); if (acts) root.appendChild(acts);
       const g = document.createElement("div"); g.className = "grid"; for (const fr of s.fragments || []) g.appendChild(fragmentBox(fr)); root.appendChild(g);
     } else if (v.kind === "search") {
       const box = document.createElement("div"); box.className = "box";
