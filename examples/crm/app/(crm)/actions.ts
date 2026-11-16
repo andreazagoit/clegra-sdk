@@ -1,6 +1,6 @@
 "use server"
 // The pages' changes. Each one checks the session and the permission itself (a server action is a
-// public POST endpoint), then calls the same function the MAP actions call (lib/crm.ts).
+// public POST endpoint), then calls the same function the app's actions call (lib/crm.ts).
 import { headers } from "next/headers"
 import { redirect } from "next/navigation"
 import { revalidatePath } from "next/cache"

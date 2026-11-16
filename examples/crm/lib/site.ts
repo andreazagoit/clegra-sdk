@@ -1,25 +1,25 @@
-// The CRM's public address: ONE variable, MODELAPP_PUBLIC_URL (an origin, e.g. https://crm.example.com).
-// better-auth runs under it (issuer <origin>/api/auth), the MCP server is <origin>/mcp, and the MAP
-// route (modelapp/next) reads the same variable. Read on use, never at import (a build has no secrets).
+// The CRM's public address: ONE variable, CLEGRA_PUBLIC_URL (an origin, e.g. https://crm.example.com).
+// better-auth runs under it (issuer <origin>/api/auth), the MCP server is <origin>/mcp, and the clegra
+// route (clegra/next) reads the same variable. Read on use, never at import (a build has no secrets).
 
 const LOCAL_ORIGIN = "http://localhost:3920"
 const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]"])
 
 export function publicOrigin(env: Record<string, string | undefined> = process.env): string {
-  const raw = env.MODELAPP_PUBLIC_URL?.trim()
+  const raw = env.CLEGRA_PUBLIC_URL?.trim()
   if (!raw) {
-    if (env.NODE_ENV === "production") throw new Error("MODELAPP_PUBLIC_URL is not set: the CRM's public origin (https://…) is needed in production.")
+    if (env.NODE_ENV === "production") throw new Error("CLEGRA_PUBLIC_URL is not set: the CRM's public origin (https://…) is needed in production.")
     return LOCAL_ORIGIN
   }
   let url: URL
   try {
     url = new URL(raw)
   } catch {
-    throw new Error(`MODELAPP_PUBLIC_URL "${raw}" is not a URL`)
+    throw new Error(`CLEGRA_PUBLIC_URL "${raw}" is not a URL`)
   }
-  if (url.pathname !== "/" || url.search || url.hash || url.username || url.password) throw new Error(`MODELAPP_PUBLIC_URL must be an origin only (https://host[:port]), not "${raw}"`)
+  if (url.pathname !== "/" || url.search || url.hash || url.username || url.password) throw new Error(`CLEGRA_PUBLIC_URL must be an origin only (https://host[:port]), not "${raw}"`)
   // http only off production (localhost, or e.g. http://host.docker.internal:3920 for a host running in Docker).
-  if (url.protocol !== "https:" && !(url.protocol === "http:" && (env.NODE_ENV !== "production" || LOOPBACK.has(url.hostname)))) throw new Error(`MODELAPP_PUBLIC_URL must be https in production: "${raw}"`)
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && (env.NODE_ENV !== "production" || LOOPBACK.has(url.hostname)))) throw new Error(`CLEGRA_PUBLIC_URL must be https in production: "${raw}"`)
   return url.origin
 }
 

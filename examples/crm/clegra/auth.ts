@@ -1,11 +1,11 @@
 // Who may call the CRM's MCP server: its own users, with access tokens from better-auth (the CRM's OAuth
-// authorization server, lib/auth-options.ts), and workspace hosts such as a Clegra node (MODELAPP_ISSUERS).
+// authorization server, lib/auth-options.ts), and workspace hosts such as a Clegra node (CLEGRA_ISSUERS).
 import { oauthProviderAuthServerMetadata, oauthProviderOpenIdConfigMetadata } from "@better-auth/oauth-provider"
 import { createLocalJWKSet, decodeProtectedHeader, errors, jwtVerify, type JWK } from "jose"
-import { AuthError, type AuthOptions, type CallerResolver, type Issuer } from "modelapp"
+import { AuthError, type AuthOptions, type CallerResolver, type Issuer } from "clegra"
 
 import { auth, membership } from "@/lib/auth"
-import { MODELAPP_SCOPE, ORG_CLAIM } from "@/lib/auth-options"
+import { CLEGRA_SCOPE, ORG_CLAIM } from "@/lib/auth-options"
 import { permissionsForRole } from "@/lib/permissions"
 import { authIssuer, mcpResource } from "@/lib/site"
 
@@ -21,7 +21,7 @@ async function loadKeys() {
 /**
  * A better-auth access token → the caller. Only a JWT (`typ: at+jwt`) signed by better-auth's keys, from its issuer,
  * for exactly this server (`aud` = resource), not expired (30 s of skew), not sender-bound (`cnf`), with the
- * `modelapp` scope and an organization. Then, live from the database: the person must still be a member of that
+ * `clegra` scope and an organization. Then, live from the database: the person must still be a member of that
  * organization; their role now gives the permissions. The organization comes from the token only.
  */
 export const resolveUser: CallerResolver = async (token, _request, { resource }) => {
@@ -49,7 +49,7 @@ export const resolveUser: CallerResolver = async (token, _request, { resource })
   // Claude do); any other audience could replay the token here.
   if ([claims.aud].flat().some((aud) => aud !== resource && aud !== `${authIssuer()}/oauth2/userinfo`)) throw new AuthError("the access token is for several servers")
   if (claims.cnf !== undefined) throw new AuthError("sender-constrained (DPoP) access tokens are not accepted")
-  if (typeof claims.scope !== "string" || !claims.scope.split(" ").includes(MODELAPP_SCOPE)) throw new AuthError(`the access token lacks the ${MODELAPP_SCOPE} scope`)
+  if (typeof claims.scope !== "string" || !claims.scope.split(" ").includes(CLEGRA_SCOPE)) throw new AuthError(`the access token lacks the ${CLEGRA_SCOPE} scope`)
   const orgId = claims[ORG_CLAIM]
   if (typeof orgId !== "string" || !orgId) throw new AuthError("the access token names no organization")
 
@@ -71,22 +71,22 @@ async function serveMetadata(request: Request): Promise<Response | null> {
 // ------------------------------------------------------------------ workspace hosts
 
 /**
- * Workspace hosts whose tokens (with the `modelapp` claim) are accepted: MODELAPP_ISSUERS, `issuer|jwksUri`,
+ * Workspace hosts whose tokens (with the `clegra` claim) are accepted: CLEGRA_ISSUERS, `issuer|jwksUri`,
  * comma-separated. Their tenant is `<installation>@<issuer>`, an installation of that host, never an organization.
  */
 export function issuersFromEnv(env: Record<string, string | undefined> = process.env): Issuer[] {
-  return (env.MODELAPP_ISSUERS ?? "")
+  return (env.CLEGRA_ISSUERS ?? "")
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean)
     .map((entry) => {
       const [issuer, jwksUri] = entry.split("|").map((s) => s.trim())
-      if (!issuer) throw new Error(`MODELAPP_ISSUERS: "${entry}" has no issuer`)
+      if (!issuer) throw new Error(`CLEGRA_ISSUERS: "${entry}" has no issuer`)
       return { issuer, ...(jwksUri ? { jwksUri } : {}) }
     })
 }
 
-/** The MCP server's authorization: the CRM's users and the configured hosts, for the one public address (MODELAPP_PUBLIC_URL). */
+/** The MCP server's authorization: the CRM's users and the configured hosts, for the one public address (CLEGRA_PUBLIC_URL). */
 export function crmAuth(env: Record<string, string | undefined> = process.env): AuthOptions {
   return { resolve: resolveUser, serve: serveMetadata, authorizationServers: [authIssuer(env)], resource: mcpResource(env), issuers: issuersFromEnv(env) }
 }

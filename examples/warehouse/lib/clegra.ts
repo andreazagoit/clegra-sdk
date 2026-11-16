@@ -1,9 +1,9 @@
-// The warehouse as a MAP app (docs/map/spec.md): one defineApp object that becomes a manifest for workspace
+// The warehouse as a Clegra app (docs/developers/spec.md): one defineApp object that becomes a manifest for workspace
 // hosts and a plain MCP server for ChatGPT, Claude and any MCP client. It adds nothing to the app's data
 // layer: every handler calls the functions the pages already use (lib/warehouse.ts), with the tenant the
 // SDK took from the verified caller (`ctx.installation`: an organization id, or `<installation>@<issuer>` for a
 // workspace host, lib/tenants.ts).
-import { AppError, defineApp, ref, SqlStore, type AuthOptions, type Context, type IdempotencyStore } from "modelapp"
+import { AppError, defineApp, ref, SqlStore, type AuthOptions, type Context, type IdempotencyStore } from "clegra"
 import { z } from "zod"
 
 import { sql } from "./db"
@@ -114,7 +114,7 @@ async function actor(tenantId: string, ctx: Context): Promise<Actor | null> {
   return (await isMember(tenantId, person.id)) ? { id: person.id } : null
 }
 
-/** The app's own refusals, as MAP errors the host can show; anything else stays a server error. */
+/** The app's own refusals, as app errors the host can show; anything else stays a server error. */
 async function mapped<T>(work: () => Promise<T>): Promise<T> {
   try {
     return await work()
@@ -145,9 +145,9 @@ export const EMBED_HOSTS = [
 ]
 
 export type WarehouseAppOptions = {
-  /** Who may call (spec §7): the app's own better-auth tokens (`auth.resolve`) and workspace hosts (`auth.issuers`), lib/modelapp-auth.ts. */
+  /** Who may call (spec §7): the app's own better-auth tokens (`auth.resolve`) and workspace hosts (`auth.issuers`), lib/clegra-auth.ts. */
   auth: AuthOptions
-  /** Idempotency of writes and one-time token ids: the app's Postgres by default (table from db/migrations/002_modelapp_store.sql). */
+  /** Idempotency of writes and one-time token ids: the app's Postgres by default (table from db/migrations/005_clegra_store.sql). */
   store?: IdempotencyStore
 }
 

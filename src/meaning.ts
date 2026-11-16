@@ -61,7 +61,7 @@ export const ref = Object.assign(
     kind(kind: string) {
       const problem = kindNameProblem(kind)
       if (problem) throw new Error(`ref.kind: ${problem}`)
-      return z.string().regex(RECORD_URI, { error: "a record URI: modelapp://<app>/<entity>/<id>" }).meta({ ref: { kind } })
+      return z.string().regex(RECORD_URI, { error: "a record URI: clegra://<app>/<entity>/<id>" }).meta({ ref: { kind } })
     },
   },
 )

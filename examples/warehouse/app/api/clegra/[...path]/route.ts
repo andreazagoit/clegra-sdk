@@ -1,8 +1,8 @@
-import { toNextHandlers, type NextHandlers } from "modelapp/next"
+import { toNextHandlers, type NextHandlers } from "clegra/next"
 
 import { warehouseApp } from "@/lib/app"
 
-// MCP (/mcp), the MAP manifest and the OAuth metadata (/.well-known/…): next.config's withModelApp rewrites
+// MCP (/mcp), the app manifest and the OAuth metadata (/.well-known/…): next.config's withClegra rewrites
 // them here. The app is made on the first request (the database and better-auth are never touched at build time),
 // better-auth only when one of its own tokens or metadata requests needs it (lib/app.ts).
 let handlers: NextHandlers | undefined

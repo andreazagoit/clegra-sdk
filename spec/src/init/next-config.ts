@@ -1,5 +1,5 @@
 /**
- * Wrapping an existing next.config with `withModelApp`, as a text edit that is made only when it is certainly
+ * Wrapping an existing next.config with `withClegra`, as a text edit that is made only when it is certainly
  * right: one `export default <expression>` (or `module.exports = <expression>`) on one line. Anything else
  * (a config written across lines after `export default`, two exports, …) is not edited: init prints the edit.
  */
@@ -27,12 +27,12 @@ function balanced(expression: string): boolean {
 
 function manualHow(cjs: boolean): string {
   return cjs
-    ? 'const { withModelApp } = require("modelapp/next")\n…\nmodule.exports = withModelApp(<your config>)'
-    : 'import { withModelApp } from "modelapp/next"\n…\nexport default withModelApp(<your config>)'
+    ? 'const { withClegra } = require("clegra/next")\n…\nmodule.exports = withClegra(<your config>)'
+    : 'import { withClegra } from "clegra/next"\n…\nexport default withClegra(<your config>)'
 }
 
 export function wrapNextConfig(text: string): ConfigEdit {
-  if (/\bwithModelApp\b/.test(text)) return { kind: "already", why: "already uses withModelApp" }
+  if (/\bwithClegra\b/.test(text)) return { kind: "already", why: "already uses withClegra" }
   const lines = text.split("\n")
   const esm = lines.flatMap((l, i) => (/^export\s+default\b/.test(l) ? [i] : []))
   const cjs = lines.flatMap((l, i) => (/^module\.exports\s*=/.test(l) ? [i] : []))
@@ -50,8 +50,8 @@ export function wrapNextConfig(text: string): ConfigEdit {
   }
   const semi = /;\s*$/.test(line) || lines.some((l) => /^import\s.*;\s*$/.test(l)) ? ";" : ""
   const q = (text.match(/'/g)?.length ?? 0) > (text.match(/"/g)?.length ?? 0) ? "'" : '"'
-  lines[at] = `${m[1]}withModelApp(${expression})${m[3] || semi}`
-  const statement = isCjs ? `const { withModelApp } = require(${q}modelapp/next${q})${semi}` : `import { withModelApp } from ${q}modelapp/next${q}${semi}`
+  lines[at] = `${m[1]}withClegra(${expression})${m[3] || semi}`
+  const statement = isCjs ? `const { withClegra } = require(${q}clegra/next${q})${semi}` : `import { withClegra } from ${q}clegra/next${q}${semi}`
   // After the last import (or require) line; without one, after the leading comment lines (`// @ts-check` stays first).
   const importLine = isCjs ? /^(const|let|var)\s.*=\s*require\(['"][^'"]+['"]\)/ : /^(import\s.*|\}\s*)from\s+['"][^'"]+['"]|^import\s+['"][^'"]+['"]/
   let insertAt = -1
@@ -64,10 +64,10 @@ export function wrapNextConfig(text: string): ConfigEdit {
   return { kind: "edited", text: lines.join("\n") }
 }
 
-/** Options in the config that withModelApp refuses at start: said by init now, not by next dev later. */
+/** Options in the config that withClegra refuses at start: said by init now, not by next dev later. */
 export function configWarnings(text: string): string[] {
   const out: string[] = []
-  if (/\bbasePath\s*:/.test(text)) out.push("next.config sets basePath: withModelApp refuses it (/mcp and /.well-known/… must be at the root of the host)")
-  if (/\btrailingSlash\s*:\s*true\b/.test(text)) out.push("next.config sets trailingSlash: true: withModelApp refuses it (it redirects /mcp to /mcp/)")
+  if (/\bbasePath\s*:/.test(text)) out.push("next.config sets basePath: withClegra refuses it (/mcp and /.well-known/… must be at the root of the host)")
+  if (/\btrailingSlash\s*:\s*true\b/.test(text)) out.push("next.config sets trailingSlash: true: withClegra refuses it (it redirects /mcp to /mcp/)")
   return out
 }

@@ -1,6 +1,6 @@
 # Quickstart
 
-> Model App Protocol (MAP): an app that is also an MCP server. One package, `modelapp` (ESM JavaScript with its
+> Clegra apps: an app that is also an MCP server. One package, `clegra` (ESM JavaScript with its
 > types, Node 20+; not on npm yet: until it is, install its tarball, see [RELEASE.md](RELEASE.md)). For a Next.js app that already has data and a sign-in: **five
 > minutes to see it, a day to ship it.**
 
@@ -9,73 +9,73 @@
 In an existing Next.js App Router app (`app/` or `src/app/`):
 
 ```sh
-npm i modelapp zod         # before the first release: npm i ./modelapp-0.1.0.tgz zod (the tarball of `npm pack`)
-npx modelapp init          # --dry-run prints what it would do
+npm i clegra zod         # before the first release: npm i ./clegra-0.1.0.tgz zod (the tarball of `npm pack`)
+npx clegra init          # --dry-run prints what it would do
 ```
 
 ```text
-modelapp init: Next.js 16.4.3, App Router in app/, TypeScript, alias @/*, next.config.ts
+clegra init: Next.js 16.4.3, App Router in app/, TypeScript, alias @/*, next.config.ts
 
-  create  modelapp.ts  (app "acme-tasks": sample tasks, one action, one page; TODOs for your data and sign-in)
-  create  app/api/modelapp/[...path]/route.ts  (imports { app } from "@/modelapp")
-  edit    next.config.ts  (wrapped the exported config with withModelApp)
-  create  .env.local  (MODELAPP_LOCAL_TOKEN: a random local bearer, refused in production)
+  create  clegra.ts  (app "acme-tasks": sample tasks, one action, one page; TODOs for your data and sign-in)
+  create  app/api/clegra/[...path]/route.ts  (imports { app } from "@/clegra")
+  edit    next.config.ts  (wrapped the exported config with withClegra)
+  create  .env.local  (CLEGRA_LOCAL_TOKEN: a random local bearer, refused in production)
 
 Next:
-  1. npm run dev   (then http://localhost:3000/.well-known/modelapp.json is the manifest, http://localhost:3000/mcp the MCP server)
-  2. npx modelapp check http://localhost:3000 --token <the token>
+  1. npm run dev   (then http://localhost:3000/.well-known/clegra.json is the manifest, http://localhost:3000/mcp the MCP server)
+  2. npx clegra check http://localhost:3000 --token <the token>
   3. MCP Inspector: npx @modelcontextprotocol/inspector, Streamable HTTP, http://localhost:3000/mcp, header Authorization: Bearer <the token>
   4. A day to ship: …
 ```
 
 What it writes:
 
-- **`modelapp.ts`**: a working `defineApp` with one entity (`task`) on sample data kept in the file, scoped by
+- **`clegra.ts`**: a working `defineApp` with one entity (`task`) on sample data kept in the file, scoped by
   `ctx.installation`, one confirmed action (`complete`) and one list page. Two `TODO`s mark where your database and
   your sign-in go.
-- **`app/api/modelapp/[...path]/route.ts`**: `export const { GET, POST, DELETE, OPTIONS } = toNextHandlers(app)`.
-- **`next.config`** wrapped in `withModelApp(…)`. It adds rewrites for `/mcp`, `/.well-known/modelapp.json` and the
+- **`app/api/clegra/[...path]/route.ts`**: `export const { GET, POST, DELETE, OPTIONS } = toNextHandlers(app)`.
+- **`next.config`** wrapped in `withClegra(…)`. It adds rewrites for `/mcp`, `/.well-known/clegra.json` and the
   OAuth metadata paths. init edits the file only when the edit is certain (one
   `export default <expression>` line). Otherwise it prints the edit for you to make.
-- **`.env.local`**: `MODELAPP_LOCAL_TOKEN`, a random bearer.
+- **`.env.local`**: `CLEGRA_LOCAL_TOKEN`, a random bearer.
 
 init never overwrites a file. Running it twice only prints `skip`s. It warns about what would get in the way: a
-`proxy.ts` (or `middleware.ts`) that would block `/mcp`, `basePath` or `trailingSlash: true` (which `withModelApp`
-refuses), a `.gitignore` that doesn't cover `.env.local`, and missing `modelapp`/`zod`.
+`proxy.ts` (or `middleware.ts`) that would block `/mcp`, `basePath` or `trailingSlash: true` (which `withClegra`
+refuses), a `.gitignore` that doesn't cover `.env.local`, and missing `clegra`/`zod`.
 
 Then:
 
 ```sh
 npm run dev
-npx modelapp check http://localhost:3000 --token <MODELAPP_LOCAL_TOKEN>
+npx clegra check http://localhost:3000 --token <CLEGRA_LOCAL_TOKEN>
 ```
 
 - **The MCP Inspector**: `npx @modelcontextprotocol/inspector`, transport Streamable HTTP, URL
-  `http://localhost:3000/mcp`, header `Authorization: Bearer <MODELAPP_LOCAL_TOKEN>`. You see `task_list`,
-  `task_get`, `task_complete`, `search`, `fetch`, `open_tasks` and `modelapp_resolve`.
-- **`modelapp check`** runs every check. All of them pass but one: `auth.mcp — protected-resource metadata names no
+  `http://localhost:3000/mcp`, header `Authorization: Bearer <CLEGRA_LOCAL_TOKEN>`. You see `task_list`,
+  `task_get`, `task_complete`, `search`, `fetch`, `open_tasks` and `clegra_resolve`.
+- **`clegra check`** runs every check. All of them pass but one: `auth.mcp — protected-resource metadata names no
   authorization server`. That is the honest state of a fresh app. MCP clients can't sign anyone in until
   `authorizationServers` names your sign-in, which is the first job of day one.
 
-**The local bearer, and why it is safe.** The generated `resolve` accepts `MODELAPP_LOCAL_TOKEN` only when
+**The local bearer, and why it is safe.** The generated `resolve` accepts `CLEGRA_LOCAL_TOKEN` only when
 `NODE_ENV` is not `production`. `next build`, `next start` and every deployment (Vercel previews included) set
 `production`, and then the bearer is refused whatever the environment holds. In production without
-`MODELAPP_PUBLIC_URL`, every request gets a `500 misconfigured` that names the missing setting. The token is random
-per project and lives in `.env.local`, which Next's `.gitignore` keeps out of git. modelapp's own dev sign-in
+`CLEGRA_PUBLIC_URL`, every request gets a `500 misconfigured` that names the missing setting. The token is random
+per project and lives in `.env.local`, which Next's `.gitignore` keeps out of git. clegra's own dev sign-in
 (`auth.dev`, a sign-in page for test people) does **not** exist under Next: it trusts only loopback callers, and a
 route handler can't know the caller's address, so `toNextHandlers` refuses it. `auth.anonymous` (no token at all) is
 not used either. It has no production guard, and with it nobody ever gets a `401`.
 
 ## A day to ship
 
-Work through the TODOs in `modelapp.ts`:
+Work through the TODOs in `clegra.ts`:
 
 1. **Your data in `get`, `list` and `run`.** Call the functions your pages already use, with `ctx.installation` as
    the tenant. [Your data layer](#your-data-layer) below shows a `list` over SQL.
 2. **Your sign-in in `auth.resolve` and `auth.authorizationServers`.** Your auth library is the OAuth authorization
    server. `resolve` verifies its access tokens and names the caller. Recipes for better-auth, Clerk, Auth0 and
    WorkOS are in [auth.md](auth.md). Keep the `localCaller` line if you like; it never answers in production.
-3. **The public address.** Set `MODELAPP_PUBLIC_URL=https://app.example.com` (an origin only) in each environment.
+3. **The public address.** Set `CLEGRA_PUBLIC_URL=https://app.example.com` (an origin only) in each environment.
    `auth.resource` is then `https://app.example.com/mcp`, the only audience tokens are accepted for. Without it,
    production answers `500 misconfigured`. A client can send `x-forwarded-host`, so never rely on it. On Vercel,
    previews have other hosts: give each environment its own value.
@@ -83,11 +83,11 @@ Work through the TODOs in `modelapp.ts`:
    `store: new SqlStore((text, params) => pool.query(text, params))`. It keeps write results (idempotency) and
    one-time token ids in your Postgres. `SqlStore.schema()` gives the table for a migration. Run it as a migration,
    never at startup.
-5. **`modelapp check` in CI.** Get a token for a test user through the real OAuth flow, then run
-   `MODELAPP_TOKEN=… npx modelapp check https://preview.example.com`. The exit code is 0 when conformant, 1 when a
+5. **`clegra check` in CI.** Get a token for a test user through the real OAuth flow, then run
+   `CLEGRA_TOKEN=… npx clegra check https://preview.example.com`. The exit code is 0 when conformant, 1 when a
    check failed, and 3 when there was no token (only the public checks ran).
 6. **Connect Claude and ChatGPT.** They need https: your deployment, or `cloudflared tunnel --url
-   http://localhost:3000` locally. Note that a tunnel's host is not `MODELAPP_PUBLIC_URL`, and your authorization
+   http://localhost:3000` locally. Note that a tunnel's host is not `CLEGRA_PUBLIC_URL`, and your authorization
    server must also be reachable there. Add `https://app.example.com/mcp` as a connector and sign in with your own
    sign-in. Lists, records and dashboards show as MCP Apps views. Clients identify themselves with a Client ID
    Metadata Document, so your authorization server must support CIMD (see [auth.md](auth.md)).
@@ -95,23 +95,23 @@ Work through the TODOs in `modelapp.ts`:
    frame is cross-site there, so your session cookie never reaches it: the host signs the viewer in with a
    one-minute ticket instead (spec §5.1). Three pieces:
    - `embed: { frameAncestors: ["https://app.clegra.com", "https://chatgpt.com", …], secret }` in `defineApp`
-     (`secret` default `MODELAPP_EMBED_SECRET`, 32+ characters; the hosts that may frame `/embed/*`);
+     (`secret` default `CLEGRA_EMBED_SECRET`, 32+ characters; the hosts that may frame `/embed/*`);
    - `proxy.ts`: `export const proxy = embedProxy(app)` with `export const config = { matcher: "/embed/:path*" }`
      (the ticket exchange at `POST /embed/_ticket`, `frame-ancestors` on every embed response);
    - in the page: `const caller = await getEmbedCaller(app, "stock")` (null: show "open it from the app"), then
      scope by `caller.installation`, check `caller.can(…)`. Give `/embed/*` a bare layout.
 
 What needs https: every remote MCP client (Claude, ChatGPT), and any authorization server they reach. What doesn't:
-the Inspector, `modelapp check` and workspace hosts on your machine.
+the Inspector, `clegra check` and workspace hosts on your machine.
 
 ## Without Next.js: one file, `listen`
 
-The same object runs on Node's own HTTP server. There, modelapp's dev sign-in works, because the socket tells it
+The same object runs on Node's own HTTP server. There, clegra's dev sign-in works, because the socket tells it
 the caller's address:
 
 ```ts
 // app.ts
-import { AppError, defineApp } from "modelapp"
+import { AppError, defineApp } from "clegra"
 import { z } from "zod"
 
 type Note = { id: string; title: string; status: "open" | "done" }
@@ -187,9 +187,9 @@ export default defineApp({
 
 ```ts
 // main.ts
-import { listen } from "modelapp/node"
+import { listen } from "clegra/node"
 import app from "./app"
-await listen(app, { port: 3920 })   // MCP at /mcp, manifest at /.well-known/modelapp.json
+await listen(app, { port: 3920 })   // MCP at /mcp, manifest at /.well-known/clegra.json
 ```
 
 `npx tsx main.ts` prints the dev sign-in code. A wrong name anywhere (a permission, an entity, an action) fails
@@ -210,7 +210,7 @@ Three things you get by saying them in the schema:
 ## Test it
 
 ```ts
-import { testClient } from "modelapp/testing"
+import { testClient } from "clegra/testing"
 import app from "./app"
 
 const plain = await testClient(app, { permissions: "all" })           // as ChatGPT would call
@@ -221,7 +221,7 @@ await host.confirmed("note_close", { id: "n1" })                      // call id
 
 `testClient` signs with dev tokens, so it needs `auth: { dev: true }` on the app it tests. Alternatively, pass
 `token` with a bearer your own `resolve` accepts, which is how the Next examples test their real auth. Then run the conformance checks ([spec §8](spec.md#8-conformance)):
-`npx modelapp check <url> --token <bearer>`.
+`npx clegra check <url> --token <bearer>`.
 
 ## Your data layer
 

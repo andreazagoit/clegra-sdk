@@ -16,7 +16,7 @@ import { testClient } from "./testing"
  * and the app never trusts that hint: it names the record from its id, and a hint naming another record stops the call.
  */
 
-const keyFile = join(tmpdir(), `modelapp-titles-key-${randomUUID()}.json`)
+const keyFile = join(tmpdir(), `clegra-titles-key-${randomUUID()}.json`)
 after(() => rmSync(keyFile, { force: true }))
 
 type Deal = { id: string; name: string; stage: string }
@@ -66,8 +66,8 @@ describe("records named by their title", () => {
     const c = await testClient(app, { permissions: "all" })
     const list = textOf(await c.call("deal_list", {})) as { rows: { uri: string; title: string }[] }
     assert.deepEqual(list.rows.map((r) => [r.uri, r.title]), [
-      ["modelapp://sales/deal/d1", "<untrusted>Hartley Engineering</untrusted>"],
-      ["modelapp://sales/deal/d2", "<untrusted>Acme &lt;Tools&gt;</untrusted>"],
+      ["clegra://sales/deal/d1", "<untrusted>Hartley Engineering</untrusted>"],
+      ["clegra://sales/deal/d2", "<untrusted>Acme &lt;Tools&gt;</untrusted>"],
     ])
     const one = textOf(await c.call("deal_get", { id: "d1" })) as { uri: string; title: string }
     assert.equal(one.title, "<untrusted>Hartley Engineering</untrusted>")
@@ -110,10 +110,10 @@ describe("records named by their title", () => {
   test("a workspace host's confirmation names the record from the app, never from the hint", async () => {
     const { app } = makeApp()
     const c = await testClient(app, { host: "workspace", permissions: "all" })
-    const asked = await c.call("deal_mark_won", { id: "d1", record_title: "Hartley Engineering" }, { modelapp: { call: "c1" } })
+    const asked = await c.call("deal_mark_won", { id: "d1", record_title: "Hartley Engineering" }, { clegra: { call: "c1" } })
     const confirm = (asked.structuredContent as { error: { code: string; confirm: { record: { title: string; uri: string } } } }).error
     assert.equal(confirm.code, "confirmation_required")
-    assert.deepEqual([confirm.confirm.record.uri, confirm.confirm.record.title], ["modelapp://sales/deal/d1", "Hartley Engineering"])
+    assert.deepEqual([confirm.confirm.record.uri, confirm.confirm.record.title], ["clegra://sales/deal/d1", "Hartley Engineering"])
   })
 
   test("an action can't declare the SDK's record_title", () => {

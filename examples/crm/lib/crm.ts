@@ -1,5 +1,5 @@
 // The CRM's own functions: what the pages and server actions call, and what
-// the MAP handlers (modelapp/app.ts) call too. Every function takes the tenant
+// the app handlers (clegra/app.ts) call too. Every function takes the tenant
 // (`orgId`) first and touches that tenant's rows only.
 import { randomUUID } from "node:crypto"
 
@@ -52,7 +52,7 @@ export type ListQuery = {
 }
 export type ListPage<Row> = { rows: Row[]; total: number; next?: string }
 
-/** `keys`: fields compared on a normalised value (MAP kinds' keys: an email without regard to case), as SQL over the column. The filter value arrives normalised. */
+/** `keys`: fields compared on a normalised value (kinds' keys: an email without regard to case), as SQL over the column. The filter value arrives normalised. */
 type ListSpec = { orgId: PgColumn; id: PgColumn; order: PgColumn; fields: Record<string, PgColumn>; keys?: Record<string, SQL> }
 
 const escapeLike = (text: string) => text.replace(/[\\%_]/g, (c) => `\\${c}`)
@@ -124,7 +124,7 @@ export async function getCompany(orgId: string, id: string): Promise<Company | n
 }
 
 /**
- * Links a company to its record in another app (a MAP record URI, e.g. `modelapp://erp/customer/1001`), or unlinks it
+ * Links a company to its record in another app (a record URI, e.g. `clegra://erp/customer/1001`), or unlinks it
  * (null). Only the URI is kept: the other app's data stay there, read live by whoever may see them.
  */
 export async function setErpCustomer(orgId: string, id: string, uri: string | null): Promise<Company> {

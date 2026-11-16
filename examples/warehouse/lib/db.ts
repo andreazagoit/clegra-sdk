@@ -2,7 +2,7 @@ import { resolve } from "node:path"
 
 /**
  * The data layer: plain SQL, on purpose. One `sql(text, params)` for every
- * query of the app (pages, server actions, the MAP handlers, the seed), one
+ * query of the app (pages, server actions, the app handlers, the seed), one
  * `transaction(fn)` for the few writes that must be atomic. No ORM.
  *
  * - DATABASE_URL set: a `pg` Pool (any Postgres: local, Neon, RDS, …).

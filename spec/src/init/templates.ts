@@ -1,21 +1,21 @@
 /**
- * The files `modelapp init` writes. Plain strings: no template engine. Each takes `ts` (TypeScript or plain
+ * The files `clegra init` writes. Plain strings: no template engine. Each takes `ts` (TypeScript or plain
  * JavaScript, as the project is written) and gives the file's text.
  */
 
 /** The environment variable of the local bearer (`.env.local`): accepted by the generated `resolve` outside production only. */
-export const LOCAL_TOKEN_ENV = "MODELAPP_LOCAL_TOKEN"
+export const LOCAL_TOKEN_ENV = "CLEGRA_LOCAL_TOKEN"
 
-/** `modelapp.ts`: a small working app on in-file sample data, with the places to plug the database and the sign-in marked TODO. */
-export function modelappFile(input: { name: string; title: string; ts: boolean }): string {
+/** `clegra.ts`: a small working app on in-file sample data, with the places to plug the database and the sign-in marked TODO. */
+export function clegraFile(input: { name: string; title: string; ts: boolean }): string {
   const { name, title, ts } = input
   const T = (typed: string, plain: string) => (ts ? typed : plain)
-  return `// Your app as a MAP app (Model App Protocol): one defineApp object that becomes a manifest for workspace hosts
-// and a plain MCP server for ChatGPT, Claude and any MCP client. Served by app/api/modelapp/[...path]/route${ts ? ".ts" : ".js"};
-// next.config's withModelApp puts it at /mcp and /.well-known/modelapp.json. Written by \`npx modelapp init\`.
+  return `// Your app as a Clegra app (Clegra apps): one defineApp object that becomes a manifest for workspace hosts
+// and a plain MCP server for ChatGPT, Claude and any MCP client. Served by app/api/clegra/[...path]/route${ts ? ".ts" : ".js"};
+// next.config's withClegra puts it at /mcp and /.well-known/clegra.json. Written by \`npx clegra init\`.
 import { timingSafeEqual } from "node:crypto"
 
-import { AppError, defineApp${T(", type ResolvedCaller", "")} } from "modelapp"
+import { AppError, defineApp${T(", type ResolvedCaller", "")} } from "clegra"
 import { z } from "zod"
 
 // ------------------------------------------------------------------ data
@@ -34,9 +34,9 @@ function tasksOf(installation${T(": string", "")})${T(": Task[]", "")} {
 }
 
 // ------------------------------------------------------------------ auth
-// The public origin (MODELAPP_PUBLIC_URL, like https://app.example.com): its /mcp is the only audience tokens are
+// The public origin (CLEGRA_PUBLIC_URL, like https://app.example.com): its /mcp is the only audience tokens are
 // accepted for. Required in production; unset locally, the app answers at whatever address you reach it by.
-const site = process.env.MODELAPP_PUBLIC_URL?.replace(/\\/+$/, "")
+const site = process.env.CLEGRA_PUBLIC_URL?.replace(/\\/+$/, "")
 const resource = site ? \`\${site}/mcp\` : undefined
 
 /**
@@ -62,7 +62,7 @@ export const app = defineApp({
   auth: {
     ...(resource ? { resource } : {}),
     // TODO(your sign-in): the OAuth authorization server that issues your users' tokens to MCP clients, named in the
-    // protected-resource metadata (better-auth: \`\${site}/api/auth\`). Until then \`modelapp check\` says it is missing.
+    // protected-resource metadata (better-auth: \`\${site}/api/auth\`). Until then \`clegra check\` says it is missing.
     authorizationServers: [],
     resolve: async (token, _request, _info) => {
       const local = localCaller(token)
@@ -70,7 +70,7 @@ export const app = defineApp({
       // TODO(your sign-in): verify your sign-in's access token (signature, expiry, and aud === _info.resource, this
       // server's MCP address) and say who is calling, from your own users and roles:
       //   return { installation: user.organizationId, person: { id: user.id, name: user.name }, permissions: ["tasks.edit"] }
-      // Recipes for better-auth, Clerk, Auth0 and WorkOS: auth.md in the modelapp docs. null refuses the token (401).
+      // Recipes for better-auth, Clerk, Auth0 and WorkOS: auth.md in the clegra docs. null refuses the token (401).
       return null
     },
   },
@@ -131,13 +131,13 @@ export const app = defineApp({
 `
 }
 
-/** `app/api/modelapp/[...path]/route.ts`: the one route that serves MCP, the manifest and the OAuth metadata. */
+/** `app/api/clegra/[...path]/route.ts`: the one route that serves MCP, the manifest and the OAuth metadata. */
 export function routeFile(input: { importPath: string }): string {
-  return `import { toNextHandlers } from "modelapp/next"
+  return `import { toNextHandlers } from "clegra/next"
 
 import { app } from ${JSON.stringify(input.importPath)}
 
-// MCP (/mcp), the manifest and the OAuth metadata (/.well-known/…), rewritten here by withModelApp in next.config.
+// MCP (/mcp), the manifest and the OAuth metadata (/.well-known/…), rewritten here by withClegra in next.config.
 export const { GET, POST, DELETE, OPTIONS } = toNextHandlers(app)
 `
 }
@@ -146,25 +146,25 @@ export const { GET, POST, DELETE, OPTIONS } = toNextHandlers(app)
 export function nextConfigFile(ts: boolean): string {
   return ts
     ? `import type { NextConfig } from "next"
-import { withModelApp } from "modelapp/next"
+import { withClegra } from "clegra/next"
 
 const nextConfig: NextConfig = {}
 
-export default withModelApp(nextConfig)
+export default withClegra(nextConfig)
 `
-    : `import { withModelApp } from "modelapp/next"
+    : `import { withClegra } from "clegra/next"
 
 /** @type {import("next").NextConfig} */
 const nextConfig = {}
 
-export default withModelApp(nextConfig)
+export default withClegra(nextConfig)
 `
 }
 
 /** The lines added to `.env.local`. */
 export function envLines(token: string): string {
-  return `# modelapp: a local bearer for MCP clients and \`modelapp check\` while your sign-in is not wired yet.
-# Accepted only outside production (see localCaller in modelapp.ts). Keep this file out of git.
+  return `# clegra: a local bearer for MCP clients and \`clegra check\` while your sign-in is not wired yet.
+# Accepted only outside production (see localCaller in clegra.ts). Keep this file out of git.
 ${LOCAL_TOKEN_ENV}=${token}
 `
 }

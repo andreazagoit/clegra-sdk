@@ -1,11 +1,11 @@
 import { PROPERTY_TYPES } from "../spec/src/kinds"
-import { MANIFEST_PATH, PROTOCOL_NAME, PROTOCOL_SHORT_NAME, SCHEMA_ID, SPEC_VERSION, uriPrefix } from "../spec/src/protocol"
+import { MANIFEST_PATH, SCHEMA_ID, SPEC_VERSION, uriPrefix } from "../spec/src/protocol"
 import { z } from "zod"
 
 /**
  * THE MANIFEST (spec §2): the app's definition without its code, as pure
- * JSON. Hosts read it with one fetch (`/.well-known/modelapp.json`) or as the
- * MCP resource `modelapp://<name>`. This Zod schema is the source of the
+ * JSON. Hosts read it with one fetch (`/.well-known/clegra.json`) or as the
+ * MCP resource `clegra://<name>`. This Zod schema is the source of the
  * published JSON Schema (schema/manifest.schema.json, `npm run schema`).
  */
 
@@ -151,5 +151,5 @@ export type ManifestFragment = z.infer<typeof fragmentSchema>
 
 /** The published JSON Schema of the manifest. */
 export function manifestJsonSchema(): Record<string, unknown> {
-  return { $id: SCHEMA_ID, title: `${PROTOCOL_NAME} (${PROTOCOL_SHORT_NAME}) manifest ${SPEC_VERSION}`, ...z.toJSONSchema(manifestSchema, { target: "draft-2020-12" }) }
+  return { $id: SCHEMA_ID, title: `Clegra app manifest ${SPEC_VERSION}`, ...z.toJSONSchema(manifestSchema, { target: "draft-2020-12" }) }
 }

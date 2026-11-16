@@ -1,9 +1,9 @@
 {
-  "name": "modelapp-example-crm",
+  "name": "clegra-example-crm",
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Reference app: a small CRM (companies, contacts, deals) as a Next.js app with its own sign-in (better-auth, organizations) and database (Drizzle, Postgres or PGlite), that is also a MAP app. Invented data.",
+  "description": "Reference app: a small CRM (companies, contacts, deals) as a Next.js app with its own sign-in (better-auth, organizations) and database (Drizzle, Postgres or PGlite), that is also a Clegra app. Invented data.",
   "scripts": {
     "setup": "tsx scripts/setup.ts",
     "dev": "next dev -p 3920",
@@ -29,7 +29,7 @@
     "better-call": "1.4.0",
     "drizzle-orm": "^0.45.4",
     "jose": "^6.2.13",
-    "modelapp": "*",
+    "clegra": "*",
     "next": "16.4.3",
     "postgres": "^3.4.9",
     "react": "19.3.0",

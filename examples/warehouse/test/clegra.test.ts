@@ -1,29 +1,29 @@
-// The warehouse as a MAP app, with REAL better-auth access tokens: the OAuth flow (sign in → authorize with PKCE
+// The warehouse as a Clegra app, with REAL better-auth access tokens: the OAuth flow (sign in → authorize with PKCE
 // and `resource` → consent → token) runs in-process against better-auth on a seeded in-memory PGlite, and every
-// call goes through the app's own `resolve` (lib/modelapp-auth.ts) and the Next route handlers.
+// call goes through the app's own `resolve` (lib/clegra-auth.ts) and the Next route handlers.
 import assert from "node:assert/strict"
 import { createHash, randomBytes } from "node:crypto"
 import { readFileSync } from "node:fs"
 import { after, before, describe, test } from "node:test"
 
 import { decodeJwt, decodeProtectedHeader, generateKeyPair, SignJWT } from "jose"
-import { generateSigningKey, signAccessToken, SqlStore, type Person } from "modelapp"
-import { embedProxy, toNextHandlers } from "modelapp/next"
-import { checkApp, formatReport } from "modelapp/spec"
-import { testClient } from "modelapp/testing"
+import { generateSigningKey, signAccessToken, SqlStore, type Person } from "clegra"
+import { embedProxy, toNextHandlers } from "clegra/next"
+import { checkApp, formatReport } from "clegra/spec"
+import { testClient } from "clegra/testing"
 
 process.env.PGLITE_DIR = "memory://"
 process.env.BETTER_AUTH_SECRET = randomBytes(32).toString("base64url")
 process.env.DEMO_PASSWORD = randomBytes(12).toString("base64url")
-delete process.env.MODELAPP_PUBLIC_URL
+delete process.env.CLEGRA_PUBLIC_URL
 
 const { closeDb, getDb, sql } = await import("../lib/db")
 const { migrate } = await import("../lib/migrate")
 const { seed } = await import("../lib/seed")
 const { createAuth, getAuth } = await import("../lib/auth")
-const { issuersFromEnv, modelAppAuth } = await import("../lib/modelapp-auth")
+const { issuersFromEnv, clegraAuth } = await import("../lib/clegra-auth")
 const { ALL_PERMISSIONS } = await import("../lib/permissions")
-const { createWarehouseApp } = await import("../lib/modelapp")
+const { createWarehouseApp } = await import("../lib/clegra")
 const { oauthAccessToken } = await import("../scripts/oauth-flow")
 const { restartable, restartAuthorization, staleOAuthQuery } = await import("../lib/oauth-query")
 
@@ -35,11 +35,11 @@ type Client = Awaited<ReturnType<typeof testClient>>
 type Rows = { rows: Record<string, unknown>[]; next?: string; total?: number }
 
 const auth = await getAuth()
-const app = createWarehouseApp({ auth: modelAppAuth(async () => auth) })
+const app = createWarehouseApp({ auth: clegraAuth(async () => auth) })
 const route = toNextHandlers(app, { publicUrl: SITE })
 // proxy.ts in front of the embedded pages (spec §5.1): the ticket exchange, frame-ancestors on every /embed response.
 const proxy = embedProxy(app, { publicUrl: SITE })
-/** The site as an HTTP client reaches it: /embed through the proxy, everything else through the MAP route. */
+/** The site as an HTTP client reaches it: /embed through the proxy, everything else through the clegra route. */
 const site = (r: Request) => (new URL(r.url).pathname.startsWith("/embed/") ? proxy(r) : route[r.method as "GET"](r))
 const handler = (request: Request) => auth.handler(request)
 
@@ -52,7 +52,7 @@ const as = async (email: string): Promise<Client> => testClient(app, { token: aw
 /** One JSON-RPC call through the Next route, as an MCP client makes it over HTTP. */
 async function rpc(token: string | null, method: string, params: Record<string, unknown> = {}) {
   const response = await route.POST(
-    new Request(`${SITE}/api/modelapp/mcp`, {
+    new Request(`${SITE}/api/clegra/mcp`, {
       method: "POST",
       headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "mcp-protocol-version": "2025-06-18", ...(token ? { authorization: `Bearer ${token}` } : {}) },
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
@@ -153,7 +153,7 @@ describe("kinds (product, order)", () => {
     assert.equal(errorOf(await ada.call("product_list", { gtin: "SCR-440" }))?.code, "invalid_input")
     const tools = new Map((await ada.listTools()).map((t) => [t.name, t]))
     assert.ok(tools.get("order_list")!.description!.endsWith(" Kind: order."))
-    assert.deepEqual(tools.get("product_get")!._meta!.modelapp, { entity: "product", kind: "product" })
+    assert.deepEqual(tools.get("product_get")!._meta!.clegra, { entity: "product", kind: "product" })
   })
 })
 
@@ -267,19 +267,19 @@ describe("create_order", () => {
 // A workspace host on its own keys (a Clegra node): its public key given to the app as a local JWKS, its tokens signed here.
 const HOST = "https://node.test"
 const hostKey = await generateSigningKey()
-const hostApp = createWarehouseApp({ auth: { ...modelAppAuth(async () => auth), issuers: [{ issuer: HOST, jwks: { keys: [hostKey.publicJwk] } }] } })
+const hostApp = createWarehouseApp({ auth: { ...clegraAuth(async () => auth), issuers: [{ issuer: HOST, jwks: { keys: [hostKey.publicJwk] } }] } })
 
-describe("workspace hosts (MODELAPP_ISSUERS)", () => {
+describe("workspace hosts (CLEGRA_ISSUERS)", () => {
   /** A client of one installation of the host: a new one-request token for each call, as a workspace host signs them. */
   const hostClient = (installation: string, person: Person) =>
-    testClient(hostApp, { token: () => signAccessToken(hostKey, { iss: HOST, aud: RESOURCE, sub: person.id, lifetimeSeconds: 60, modelapp: { installation, person, permissions: ALL_PERMISSIONS, host: "workspace" } }) })
+    testClient(hostApp, { token: () => signAccessToken(hostKey, { iss: HOST, aud: RESOURCE, sub: person.id, lifetimeSeconds: 60, clegra: { installation, person, permissions: ALL_PERMISSIONS, host: "workspace" } }) })
   const carla = { id: "host-person-7", name: "Carla Test" }
 
   test("hosts come from the environment, with the app's one MCP address as their audience", () => {
     assert.deepEqual(issuersFromEnv({}), [])
-    assert.deepEqual(issuersFromEnv({ MODELAPP_ISSUERS: " https://node.test|https://node.test/keys , https://other.test " }), [{ issuer: "https://node.test", jwksUri: "https://node.test/keys" }, { issuer: "https://other.test" }])
-    assert.throws(() => issuersFromEnv({ MODELAPP_ISSUERS: "|https://node.test/keys" }), /has no issuer/)
-    const options = modelAppAuth(async () => auth, { MODELAPP_ISSUERS: "https://node.test" })
+    assert.deepEqual(issuersFromEnv({ CLEGRA_ISSUERS: " https://node.test|https://node.test/keys , https://other.test " }), [{ issuer: "https://node.test", jwksUri: "https://node.test/keys" }, { issuer: "https://other.test" }])
+    assert.throws(() => issuersFromEnv({ CLEGRA_ISSUERS: "|https://node.test/keys" }), /has no issuer/)
+    const options = clegraAuth(async () => auth, { CLEGRA_ISSUERS: "https://node.test" })
     assert.deepEqual([options.issuers, options.resource], [[{ issuer: "https://node.test" }], RESOURCE])
   })
 
@@ -309,7 +309,7 @@ describe("workspace hosts (MODELAPP_ISSUERS)", () => {
     const { provisionWorkspace } = await import("../lib/tenants")
     const { listProducts } = await import("../lib/warehouse")
     const c = await hostClient("shop-embed", carla)
-    const t = (await c.call("modelapp_embed", { page: "stock", origin: "https://app.clegra.com" })).structuredContent as { action: string; field: string; ticket: string }
+    const t = (await c.call("clegra_embed", { page: "stock", origin: "https://app.clegra.com" })).structuredContent as { action: string; field: string; ticket: string }
     const hostProxy = embedProxy(hostApp, { publicUrl: SITE })
     const r = await hostProxy(new Request(t.action, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", origin: "https://app.clegra.com", "sec-fetch-dest": "iframe" }, body: new URLSearchParams({ [t.field]: t.ticket }) }))
     assert.equal(r.status, 303)
@@ -359,14 +359,14 @@ describe("fragments and pages", () => {
   })
 
   test("the idempotency table in the migration is the SDK's", () => {
-    const migration = readFileSync(new URL("../db/migrations/002_modelapp_store.sql", import.meta.url), "utf8")
-    assert.ok(migration.includes(SqlStore.schema()), "db/migrations/002_modelapp_store.sql must contain SqlStore.schema()")
+    const migration = readFileSync(new URL("../db/migrations/005_clegra_store.sql", import.meta.url), "utf8")
+    assert.ok(migration.includes(SqlStore.schema()), "db/migrations/005_clegra_store.sql must contain SqlStore.schema()")
   })
 })
 
 describe("the embedded stock board (spec §5.1)", () => {
   const HOST = "https://app.clegra.com"
-  const ticketFor = async (c: Client, origin = HOST) => (await c.call("modelapp_embed", { page: "stock", origin })) as { isError?: boolean; structuredContent?: { action: string; field: string; ticket: string; error?: { code: string } } }
+  const ticketFor = async (c: Client, origin = HOST) => (await c.call("clegra_embed", { page: "stock", origin })) as { isError?: boolean; structuredContent?: { action: string; field: string; ticket: string; error?: { code: string } } }
   const exchange = (t: { action: string; field: string; ticket: string }, origin = HOST) =>
     proxy(new Request(t.action, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", origin, "sec-fetch-dest": "iframe" }, body: new URLSearchParams({ [t.field]: t.ticket }) }))
   const viewer = (setCookie: string) => app.embed!.caller("stock", new Request(`${SITE}/embed/stock`, { headers: { cookie: setCookie.split(";")[0]!, "sec-fetch-dest": "iframe" } }))
@@ -462,7 +462,7 @@ describe("MCP authorization (better-auth tokens, verified by the app)", () => {
       ["opaque", "aBcDeFgHiJkLmNoPqRsTuVwXyZ012345", /not a JWT/],
       ["dpop", await resign(token, { cnf: { jkt: "x" } }), /DPoP/],
       ["two audiences", await resign(token, { aud: [RESOURCE, "https://other.example.test/mcp"] }), /several servers/],
-      ["no scope", await resign(token, { scope: "openid profile" }), /modelapp scope/],
+      ["no scope", await resign(token, { scope: "openid profile" }), /clegra scope/],
       ["no organization", await resign(token, { org: undefined }), /no organization/],
       ["foreign key", await foreign(token), /not valid/],
       ["wrong typ", await resign(token, {}, "JWT"), /not valid/],
@@ -516,7 +516,7 @@ describe("MCP authorization (better-auth tokens, verified by the app)", () => {
         for (const c of response.headers.getSetCookie()) jar.push(c.split(";")[0]!)
         return response
       }
-      const query = { response_type: "code", client_id: CLIENT_ID, redirect_uri: REDIRECT, scope: "modelapp", state: "s1", code_challenge: "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM", code_challenge_method: "S256", resource: RESOURCE }
+      const query = { response_type: "code", client_id: CLIENT_ID, redirect_uri: REDIRECT, scope: "clegra", state: "s1", code_challenge: "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM", code_challenge_method: "S256", resource: RESOURCE }
       const authorized = await send("/oauth2/authorize", { query })
       const toLogin = new URL(authorized.headers.get("location") ?? ((await authorized.json()) as { url: string }).url, SITE)
       assert.equal(toLogin.pathname, "/sign-in")
@@ -555,7 +555,7 @@ describe("MCP authorization (better-auth tokens, verified by the app)", () => {
     await send("/api/auth/sign-out", { json: {} })
     jar.clear()
     const verifier = randomBytes(32).toString("base64url")
-    const query = new URLSearchParams({ response_type: "code", client_id: client.client_id, redirect_uri: redirectUri, scope: "openid email offline_access modelapp", state: "s-stale", code_challenge: createHash("sha256").update(verifier).digest("base64url"), code_challenge_method: "S256", resource: RESOURCE })
+    const query = new URLSearchParams({ response_type: "code", client_id: client.client_id, redirect_uri: redirectUri, scope: "openid email offline_access clegra", state: "s-stale", code_challenge: createHash("sha256").update(verifier).digest("base64url"), code_challenge_method: "S256", resource: RESOURCE })
     // The sign-in page as better-auth sent the person there eleven minutes ago (it gives ten).
     const now = Date.now
     Date.now = () => now() - 11 * 60_000

@@ -17,7 +17,7 @@ import { viewHtml } from "./view"
  * draws the app's labels in the reader's language, whatever the token said.
  */
 
-const keyFile = join(tmpdir(), `modelapp-test-key-${randomUUID()}.json`)
+const keyFile = join(tmpdir(), `clegra-test-key-${randomUUID()}.json`)
 after(() => rmSync(keyFile, { force: true }))
 
 type Ticket = { id: string; title: string; owner: string; status: "open" | "closed" }
@@ -103,31 +103,31 @@ describe("people", () => {
 })
 
 describe("labels in the reader's language", () => {
-  test("a call's result carries its labels' other locales for its view (_meta.modelapp.l10n), never for the model", async () => {
+  test("a call's result carries its labels' other locales for its view (_meta.clegra.l10n), never for the model", async () => {
     const c = await testClient(makeApp(), { person: "u-me" })
     const r = await c.call("ticket_list", {})
     const view = (r.structuredContent as { view: { title: string; columns: { name: string; label: string }[] } }).view
     assert.equal(view.title, "Tickets", "the token said no language: the app's own")
-    const l10n = (r._meta?.modelapp as { l10n: Record<string, Record<string, string>> }).l10n
+    const l10n = (r._meta?.clegra as { l10n: Record<string, Record<string, string>> }).l10n
     assert.equal(l10n.it!.Tickets, "Richieste")
     assert.equal(l10n.it!.Owner, "Responsabile")
     assert.equal(l10n.it!.Open, "Aperta")
     assert.ok(!r.content![0]!.text!.includes("Richieste"), "the model's text is unchanged")
     const done = await c.call("ticket_close", { id: "t1" })
-    assert.equal((done._meta?.modelapp as { l10n: Record<string, Record<string, string>> }).l10n.it!["Printer closed."], "Printer chiusa.")
+    assert.equal((done._meta?.clegra as { l10n: Record<string, Record<string, string>> }).l10n.it!["Printer closed."], "Printer chiusa.")
   })
 
   test("an Italian caller's labels map back to English, the fallback of a reader whose language the app lacks", async () => {
     const c = await testClient(makeApp(), { person: "u-me", locale: "it" })
     const r = await c.call("ticket_list", {})
     assert.equal((r.structuredContent as { view: { title: string } }).view.title, "Richieste")
-    assert.equal((r._meta?.modelapp as { l10n: Record<string, Record<string, string>> }).l10n.en!.Richieste, "Tickets")
+    assert.equal((r._meta?.clegra as { l10n: Record<string, Record<string, string>> }).l10n.en!.Richieste, "Tickets")
   })
 
   test("the view follows hostContext.locale, then English", () => {
     const html = viewHtml("Desk")
     assert.match(html, /l10n\[locale\] \|\| l10n\[lang\] \|\| l10n\.en/)
     assert.match(html, /ctx\.locale\) locale = ctx\.locale/)
-    assert.match(html, /"modelapp"\]/, "it reads the labels from the result's _meta.modelapp")
+    assert.match(html, /"clegra"\]/, "it reads the labels from the result's _meta.clegra")
   })
 })

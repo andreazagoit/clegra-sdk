@@ -1,7 +1,7 @@
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 
-import { withModelApp } from "modelapp/next"
+import { withClegra } from "clegra/next"
 import type { NextConfig } from "next"
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -18,5 +18,5 @@ const nextConfig: NextConfig = {
   headers: async () => [{ source: "/((?!embed/).*)", headers: [{ key: "Content-Security-Policy", value: "frame-ancestors 'none'" }] }],
 }
 
-// /mcp, /.well-known/modelapp.json and the OAuth metadata → app/api/modelapp/[...path]/route.ts.
-export default withModelApp(nextConfig)
+// /mcp, /.well-known/clegra.json and the OAuth metadata → app/api/clegra/[...path]/route.ts.
+export default withClegra(nextConfig)

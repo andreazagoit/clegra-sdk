@@ -1,5 +1,5 @@
 // The CRM's own users over MCP: real better-auth access tokens (the OAuth flow in-process, on PGlite), verified by
-// the app's own `resolve` (modelapp/auth.ts), through the Next route handlers as the app serves them.
+// the app's own `resolve` (clegra/auth.ts), through the Next route handlers as the app serves them.
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
 import { createHash, randomBytes } from "node:crypto"
@@ -8,22 +8,22 @@ import { describe, test } from "node:test"
 
 // The public address of this test's site (read on use, so set before anything runs).
 const SITE = "http://localhost:3921"
-process.env.MODELAPP_PUBLIC_URL = SITE
+process.env.CLEGRA_PUBLIC_URL = SITE
 const { password, users } = await import("./setup")
 
 import { and, eq } from "drizzle-orm"
 import { verifyOAuthQueryParams } from "@better-auth/oauth-provider"
 import { decodeJwt, decodeProtectedHeader, generateKeyPair, SignJWT } from "jose"
-import { embedProxy, toNextHandlers } from "modelapp/next"
-import { checkApp, formatReport } from "modelapp/spec"
+import { embedProxy, toNextHandlers } from "clegra/next"
+import { checkApp, formatReport } from "clegra/spec"
 
 import { deals, member, user } from "../db/schema"
 import { auth } from "../lib/auth"
 import { db } from "../lib/db"
 import { oauthQueryOf } from "../lib/oauth-pages"
 import { answerConsent, signIn } from "../lib/sign-in"
-import { createCrmApp } from "../modelapp/app"
-import { crmAuth } from "../modelapp/auth"
+import { createCrmApp } from "../clegra/app"
+import { crmAuth } from "../clegra/auth"
 import { oauthAccessToken } from "../scripts/oauth-flow"
 
 const RESOURCE = `${SITE}/mcp`
@@ -41,7 +41,7 @@ const tokenFor = (who: keyof typeof accounts, extra: Partial<Parameters<typeof o
 
 async function rpc(token: string | null, method: string, params: Record<string, unknown> = {}) {
   const response = await route.POST(
-    new Request(`${SITE}/api/modelapp/mcp`, {
+    new Request(`${SITE}/api/clegra/mcp`, {
       method: "POST",
       headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "mcp-protocol-version": "2025-06-18", ...(token ? { authorization: `Bearer ${token}` } : {}) },
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
@@ -68,7 +68,7 @@ describe("the CRM's own users, with better-auth access tokens", () => {
       assert.deepEqual(meta.code_challenge_methods_supported, ["S256"])
       assert.equal(meta.client_id_metadata_document_supported, true)
       assert.ok(!("registration_endpoint" in meta), "dynamic client registration is off")
-      assert.ok((meta.scopes_supported as string[]).includes("modelapp"))
+      assert.ok((meta.scopes_supported as string[]).includes("clegra"))
     }
     assert.equal((await route.POST(new Request(`${SITE}/.well-known/oauth-authorization-server/api/auth`, { method: "POST" }))).status, 405)
   })
@@ -126,7 +126,7 @@ describe("the CRM's own users, with better-auth access tokens", () => {
       ["opaque", "aBcDeFgHiJkLmNoPqRsTuVwXyZ012345", /not a JWT/],
       ["dpop", await resign(t.accessToken, { cnf: { jkt: "x" } }), /DPoP/],
       ["two audiences", await resign(t.accessToken, { aud: [RESOURCE, "https://other.example.test/mcp"] }), /several servers/],
-      ["no scope", await resign(t.accessToken, { scope: "openid profile" }), /modelapp scope/],
+      ["no scope", await resign(t.accessToken, { scope: "openid profile" }), /clegra scope/],
       ["no org", await resign(t.accessToken, { org: undefined }), /no organization/],
       ["foreign key", await foreign(t.accessToken), /not valid/],
       ["wrong typ", await resign(t.accessToken, {}, "JWT"), /not an access token/],
@@ -165,7 +165,7 @@ describe("the CRM's own users, with better-auth access tokens", () => {
   })
 
   test("a refreshed token keeps the organization", async () => {
-    const t = await tokenFor("emma", { scope: "modelapp offline_access" })
+    const t = await tokenFor("emma", { scope: "clegra offline_access" })
     assert.ok(t.refreshToken)
     const response = await handler(
       new Request(`${ISSUER}/oauth2/token`, {
@@ -193,7 +193,7 @@ describe("the CRM's own users, with better-auth access tokens", () => {
     const client = (await (await send("/oauth2/create-client", { json: { client_name: "Deny test", redirect_uris: ["http://127.0.0.1:8976/callback"], application_type: "native", token_endpoint_auth_method: "none", grant_types: ["authorization_code"], response_types: ["code"] } })).json()) as { client_id: string }
     await send("/sign-out", { json: {} })
     jar.length = 0
-    const query = { response_type: "code", client_id: client.client_id, redirect_uri: "http://127.0.0.1:8976/callback", scope: "modelapp", state: "s1", code_challenge: "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM", code_challenge_method: "S256", resource: RESOURCE }
+    const query = { response_type: "code", client_id: client.client_id, redirect_uri: "http://127.0.0.1:8976/callback", scope: "clegra", state: "s1", code_challenge: "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM", code_challenge_method: "S256", resource: RESOURCE }
     const authorized = await send("/oauth2/authorize", { query })
     const toLogin = new URL(authorized.headers.get("location") ?? ((await authorized.json()) as { url: string }).url, SITE)
     assert.equal(toLogin.pathname, "/sign-in")
@@ -250,7 +250,7 @@ describe("the CRM's own users, with better-auth access tokens", () => {
     await send("/sign-out", { json: {} })
     jar.clear()
     const verifier = randomBytes(32).toString("base64url")
-    const query = { response_type: "code", client_id: client.client_id, redirect_uri: redirectUri, scope: "openid email offline_access modelapp", state: "s-demo", code_challenge: createHash("sha256").update(verifier).digest("base64url"), code_challenge_method: "S256", resource: RESOURCE }
+    const query = { response_type: "code", client_id: client.client_id, redirect_uri: redirectUri, scope: "openid email offline_access clegra", state: "s-demo", code_challenge: createHash("sha256").update(verifier).digest("base64url"), code_challenge_method: "S256", resource: RESOURCE }
     const toSignIn = async () => {
       const r = await send("/oauth2/authorize", { query })
       const url = new URL(r.headers.get("location") ?? ((await r.json()) as { url: string }).url, SITE)
@@ -311,7 +311,7 @@ describe("the CRM's own users, with better-auth access tokens", () => {
   })
 
   test("npm run token over real HTTP (sign in → authorize → consent → token), then the conformance checks on it", { timeout: 90_000 }, async () => {
-    // The site on a socket: /api/auth/* → better-auth, the rest → the MAP route (what Next does with withModelApp's rewrites).
+    // The site on a socket: /api/auth/* → better-auth, the rest → the clegra route (what Next does with withClegra's rewrites).
     const server = createServer(async (req, res) => {
       const chunks: Buffer[] = []
       for await (const c of req) chunks.push(c as Buffer)
@@ -335,13 +335,13 @@ describe("the CRM's own users, with better-auth access tokens", () => {
           child.stderr.on("data", (d) => (err += d))
           child.on("close", (code) => resolve({ code, out, err }))
         })
-      const ok = await run({ MODELAPP_OAUTH_EMAIL: accounts.alice, MODELAPP_OAUTH_PASSWORD: password })
+      const ok = await run({ CLEGRA_OAUTH_EMAIL: accounts.alice, CLEGRA_OAUTH_PASSWORD: password })
       assert.equal(ok.code, 0, ok.err)
       const token = ok.out.trim()
       assert.deepEqual([decodeJwt(token).aud, decodeJwt(token).org], [RESOURCE, "org_orbit"])
       const report = await checkApp({ url: SITE, token })
       assert.ok(report.ok && report.complete, formatReport(report))
-      const wrong = await run({ MODELAPP_OAUTH_EMAIL: accounts.alice, MODELAPP_OAUTH_PASSWORD: "not-the-password" })
+      const wrong = await run({ CLEGRA_OAUTH_EMAIL: accounts.alice, CLEGRA_OAUTH_PASSWORD: "not-the-password" })
       assert.equal(wrong.code, 1)
       assert.match(wrong.err, /sign in: 401/)
     } finally {

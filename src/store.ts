@@ -84,14 +84,14 @@ export class SqlStore implements IdempotencyStore {
   #calls = 0
 
   constructor(query: SqlQuery, options: { table?: string } = {}) {
-    const table = options.table ?? "modelapp_store"
+    const table = options.table ?? "clegra_store"
     if (!/^[a-z_][a-z0-9_]{0,62}$/.test(table)) throw new Error(`SqlStore: table "${table}" must be a plain lowercase SQL name`)
     this.#query = query
     this.#table = table
   }
 
   /** The table, as SQL for a migration. */
-  static schema(table = "modelapp_store"): string {
+  static schema(table = "clegra_store"): string {
     if (!/^[a-z_][a-z0-9_]{0,62}$/.test(table)) throw new Error(`SqlStore: table "${table}" must be a plain lowercase SQL name`)
     return `CREATE TABLE IF NOT EXISTS ${table} (key text PRIMARY KEY, args text NOT NULL, result jsonb, done boolean NOT NULL DEFAULT false, expires_at timestamptz NOT NULL);\nCREATE INDEX IF NOT EXISTS ${table}_expires_at ON ${table} (expires_at);`
   }

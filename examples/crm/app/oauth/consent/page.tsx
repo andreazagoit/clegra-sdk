@@ -12,7 +12,7 @@ import { consentAction } from "./actions"
 export const metadata = { title: "Connect an app" }
 
 const SCOPE_WORDS: Record<string, string> = {
-  modelapp: "Read and change the CRM's companies, contacts and deals, as you can",
+  clegra: "Read and change the CRM's companies, contacts and deals, as you can",
   openid: "Know who you are",
   profile: "See your name",
   email: "See your email address",

@@ -1,6 +1,6 @@
-# Model App Protocol (MAP)
+# Clegra apps
 
-> Apps that are also MCP servers. One typed object — `defineApp({ entities, actions, pages, fragments, agents, … })` from `modelapp` — becomes a JSON manifest (for hosts that draw the app natively) and a plain, conformant MCP server with tools, annotations and MCP Apps views (for ChatGPT, Claude and any MCP client). No MCP extension required.
+> Apps that are also MCP servers. One typed object — `defineApp({ entities, actions, pages, fragments, agents, … })` from `clegra` — becomes a JSON manifest (for hosts that draw the app natively) and a plain, conformant MCP server with tools, annotations and MCP Apps views (for ChatGPT, Claude and any MCP client). No MCP extension required.
 
 ## Start here
 
@@ -9,9 +9,9 @@
 ## More
 
 - [Specification](spec.md): the manifest, kinds and cross-app references, the generated MCP server, enforcement, conformance, workspace hosts across apps (normative, short)
-- [Quickstart](quickstart.md): Next.js in 5 minutes (`npx modelapp init`), a day to ship; standalone Node; tests
+- [Quickstart](quickstart.md): Next.js in 5 minutes (`npx clegra init`), a day to ship; standalone Node; tests
 - [Auth](auth.md): your sign-in as the authorization server, your `auth.resolve`; recipes for better-auth, Clerk, Auth0, WorkOS
-- [CRM example](examples/crm.md): Next.js, better-auth, Drizzle; code in `examples/modelapp/crm/modelapp/app.ts`
-- [Warehouse example](examples/warehouse.md): Next.js, better-auth, plain SQL; code in `examples/modelapp/warehouse/lib/modelapp.ts`
-- JSON Schema of the manifest: `packages/modelapp/spec/schema/modelapp.schema.json`
-- The kinds of this version (person, organization, event, task, document, product, order): `packages/modelapp/spec/kinds.json`
+- [CRM example](examples/crm.md): Next.js, better-auth, Drizzle; code in `examples/apps/crm/clegra/app.ts`
+- [Warehouse example](examples/warehouse.md): Next.js, better-auth, plain SQL; code in `examples/apps/warehouse/lib/clegra.ts`
+- JSON Schema of the manifest: `packages/clegra/spec/schema/clegra.schema.json`
+- The kinds of this version (person, organization, event, task, document, product, order): `packages/clegra/spec/kinds.json`

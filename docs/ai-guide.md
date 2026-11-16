@@ -1,12 +1,12 @@
-# AI guide: building a Model App Protocol (MAP) app
+# AI guide: building a Clegra apps app
 
 > For coding agents. This one file is enough to write a correct app.
-> A MAP app is an app that is also an MCP server. One package, `modelapp`; normative text in [spec.md](spec.md).
+> A Clegra app is an app that is also an MCP server. One package, `clegra`; normative text in [spec.md](spec.md).
 
 ## The model
 
 You write **one object**, `defineApp({ … })` (exported by name, `app`, in a Next.js app). The SDK turns
-it into (a) a JSON manifest at `/.well-known/modelapp.json` that workspace
+it into (a) a JSON manifest at `/.well-known/clegra.json` that workspace
 hosts draw natively and (b) a plain MCP server at `/mcp` with tools and MCP
 Apps views for ChatGPT, Claude and any MCP client. Permissions, field
 visibility, confirmations and idempotency are enforced by the SDK before your
@@ -16,36 +16,36 @@ handlers run. There is no other authoring API.
 
 | Import | What |
 |---|---|
-| `modelapp` | `defineApp`, `AppError`, `AuthError`, `ref`, `SqlStore`, `MemoryStore`, types. `app.fetch(request)` runs anywhere |
-| `modelapp/next` | `toNextHandlers(app)` (the route), `withModelApp(config)` (next.config) |
-| `modelapp/node` | `listen(app, { port })`: Node's own HTTP server |
-| `modelapp/testing` | `testClient(app, …)` |
-| `modelapp/spec` | `checkApp`, `formatReport`: the conformance checks |
-| CLI | `npx modelapp init` (adds MAP to a Next.js app), `npx modelapp check <url> --token <bearer>` |
+| `clegra` | `defineApp`, `AppError`, `AuthError`, `ref`, `SqlStore`, `MemoryStore`, types. `app.fetch(request)` runs anywhere |
+| `clegra/next` | `toNextHandlers(app)` (the route), `withClegra(config)` (next.config) |
+| `clegra/node` | `listen(app, { port })`: Node's own HTTP server |
+| `clegra/testing` | `testClient(app, …)` |
+| `clegra/spec` | `checkApp`, `formatReport`: the conformance checks |
+| CLI | `npx clegra init` (adds MAP to a Next.js app), `npx clegra check <url> --token <bearer>` |
 
 ## In a Next.js app (App Router)
 
-`npx modelapp init` writes these; by hand they are:
+`npx clegra init` writes these; by hand they are:
 
 ```ts
-// modelapp.ts (or src/modelapp.ts): export the app by name
+// clegra.ts (or src/clegra.ts): export the app by name
 export const app = defineApp({ … })
 
-// app/api/modelapp/[...path]/route.ts
-import { toNextHandlers } from "modelapp/next"
-import { app } from "@/modelapp"
+// app/api/clegra/[...path]/route.ts
+import { toNextHandlers } from "clegra/next"
+import { app } from "@/clegra"
 export const { GET, POST, DELETE, OPTIONS } = toNextHandlers(app)
 
-// next.config.ts: rewrites /mcp, /.well-known/modelapp.json and the OAuth metadata paths to that route
-import { withModelApp } from "modelapp/next"
-export default withModelApp(nextConfig)
+// next.config.ts: rewrites /mcp, /.well-known/clegra.json and the OAuth metadata paths to that route
+import { withClegra } from "clegra/next"
+export default withClegra(nextConfig)
 ```
 
 - Under Next: never `auth.dev` (`toNextHandlers` refuses it) and never defineApp's `path` (the mount does that job).
   `basePath` and `trailingSlash: true` are refused too.
-- Locally, before the sign-in is wired: init's `resolve` accepts the bearer in `.env.local` (`MODELAPP_LOCAL_TOKEN`)
+- Locally, before the sign-in is wired: init's `resolve` accepts the bearer in `.env.local` (`CLEGRA_LOCAL_TOKEN`)
   only when `NODE_ENV !== "production"`.
-- In production: `MODELAPP_PUBLIC_URL` (an origin) and `auth.resource = ${MODELAPP_PUBLIC_URL}/mcp`, or every request
+- In production: `CLEGRA_PUBLIC_URL` (an origin) and `auth.resource = ${CLEGRA_PUBLIC_URL}/mcp`, or every request
   answers `500 misconfigured`. Use `store: new SqlStore(query)` on serverless.
 - The app's handlers call the same functions its pages use. Data access is yours (any DB or ORM), and so is auth:
   `auth.resolve` verifies your own sign-in's tokens (recipes in [auth.md](auth.md)).
@@ -53,7 +53,7 @@ export default withModelApp(nextConfig)
 ## The whole shape
 
 ```ts
-import { AppError, defineApp, ref } from "modelapp"
+import { AppError, defineApp, ref } from "clegra"
 import { z } from "zod"
 
 export default defineApp({
@@ -70,9 +70,9 @@ export default defineApp({
     resolve: async (token, request, { resource }) => ({ installation: "org_1", person: { id, name }, permissions: [...] }), // your own users' tokens: verify (signature, exp, aud === resource), map to a caller, or null
     authorizationServers: ["https://crm.example.com/api/auth"], // your auth library's OAuth server, named in the protected-resource metadata
     serve: async (request) => null,                          // optional: answer your authorization server's RFC 8414 metadata at the root; null otherwise
-    issuers: [{ issuer: "https://host.example.com" }],       // optional: workspace hosts (tokens with the modelapp claim)
+    issuers: [{ issuer: "https://host.example.com" }],       // optional: workspace hosts (tokens with the clegra claim)
   },
-  path: "/api/modelapp",             // optional, never under Next: where MCP lives with app.fetch elsewhere (default /mcp at the root)
+  path: "/api/clegra",             // optional, never under Next: where MCP lives with app.fetch elsewhere (default /mcp at the root)
   store: new SqlStore(query),        // optional: idempotency + one-time token ids in your Postgres (serverless, several instances)
 
   permissions: {                     // ids are "group.verb"
@@ -199,7 +199,7 @@ Labels given as `{ en, it }` maps reach the generated view in every locale: it d
 
 What `defineApp` returns: `manifest()`, `fetch(request)` (Fetch API handler),
 `start()`, `devToken()`, `devConfirmation()`, `uri()`. On Node alone:
-`listen(app, { port, host })` from `modelapp/node`.
+`listen(app, { port, host })` from `clegra/node`.
 
 ## Kinds: the same kind of thing across apps (optional)
 
@@ -216,7 +216,7 @@ contact: {
     email: z.string().meta({ as: "email", filter: true }),           // a KEY of person: needs filter: true
     phone: z.string().optional().meta({ as: "telephone" }),
     company: ref("company").meta({ as: "worksFor", filter: true }),
-    erpAccount: ref.kind("organization").optional(),                 // a record of ANY app: its URI, modelapp://erp/customer/42
+    erpAccount: ref.kind("organization").optional(),                 // a record of ANY app: its URI, clegra://erp/customer/42
     lastNote: z.string().optional(),                                 // your own field: no `as`
   }),
   get, list,
@@ -228,7 +228,7 @@ customer: { kind: { by: "type", map: { company: "organization", private: "person
   image`; organization `legalName email† telephone† url address vatID taxID`; event `startDate`(required) `endDate
   location attendee† organizer uid`; task `due startDate completed assignee`; document `url encodingFormat author
   contentSize`; product `sku gtin brand price`; order `orderNumber orderDate customer totalPrice`. † many: an array
-  field, or several fields. Any entity may mark `url`, `dateCreated`, `dateModified`. Full list: `packages/modelapp/spec/kinds.json`.
+  field, or several fields. Any entity may mark `url`, `dateCreated`, `dateModified`. Full list: `packages/clegra/spec/kinds.json`.
 - Types: dates are RFC 3339 strings; `price`/`totalPrice` need `currency` on the field; `vatID` is `GB123456789`
   (prefix, no spaces); `gtin` 8/12/13/14 digits; `address` a string or a PostalAddress object.
 - **Keys** (`email`, `vatID`, `gtin`, `uid`) are exact filters. Your `list` gets the value already normalised
@@ -246,9 +246,9 @@ customer: { kind: { by: "type", map: { company: "organization", private: "person
 
 `<entity>_list`, `<entity>_get`, `search` and `fetch` (when a field has
 `search: true`), `<entity>_<action>` / `<action>`, `open_<page>` (not for
-record pages), `show_<fragment>`, `modelapp_resolve` (for hosts; `not_found` for another app's URI). Reads have
+record pages), `show_<fragment>`, `clegra_resolve` (for hosts; `not_found` for another app's URI). Reads have
 `readOnlyHint: true`; writes `destructiveHint: true` when `confirm` is always. With a kind, entity tools end with
-`Kind: person.` and carry `_meta.modelapp: { entity, kind }`; `search` takes `kind`. What a model reads of a list,
+`Kind: person.` and carry `_meta.clegra: { entity, kind }`; `search` takes `kind`. What a model reads of a list,
 a get, `search` or `fetch` carries each record's `title` beside its `uri`. Every tool the generated view calls is
 callable from views (`_meta.ui.visibility` with `"app"`, `openai/widgetAccessible`).
 
@@ -273,7 +273,7 @@ change).
 10. Dev auth (`auth: { dev: true }`) is for `listen()` and tests only: off unless you set it, refused when `NODE_ENV=production`, answers only callers on a loopback address, refused by `toNextHandlers`. In production give `auth.resource`: your server's public MCP address, the only audience tokens are accepted for. In `resolve`, check signature, expiry, issuer and `aud === resource` (a single audience); return null or throw `AuthError` to refuse.
 11. `ctx.installation` is the tenant: what `auth.resolve` said (your organization id), or a host's installation bound to that host (`<installation>@<issuer>`). Use it as an opaque key; never take a tenant from a parameter.
 12. In `list`, search `query.text` only in `query.textFields`; in a fragment's `data`, leave out values the caller may not see (`ctx.can`): template data are yours, the SDK only drops items whose `uri` is out of the caller's reach.
-13. Your data access is yours (any DB/ORM). Pages with `url` may be same-site paths (`/embed/pipeline`): then `defineApp({ embed: { frameAncestors: [the host origins], secret } })` (secret default `MODELAPP_EMBED_SECRET`), `proxy.ts` = `export const proxy = embedProxy(app); export const config = { matcher: "/embed/:path*" }`, and in the page `const caller = await getEmbedCaller(app, "<page name>")` (null → "open it from the app"; scope by `caller.installation`). Never read your own session cookie there: the host's frame is cross-site (spec §5.1).
+13. Your data access is yours (any DB/ORM). Pages with `url` may be same-site paths (`/embed/pipeline`): then `defineApp({ embed: { frameAncestors: [the host origins], secret } })` (secret default `CLEGRA_EMBED_SECRET`), `proxy.ts` = `export const proxy = embedProxy(app); export const config = { matcher: "/embed/:path*" }`, and in the page `const caller = await getEmbedCaller(app, "<page name>")` (null → "open it from the app"; scope by `caller.installation`). Never read your own session cookie there: the host's frame is cross-site (spec §5.1).
 
 ## Common mistakes
 
@@ -290,19 +290,19 @@ change).
 | `kind` on every entity "for symmetry" | Only for things other apps hold too; a deal has none |
 | `as: "email"` on a notes field, or a key filter with `ILIKE` | `as` only for the real value; keys compared exactly on the normalised value |
 | Keeping another app's title next to a `ref.kind` URI | Keep the URI only |
-| `auth: { dev: true }` or `path` in a Next.js app | Next: your own `auth.resolve` (locally init's `MODELAPP_LOCAL_TOKEN`), no `path`; the route's mount does it |
+| `auth: { dev: true }` or `path` in a Next.js app | Next: your own `auth.resolve` (locally init's `CLEGRA_LOCAL_TOKEN`), no `path`; the route's mount does it |
 | `aud` checked with "includes", or not at all, in `resolve` | Exactly one audience, equal to `resource` |
 | The tenant taken from a tool argument or a header | From the verified token (or the database row it points to) only |
 
 ## Check your work
 
 ```ts
-import { testClient } from "modelapp/testing"
+import { testClient } from "clegra/testing"
 const c = await testClient(app, { permissions: ["deals.edit"] })      // or "all"; host: "workspace"; person; installation; locale
 await c.listTools(); await c.call("deal_list", {}); await c.readResource("ui://crm/view")
 await (await testClient(app, { host: "workspace", permissions: "all" })).confirmed("deal_mark_won", { id: "d1" })
 ```
 
-`npx modelapp check <url> --token <bearer>` must end with `Conformant.`
-Complete, tested apps to copy from: the CRM ([`examples/modelapp/crm/modelapp/app.ts`](../../examples/modelapp/crm/modelapp/app.ts), Drizzle) and the
-warehouse ([`examples/modelapp/warehouse/lib/modelapp.ts`](../../examples/modelapp/warehouse/lib/modelapp.ts), plain SQL).
+`npx clegra check <url> --token <bearer>` must end with `Conformant.`
+Complete, tested apps to copy from: the CRM ([`examples/apps/crm/clegra/app.ts`](../../examples/apps/crm/clegra/app.ts), Drizzle) and the
+warehouse ([`examples/apps/warehouse/lib/clegra.ts`](../../examples/apps/warehouse/lib/clegra.ts), plain SQL).

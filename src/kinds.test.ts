@@ -252,15 +252,15 @@ describe("kinds: key filters", () => {
 })
 
 describe("kinds: the MCP server", () => {
-  test("entity tools end with the kind's fixed sentence and carry _meta.modelapp { entity, kind }", async () => {
+  test("entity tools end with the kind's fixed sentence and carry _meta.clegra { entity, kind }", async () => {
     const tools = new Map((await (await testClient(kindApp())).listTools()).map((t) => [t.name, t]))
     assert.ok(tools.get("contact_list")!.description!.endsWith(" Kind: person."), tools.get("contact_list")!.description)
     assert.ok(tools.get("contact_get")!.description!.endsWith(" Kind: person."))
     assert.ok(tools.get("customer_get")!.description!.endsWith(" Kind: organization or person (by type)."))
     assert.ok(tools.get("shipment_list")!.description!.endsWith(" Kind: com.example.shipment."))
-    assert.deepEqual(tools.get("contact_list")!._meta!.modelapp, { entity: "contact", kind: "person" })
-    assert.deepEqual(tools.get("customer_get")!._meta!.modelapp, { entity: "customer", kind: { by: "type", map: { company: "organization", private: "person" } } })
-    assert.deepEqual(tools.get("note_list")!._meta!.modelapp, { entity: "note" }, "an entity without a kind still names itself")
+    assert.deepEqual(tools.get("contact_list")!._meta!.clegra, { entity: "contact", kind: "person" })
+    assert.deepEqual(tools.get("customer_get")!._meta!.clegra, { entity: "customer", kind: { by: "type", map: { company: "organization", private: "person" } } })
+    assert.deepEqual(tools.get("note_list")!._meta!.clegra, { entity: "note" }, "an entity without a kind still names itself")
     assert.ok(!tools.get("note_list")!.description!.includes("Kind:"))
   })
 
@@ -283,16 +283,16 @@ describe("kinds: the MCP server", () => {
     assert.deepEqual((tools.get("search")!.inputSchema.properties as Record<string, { enum?: string[] }>).kind!.enum, ["person", "organization"])
     const all = ((await c.call("search", { query: "e" })).structuredContent as { results: { id: string; kind?: string }[] }).results
     assert.deepEqual(Object.fromEntries(all.map((r) => [r.id, r.kind ?? null])), {
-      "modelapp://people/contact/c1": "person",
-      "modelapp://people/contact/c2": "person",
-      "modelapp://people/customer/k1": "organization",
-      "modelapp://people/customer/k2": "person",
-      "modelapp://people/note/n1": null,
+      "clegra://people/contact/c1": "person",
+      "clegra://people/contact/c2": "person",
+      "clegra://people/customer/k1": "organization",
+      "clegra://people/customer/k2": "person",
+      "clegra://people/note/n1": null,
     })
     const orgs = await c.call("search", { query: "e", kind: "organization" })
-    assert.deepEqual((orgs.structuredContent as { results: { id: string }[] }).results.map((r) => r.id), ["modelapp://people/customer/k1"])
-    assert.deepEqual(JSON.parse(orgs.content![0]!.text!).results, [{ id: "modelapp://people/customer/k1", title: "Hartley Engineering", url: "modelapp://people/customer/k1", kind: "organization" }])
-    const fetched = JSON.parse((await c.call("fetch", { id: "modelapp://people/customer/k2" })).content![0]!.text!)
+    assert.deepEqual((orgs.structuredContent as { results: { id: string }[] }).results.map((r) => r.id), ["clegra://people/customer/k1"])
+    assert.deepEqual(JSON.parse(orgs.content![0]!.text!).results, [{ id: "clegra://people/customer/k1", title: "Hartley Engineering", url: "clegra://people/customer/k1", kind: "organization" }])
+    const fetched = JSON.parse((await c.call("fetch", { id: "clegra://people/customer/k2" })).content![0]!.text!)
     assert.deepEqual(fetched.metadata, { type: "customer", kind: "person" })
   })
 
@@ -378,12 +378,12 @@ describe("kinds: conformance", () => {
   })
 
   test("kinds.tools fails when an entity tool doesn't name its kind", async () => {
-    const report = await run(kindApp(), { tools: (tools) => tools.filter((t) => t.name === "contact_list").forEach((t) => ((t.description = "Contacts."), delete (t._meta as Record<string, unknown>).modelapp)) })
+    const report = await run(kindApp(), { tools: (tools) => tools.filter((t) => t.name === "contact_list").forEach((t) => ((t.description = "Contacts."), delete (t._meta as Record<string, unknown>).clegra)) })
     const check = byId(report, "kinds.tools")
     assert.ok(check, formatReport(report))
     assert.equal(check.ok, false)
     assert.match(check.detail!, /contact_list: the description doesn't end with «Kind: person\.»/)
-    assert.match(check.detail!, /_meta.modelapp/)
+    assert.match(check.detail!, /_meta.clegra/)
   })
 
   test("kinds.keys fails when a key filter compares case-sensitively (the stored address isn't normalised)", async () => {
@@ -391,7 +391,7 @@ describe("kinds: conformance", () => {
     const report = await run(kindApp({ contactList: strict }))
     const check = byId(report, "kinds.keys")
     assert.equal(check.ok, false)
-    assert.match(check.detail!, /modelapp:\/\/people\/contact\/c1 is not found by its own email/)
+    assert.match(check.detail!, /clegra:\/\/people\/contact\/c1 is not found by its own email/)
   })
 
   test("kinds.keys fails when a key filter is ignored (the SDK refuses the rows; the call fails)", async () => {

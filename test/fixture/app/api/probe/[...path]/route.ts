@@ -1,5 +1,5 @@
-import { toNextHandlers } from "modelapp/next"
-import type { App } from "modelapp"
+import { toNextHandlers } from "clegra/next"
+import type { App } from "clegra"
 import type { NextRequest } from "next/server"
 
 // Test-only probes: what a route handler sees of a (rewritten) request, and an SSE stream through toNextHandlers.

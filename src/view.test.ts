@@ -27,7 +27,7 @@ import { viewHtml } from "./view"
  * inline widget: what the view says after a click must be inside what the person sees.
  */
 
-const keyFile = join(tmpdir(), `modelapp-view-key-${randomUUID()}.json`)
+const keyFile = join(tmpdir(), `clegra-view-key-${randomUUID()}.json`)
 
 type Deal = { id: string; name: string; stage: "open" | "won"; value: number }
 const names = ["Hartley Engineering", "Acme Tools", "Birch Labs", "Cobalt Retail", "Delta Foods", "Ember Studio", "Fjord Logistics", "Granite Works", "Harbor Clinic", "Iris Media", "Juniper Farms", "Kestrel Air"]

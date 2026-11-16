@@ -1,4 +1,4 @@
--- MAP kinds: a product's GTIN (EAN/UPC barcode digits), the key by which other apps find the same product.
+-- Kinds: a product's GTIN (EAN/UPC barcode digits), the key by which other apps find the same product.
 -- The demo data use the restricted-circulation range (prefix 20–29): numbers no real product carries.
 ALTER TABLE product ADD COLUMN gtin text CHECK (gtin ~ '^([0-9]{8}|[0-9]{12,14})$');
 CREATE INDEX product_org_gtin ON product (organization_id, gtin);

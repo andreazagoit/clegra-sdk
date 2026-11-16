@@ -20,7 +20,7 @@ const KEYS = "https://client.example/oauth/jwks.json"
 /** A public address for the fake resolver. */
 const PUBLIC = "93.184.215.14"
 
-const keyFile = join(tmpdir(), `modelapp-cimd-key-${randomUUID()}.json`)
+const keyFile = join(tmpdir(), `clegra-cimd-key-${randomUUID()}.json`)
 after(() => rmSync(keyFile, { force: true }))
 
 type Answer = { status?: number; headers?: Record<string, string>; body?: unknown; raw?: string }

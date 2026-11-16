@@ -582,7 +582,7 @@
       }
     },
     {
-      "name": "modelapp_embed",
+      "name": "clegra_embed",
       "title": "Embed ticket",
       "description": "For hosts and the app's views: a one-minute, single-use ticket that signs the viewer in to one of the app's embedded pages, framed by a document of the given origin.",
       "annotations": {
@@ -613,7 +613,7 @@
       }
     },
     {
-      "name": "modelapp_resolve",
+      "name": "clegra_resolve",
       "title": "Resolve",
       "description": "For hosts: fragment and record URIs resolved for the viewer.",
       "annotations": {
@@ -764,7 +764,7 @@
     {
       "name": "company_link_erp_customer",
       "title": "Link to the ERP customer",
-      "description": "Records which customer of another app (the ERP) this company is (a change). On one company: its `id`, and its title in `record_title`. An input that takes a record of another app takes its URI (modelapp://<app>/<entity>/<id>), as that app's search or lists give it.",
+      "description": "Records which customer of another app (the ERP) this company is (a change). On one company: its `id`, and its title in `record_title`. An input that takes a record of another app takes its URI (clegra://<app>/<entity>/<id>), as that app's search or lists give it.",
       "annotations": {
         "title": "Link to the ERP customer",
         "readOnlyHint": false,
@@ -787,7 +787,7 @@
           },
           "customer": {
             "type": "string",
-            "pattern": "^modelapp:\\/\\/[a-z][a-z0-9-]{1,39}\\/[a-z][a-z0-9_]{0,39}\\/[^/?#\\s]+$",
+            "pattern": "^clegra:\\/\\/[a-z][a-z0-9-]{1,39}\\/[a-z][a-z0-9_]{0,39}\\/[^/?#\\s]+$",
             "title": "ERP customer"
           }
         },
@@ -1405,7 +1405,7 @@
   ],
   "resources": [
     {
-      "uri": "modelapp://crm",
+      "uri": "clegra://crm",
       "mimeType": "application/json"
     },
     {
@@ -1445,10 +1445,10 @@
       "authorizationServers": []
     },
     "view": "ui://crm/view",
-    "resolveTool": "modelapp_resolve",
+    "resolveTool": "clegra_resolve",
     "embed": {
       "tool": {
-        "name": "modelapp_embed",
+        "name": "clegra_embed",
         "plain": true
       },
       "path": "/embed",
@@ -1509,7 +1509,7 @@
             },
             "erpCustomer": {
               "type": "string",
-              "pattern": "^modelapp:\\/\\/[a-z][a-z0-9-]{1,39}\\/[a-z][a-z0-9_]{0,39}\\/[^/?#\\s]+$"
+              "pattern": "^clegra:\\/\\/[a-z][a-z0-9-]{1,39}\\/[a-z][a-z0-9_]{0,39}\\/[^/?#\\s]+$"
             }
           },
           "required": [
@@ -2102,7 +2102,7 @@
           "properties": {
             "customer": {
               "type": "string",
-              "pattern": "^modelapp:\\/\\/[a-z][a-z0-9-]{1,39}\\/[a-z][a-z0-9_]{0,39}\\/[^/?#\\s]+$",
+              "pattern": "^clegra:\\/\\/[a-z][a-z0-9-]{1,39}\\/[a-z][a-z0-9_]{0,39}\\/[^/?#\\s]+$",
               "label": {
                 "en": "ERP customer",
                 "it": "Cliente nel gestionale"

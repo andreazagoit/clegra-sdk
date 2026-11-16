@@ -4,7 +4,7 @@ import { createHash, randomBytes } from "node:crypto"
  * The OAuth 2.1 authorization-code flow with PKCE (S256) against a better-auth instance with the mcp plugin, as a
  * person signs in and agrees, step by step over HTTP: sign in → (organization) → authorize → consent → token.
  * `fetch` is the global one for a running site, or `auth.handler` in-process. For the tests and for
- * `npm run token` (scripts/oauth-token.ts): a token for `modelapp check` against a running CRM.
+ * `npm run token` (scripts/oauth-token.ts): a token for `clegra check` against a running CRM.
  *
  * The consent is given by POST /oauth2/consent { accept: true, oauth_query } — what an app's consent page does —
  * for whichever page the authorize step redirects to (post-login or consent): the organization was made active
@@ -21,7 +21,7 @@ export type OAuthFlowOptions = {
   organizationId?: string
   /** An existing client (e.g. a metadata-document client id). Default: a public native client (loopback redirect, never contacted) created for the signed-in person (`/oauth2/create-client`). */
   client?: { clientId: string; redirectUri: string }
-  /** Default `modelapp`. */
+  /** Default `clegra`. */
   scope?: string
   fetch?: (request: Request) => Promise<Response>
 }
@@ -103,7 +103,7 @@ export async function oauthAccessToken(options: OAuthFlowOptions): Promise<OAuth
   const verifier = b64url(randomBytes(32))
   const challenge = b64url(createHash("sha256").update(verifier).digest())
   const state = b64url(randomBytes(16))
-  const query = { response_type: "code", client_id: client.clientId, redirect_uri: client.redirectUri, scope: options.scope ?? "modelapp", state, code_challenge: challenge, code_challenge_method: "S256", resource: options.resource }
+  const query = { response_type: "code", client_id: client.clientId, redirect_uri: client.redirectUri, scope: options.scope ?? "clegra", state, code_challenge: challenge, code_challenge_method: "S256", resource: options.resource }
   let next = await locationOf(await call("/oauth2/authorize", { query }))
   for (let step = 0; step < 4 && !next.startsWith(client.redirectUri); step++) {
     const page = new URL(next, origin)

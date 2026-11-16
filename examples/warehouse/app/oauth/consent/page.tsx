@@ -11,7 +11,7 @@ import { getViewer } from "@/lib/session"
 export const metadata: Metadata = { title: "Connect an app" }
 
 const SCOPES: Record<string, string> = {
-  modelapp: "Use the warehouse for you: see products, movements and orders, and make the changes your role allows (it asks before changes)",
+  clegra: "Use the warehouse for you: see products, movements and orders, and make the changes your role allows (it asks before changes)",
   openid: "Know who you are",
   profile: "See your name",
   email: "See your email address",

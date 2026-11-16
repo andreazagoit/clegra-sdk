@@ -13,7 +13,7 @@ else {
     [
       "# Written by `npm run setup`. Local only: never commit it.",
       `BETTER_AUTH_SECRET=${secret}`,
-      "MODELAPP_PUBLIC_URL=http://localhost:3920",
+      "CLEGRA_PUBLIC_URL=http://localhost:3920",
       `DEMO_PASSWORD=${password}`,
       "DEMO_SIGNIN=1",
       "",

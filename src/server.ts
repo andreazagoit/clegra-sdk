@@ -35,7 +35,7 @@ import type {
 import { MCP_APP_MIME_TYPE, urlPageHtml, viewHtml } from "./view"
 
 /**
- * THE MAP SERVER, v1 (docs/map/spec.md): an MCP server
+ * THE CLEGRA APP SERVER, v1 (docs/developers/spec.md): an MCP server
  * (official SDK, Streamable HTTP, stateless) whose declarations — entities,
  * actions, pages, fragments, agents, permissions, settings — become plain MCP
  * tools and MCP Apps views for any host, and a manifest hosts read to mount
@@ -89,7 +89,7 @@ export type ServerOptions = {
 }
 
 /**
- * The app's embedded pages (spec §5.1), for the route in front of them (`modelapp/next`'s `embedProxy`, or any
+ * The app's embedded pages (spec §5.1), for the route in front of them (`clegra/next`'s `embedProxy`, or any
  * server): the ticket exchange, the headers of every embed response, and the caller of a page from its cookie.
  */
 export type AppEmbed = {
@@ -144,7 +144,7 @@ const RESERVED_PARAMS = new Set(["query", "sort", "dir", "cursor", "limit", "id"
 const RESERVED_TOOLS = new Set(["search", "fetch", RESOLVE_TOOL, EMBED_TOOL])
 
 /** The fixed hint on the tools of an entity with cross-app references (spec §3.2): how a model opens such a record. */
-export const CROSS_INPUT_HINT = "An input that takes a record of another app takes its URI (modelapp://<app>/<entity>/<id>), as that app's search or lists give it."
+export const CROSS_INPUT_HINT = "An input that takes a record of another app takes its URI (clegra://<app>/<entity>/<id>), as that app's search or lists give it."
 export const CROSS_APP_HINT = "A record of another app appears as { uri, kind }: the app the URI names opens it with its fetch tool."
 
 /** JSON Schema formats of key properties (spec §6: a key filter carries `format` where JSON Schema has one). */
@@ -207,7 +207,7 @@ const TEMPLATE_KEYS = new Set(["uri", "kind", "format", "currency"])
 
 const text = (t: string): CallToolResult["content"] => [{ type: "text", text: t }]
 
-// ------------------------------------------------------------ labels for views (spec §7, `_meta.modelapp.l10n`)
+// ------------------------------------------------------------ labels for views (spec §7, `_meta.clegra.l10n`)
 
 /** Per locale: each label as this call showed it → the same label in that locale. */
 type L10n = Map<string, Record<string, string>>
@@ -231,7 +231,7 @@ function say(label: Label | undefined, locale: string | undefined, fallback: str
   return shown
 }
 
-/** The labels a call showed, beside its result (`_meta.modelapp.l10n`), for its view only: a model never reads `_meta`. */
+/** The labels a call showed, beside its result (`_meta.clegra.l10n`), for its view only: a model never reads `_meta`. */
 function withL10n(result: CallToolResult, notes: L10n): CallToolResult {
   if (!notes.size) return result
   const meta = (result._meta ?? {}) as Record<string, unknown>
@@ -306,7 +306,7 @@ export class AppServer {
     if (auth.dev && process.env.NODE_ENV === "production") throw new Error("auth.dev is for development: it is refused when NODE_ENV is production")
     if (auth.anonymous && process.env.NODE_ENV === "production") throw new Error("auth.anonymous is for local demos: it is refused when NODE_ENV is production")
     const path = (options.path ?? "").replace(/\/+$/, "")
-    if (path && !/^(\/[A-Za-z0-9._~-]+)+$/.test(path)) throw new Error(`path "${options.path}": a URL path like /api/modelapp`)
+    if (path && !/^(\/[A-Za-z0-9._~-]+)+$/.test(path)) throw new Error(`path "${options.path}": a URL path like /api/clegra`)
     this.#path = path
     this.#store = options.store ?? new MemoryStore()
     this.#verifier = new TokenVerifier(auth, (key, ttlMs) => this.#store.once(key, ttlMs))
@@ -486,7 +486,7 @@ export class AppServer {
 
   // ------------------------------------------------------------ URIs
 
-  /** `modelapp://<app>/<type>/<key>` (spec §4, §7). */
+  /** `clegra://<app>/<type>/<key>` (spec §4, §7). */
   uri(type: string | EntityHandle, key: string): string {
     return `${uriPrefix(this.name)}/${typeof type === "string" ? type : type.name}/${encodeURIComponent(key)}`
   }
@@ -1164,7 +1164,7 @@ export class AppServer {
       const label = t(e.config.label)
       const plural = t(e.config.plural ?? e.config.label)
       const columns = () => this.#visibleFields(e, caller).filter((f) => f.name !== "id" && (f.role || f.filter)).slice(0, 6).map((f) => this.#column(f, caller))
-      // What the entity is, for every client: the kind's fixed sentence ends both descriptions; hosts read `_meta.modelapp` (spec §6).
+      // What the entity is, for every client: the kind's fixed sentence ends both descriptions; hosts read `_meta.clegra` (spec §6).
       // The kind's sentence is always last (spec §6 rule 8); the cross-app hint (spec §3.2) before it.
       const kindText = `${e.fields.some((f) => kindRef(f)) ? ` ${CROSS_APP_HINT}` : ""}${e.config.kind !== undefined ? ` ${kindSentence(e.config.kind)}` : ""}`
       const entityMeta = { [META_KEY]: { entity: e.name, ...(e.config.kind !== undefined ? { kind: e.config.kind } : {}) } }
@@ -1732,7 +1732,7 @@ export class AppServer {
   }
 
   /**
-   * Readiness for serving (`listen` in `modelapp/node`, a framework adapter): the manifest is built and
+   * Readiness for serving (`listen` in `clegra/node`, a framework adapter): the manifest is built and
    * checked, the dev authority started. Returns the dev sign-in code when dev sign-in is on.
    */
   async start(): Promise<{ devCode: string | null }> {
@@ -1764,7 +1764,7 @@ export class AppServer {
     const problem = this.#productionProblem()
     if (problem) return json({ error: "misconfigured", error_description: problem }, 500)
     const base = this.#path
-    // The embed ticket exchange (spec §5.1), for a server that hands every request here (modelapp/node); Next's proxy
+    // The embed ticket exchange (spec §5.1), for a server that hands every request here (clegra/node); Next's proxy
     // answers it before the route (embedProxy).
     if (this.#embed && url.pathname === this.#embed.exchangePath) return this.embed!.exchange(request)
     const devHere = Boolean(this.#dev) && isLoopback(info.remoteAddress)

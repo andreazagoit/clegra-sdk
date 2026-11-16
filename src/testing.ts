@@ -44,7 +44,7 @@ export async function testClient(app: App, options: TestClientOptions = {}) {
       : JSON.parse(raw)
     return { status: 200, ...(json.result !== undefined ? { result: json.result } : {}), ...(json.error ? { error: json.error } : {}) }
   }
-  const init = await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "modelapp-test", version: "1.0.0" } })
+  const init = await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "clegra-test", version: "1.0.0" } })
   return {
     status: init.status,
     initialize: init.result as Record<string, unknown> | undefined,
@@ -61,7 +61,7 @@ export async function testClient(app: App, options: TestClientOptions = {}) {
     /** A write as a workspace host does it after the person's «Confirm»: a call id and a proof. */
     async confirmed(name: string, args: Record<string, unknown>, call: string = randomUUID()): Promise<ToolCallResult> {
       const proof = await app.devConfirmation({ tool: name, args, call, ...(options.person ? { person: options.person } : {}), ...(options.installation ? { installation: options.installation } : {}) })
-      return this.call(name, args, { modelapp: { call, confirmation: proof } })
+      return this.call(name, args, { clegra: { call, confirmation: proof } })
     },
     async readResource(uri: string): Promise<{ uri: string; mimeType?: string; text?: string; _meta?: Record<string, unknown> }[]> {
       const r = await rpc("resources/read", { uri })

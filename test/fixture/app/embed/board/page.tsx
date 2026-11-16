@@ -1,6 +1,6 @@
-import { getEmbedCaller } from "modelapp/next"
+import { getEmbedCaller } from "clegra/next"
 
-import { app } from "../../../modelapp"
+import { app } from "../../../clegra"
 
 // Who the ticket signed in, or "signed out" (no ticket, a top-level visit, an expired session).
 export default async function Board() {

@@ -17,7 +17,7 @@ import { viewHtml } from "./view"
  * input says.
  */
 
-const keyFile = join(tmpdir(), `modelapp-test-key-${randomUUID()}.json`)
+const keyFile = join(tmpdir(), `clegra-test-key-${randomUUID()}.json`)
 after(() => rmSync(keyFile, { force: true }))
 
 type Task = { id: string; title: string; project: string; cost: number; due: string }
@@ -135,12 +135,12 @@ describe("references", () => {
     assert.deepEqual(rows[0]!.project, { id: "p2", title: "<untrusted>Beta</untrusted>" })
     assert.deepEqual((list.structuredContent as { rows: Task[]; refs: unknown }).rows[0]!.project, "p2", "the structured rows keep the id, with the titles beside")
     assert.deepEqual((list.structuredContent as { refs: unknown }).refs, { project: { p2: "Beta", p1: "Alpha" } })
-    assert.ok((list._meta?.modelapp as { untrusted: string[] }).untrusted.includes("/refs/project/p2"))
+    assert.ok((list._meta?.clegra as { untrusted: string[] }).untrusted.includes("/refs/project/p2"))
     const one = JSON.parse((await c.call("task_get", { id: "t2" })).content![0]!.text!) as { project: unknown }
     assert.deepEqual(one.project, { id: "p1", title: "<untrusted>Alpha</untrusted>" })
     const page = JSON.parse((await c.call("open_tasks", {})).content![0]!.text!) as { rows: { project: unknown }[] }
     assert.deepEqual(page.rows[1]!.project, { id: "p1", title: "<untrusted>Alpha</untrusted>" })
-    const fetched = JSON.parse((await c.call("fetch", { id: "modelapp://tasks/task/t1" })).content![0]!.text!) as { text: string }
+    const fetched = JSON.parse((await c.call("fetch", { id: "clegra://tasks/task/t1" })).content![0]!.text!) as { text: string }
     assert.deepEqual((JSON.parse(fetched.text) as { project: unknown }).project, { id: "p2", title: "<untrusted>Beta</untrusted>" })
   })
 

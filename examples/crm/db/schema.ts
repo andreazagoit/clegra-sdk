@@ -26,7 +26,7 @@ export const companies = pgTable(
     // The company's VAT number (country prefix and number, no spaces) and website: what other apps can match it by.
     vatId: text("vat_id"),
     website: text("website"),
-    // The same company's record in another app of the workspace (e.g. the ERP's customer): its MAP record URI, nothing else of it.
+    // The same company's record in another app of the workspace (e.g. the ERP's customer): its record URI, nothing else of it.
     erpCustomer: text("erp_customer"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
@@ -105,9 +105,9 @@ export const people = pgTable(
   (t) => [primaryKey({ columns: [t.orgId, t.id] })],
 )
 
-/** The MAP server's idempotency store: the table of `SqlStore.schema()` (modelapp). */
-export const modelappStore = pgTable(
-  "modelapp_store",
+/** The Clegra app server's idempotency store: the table of `SqlStore.schema()` (clegra). */
+export const clegraStore = pgTable(
+  "clegra_store",
   {
     key: text("key").primaryKey(),
     args: text("args").notNull(),
@@ -115,5 +115,5 @@ export const modelappStore = pgTable(
     done: boolean("done").default(false).notNull(),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
   },
-  (t) => [index("modelapp_store_expires_at").on(t.expiresAt)],
+  (t) => [index("clegra_store_expires_at").on(t.expiresAt)],
 )

@@ -1,5 +1,5 @@
 import type { Metadata } from "next"
-import { getEmbedCaller } from "modelapp/next"
+import { getEmbedCaller } from "clegra/next"
 
 import { warehouseApp } from "@/lib/app"
 import { sql } from "@/lib/db"
@@ -11,7 +11,7 @@ export const metadata: Metadata = { title: "Stock board" }
 
 const BAR: Record<StockStatus, string> = { ok: "bg-teal-600", low: "bg-amber-500", out: "bg-red-600" }
 
-/** Every product's stock against its reorder level, lowest first: a board a host frames (the MAP page `stock`). */
+/** Every product's stock against its reorder level, lowest first: a board a host frames (the app page `stock`). */
 export default async function StockBoard() {
   // The caller the host's sign-in ticket named (spec §5.1): in a frame on another site the site's own session cookie
   // is a third-party one and never arrives.

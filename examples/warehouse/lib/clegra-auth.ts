@@ -1,8 +1,8 @@
 import { oauthProviderAuthServerMetadata, oauthProviderOpenIdConfigMetadata } from "@better-auth/oauth-provider"
 import { createLocalJWKSet, decodeProtectedHeader, errors, jwtVerify, type JWK } from "jose"
-import { AuthError, type AuthOptions, type Issuer, type ResolvedCaller } from "modelapp"
+import { AuthError, type AuthOptions, type Issuer, type ResolvedCaller } from "clegra"
 
-import { MODELAPP_SCOPE, type Auth } from "./auth"
+import { CLEGRA_SCOPE, type Auth } from "./auth"
 import { sql } from "./db"
 import { permissionsFor } from "./permissions"
 import { mcpResource, publicUrl } from "./site"
@@ -19,33 +19,33 @@ export async function callerFor(userId: string, organizationId: string): Promise
 }
 
 /**
- * Workspace hosts whose tokens (with the `modelapp` claim) are accepted: MODELAPP_ISSUERS, `issuer|jwksUri`,
+ * Workspace hosts whose tokens (with the `clegra` claim) are accepted: CLEGRA_ISSUERS, `issuer|jwksUri`,
  * comma-separated. Their tenant is `<installation>@<issuer>`, an installation of that host, never an organization.
  */
 export function issuersFromEnv(env: Record<string, string | undefined> = process.env): Issuer[] {
-  return (env.MODELAPP_ISSUERS ?? "")
+  return (env.CLEGRA_ISSUERS ?? "")
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean)
     .map((entry) => {
       const [issuer, jwksUri] = entry.split("|").map((s) => s.trim())
-      if (!issuer) throw new Error(`MODELAPP_ISSUERS: "${entry}" has no issuer`)
+      if (!issuer) throw new Error(`CLEGRA_ISSUERS: "${entry}" has no issuer`)
       return { issuer, ...(jwksUri ? { jwksUri } : {}) }
     })
 }
 
 /**
- * MAP's `auth` for this app. Workspace hosts from MODELAPP_ISSUERS (`env`): the SDK verifies their tokens itself,
+ * Clegra apps' `auth` for this app. Workspace hosts from CLEGRA_ISSUERS (`env`): the SDK verifies their tokens itself,
  * for this MCP server alone. The app's own users: better-auth (its mcp plugin) issues the access tokens, the app
  * verifies them here. Such a token counts only when it is a JWT (`typ: at+jwt`) signed by better-auth's own keys, from its issuer, for this
- * MCP server alone (`aud`), not expired (30 s of clock skew), not sender-bound (`cnf`), with the `modelapp` scope
+ * MCP server alone (`aud`), not expired (30 s of clock skew), not sender-bound (`cnf`), with the `clegra` scope
  * and the organization (`org`) — and the person is still a member of that organization.
  *
  * better-auth is reached through `getAuth` only when one of its tokens or metadata requests arrives: a host's
  * call never builds it (its mcp plugin accepts an http resource only on loopback, so a host in Docker that
  * reaches the app at http://host.docker.internal:3930 can use the app while its own sign-in needs https).
  */
-export function modelAppAuth(getAuth: () => Promise<Auth>, env: Record<string, string | undefined> = process.env): AuthOptions {
+export function clegraAuth(getAuth: () => Promise<Auth>, env: Record<string, string | undefined> = process.env): AuthOptions {
   const issuer = `${publicUrl()}/api/auth`
   const resource = mcpResource()
 
@@ -90,7 +90,7 @@ export function modelAppAuth(getAuth: () => Promise<Auth>, env: Record<string, s
       // (ChatGPT and Claude do); any other audience could replay the token here.
       if ([claims.aud].flat().some((aud) => aud !== resource && aud !== `${issuer}/oauth2/userinfo`)) throw new AuthError("the access token is for several servers")
       if (claims.cnf !== undefined) throw new AuthError("sender-constrained (DPoP) access tokens are not accepted")
-      if (typeof claims.scope !== "string" || !claims.scope.split(" ").includes(MODELAPP_SCOPE)) throw new AuthError(`the access token lacks the ${MODELAPP_SCOPE} scope`)
+      if (typeof claims.scope !== "string" || !claims.scope.split(" ").includes(CLEGRA_SCOPE)) throw new AuthError(`the access token lacks the ${CLEGRA_SCOPE} scope`)
       if (typeof claims.org !== "string" || !claims.org) throw new AuthError("the access token names no organization")
       const caller = await callerFor(claims.sub!, claims.org)
       if (!caller) throw new AuthError("the user is no longer a member of the token's organization")

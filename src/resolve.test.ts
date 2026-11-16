@@ -13,7 +13,7 @@ import { testClient } from "./testing"
 
 // auth.resolve (spec §7, «The app's own tokens»): the app verifies its own access tokens and says who is calling.
 
-const keyFile = join(tmpdir(), `modelapp-resolve-key-${randomUUID()}.json`)
+const keyFile = join(tmpdir(), `clegra-resolve-key-${randomUUID()}.json`)
 after(() => rmSync(keyFile, { force: true }))
 
 const RES = "https://notes.test/mcp"
@@ -105,7 +105,7 @@ describe("auth.resolve: the app's own tokens", () => {
     const iss = "https://node.test"
     const app = makeApp({ issuers: [{ issuer: iss, jwks: { keys: [key.publicJwk] } }] })
     const before = seen.length
-    const token = await signAccessToken(key, { iss, aud: RES, sub: "p1", modelapp: { installation: "org-a", permissions: ["notes.view"] } })
+    const token = await signAccessToken(key, { iss, aud: RES, sub: "p1", clegra: { installation: "org-a", permissions: ["notes.view"] } })
     const c = await testClient(app, { token })
     // The host's tenant is bound to its issuer: org-a@https://node.test is not the app's org-a.
     assert.deepEqual(await listOf(c), [])
@@ -143,9 +143,9 @@ describe("path prefix and same-site pages", () => {
   test("with path, MCP lives under it; the manifest and metadata stay at the root", async () => {
     const app = makeApp({ resource: "https://notes.test/api/map/mcp" }, "/api/map")
     assert.equal(app.manifest().mcp.url, "/api/map/mcp")
-    assert.equal((await app.fetch(new Request("https://notes.test/.well-known/modelapp.json"))).status, 200)
+    assert.equal((await app.fetch(new Request("https://notes.test/.well-known/clegra.json"))).status, 200)
     // Mounted under the prefix without rewrites: the well-known paths answer there too.
-    assert.equal((await app.fetch(new Request("https://notes.test/api/map/.well-known/modelapp.json"))).status, 200)
+    assert.equal((await app.fetch(new Request("https://notes.test/api/map/.well-known/clegra.json"))).status, 200)
     const meta = await app.fetch(new Request("https://notes.test/.well-known/oauth-protected-resource/api/map/mcp"))
     assert.equal(((await meta.json()) as { resource: string }).resource, "https://notes.test/api/map/mcp")
     assert.equal((await app.fetch(new Request("https://notes.test/api/map/health"))).status, 200)
@@ -166,7 +166,7 @@ describe("path prefix and same-site pages", () => {
     const c = await testClient(app, { token: "tok-admin-a" })
     const [view] = await c.readResource("ui://notes/pages/board")
     // Signed in with a ticket (spec §5.1, embed.test.ts): the view frames the page at the app's own origin.
-    assert.ok(view?.text?.includes('{"url":"http://127.0.0.1/embed/board","embed":{"tool":"modelapp_embed","page":"board"}}'), view?.text)
+    assert.ok(view?.text?.includes('{"url":"http://127.0.0.1/embed/board","embed":{"tool":"clegra_embed","page":"board"}}'), view?.text)
     assert.deepEqual((view?._meta?.ui as { csp: { frameDomains: string[] } }).csp.frameDomains, ["http://127.0.0.1"])
   })
 

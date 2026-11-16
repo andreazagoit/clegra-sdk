@@ -5,10 +5,10 @@
 //    bin built), every relative import in dist resolving inside the tarball, the hygiene check of the public
 //    packages, and the publish guard (an unapproved tarball is refused as private; `npm publish` is refused here).
 // 2. A fresh Next.js App Router app (the repository's Next, React and TypeScript versions) with the tarball
-//    installed: `npx modelapp init`, `next dev` + `npx modelapp check --token <the local bearer>`, then
-//    `next build` + `next start` + `npx modelapp check` without a token (the local bearer is refused in
+//    installed: `npx clegra init`, `next dev` + `npx clegra check --token <the local bearer>`, then
+//    `next build` + `next start` + `npx clegra check` without a token (the local bearer is refused in
 //    production). A fresh app fails exactly one check, `auth.mcp` (no authorization server yet: the quickstart).
-// 3. A plain Node ESM script importing modelapp, modelapp/node, modelapp/testing, modelapp/spec (and the JSON
+// 3. A plain Node ESM script importing clegra, clegra/node, clegra/testing, clegra/spec (and the JSON
 //    exports), running an app through testClient.
 // 4. tsc on a TypeScript file importing every entry, with `moduleResolution` bundler and node16.
 // The folder must have no node_modules or package.json above it (nothing of the repository may be picked up). The
@@ -43,7 +43,7 @@ const run = (cmd, args, opts = {}) => spawnSync(cmd, args, { encoding: "utf8", .
 const tail = (r) => `${r.stdout ?? ""}${r.stderr ?? ""}`.trim().split("\n").slice(-4).join(" | ")
 
 // ------------------------------------------------------------ the folder
-const work = resolve(values.dir ?? mkdtempSync(join(tmpdir(), "modelapp-pack-check-")))
+const work = resolve(values.dir ?? mkdtempSync(join(tmpdir(), "clegra-pack-check-")))
 if (`${work}${sep}`.startsWith(`${repoRoot}${sep}`)) throw new Error(`pack-check: ${work} is inside the repository; use a folder outside it`)
 for (let d = dirname(work); ; d = dirname(d)) {
   for (const f of ["node_modules", "package.json"]) if (existsSync(join(d, f))) throw new Error(`pack-check: ${join(d, f)} is above ${work}: Node and npm would pick it up; use another folder (--dir)`)
@@ -61,7 +61,7 @@ console.log(`     ${packed.filename}: ${packed.entryCount} files, ${(packed.size
 const manifest = JSON.parse(execFileSync("tar", ["-xzOf", tarball, "package/package.json"], { encoding: "utf8" }))
 expect(manifest.private === true, "tarball package.json keeps \"private\": true (not an approved release)")
 expect(!manifest.scripts && !manifest.devDependencies, "tarball package.json has no scripts or devDependencies")
-for (const f of ["README.md", "LICENSE", "CHANGELOG.md", "package.json", "dist/spec/schema/modelapp.schema.json", "dist/spec/kinds.json"]) expect(files.has(f), `tarball has ${f}`)
+for (const f of ["README.md", "LICENSE", "CHANGELOG.md", "package.json", "dist/spec/schema/clegra.schema.json", "dist/spec/kinds.json"]) expect(files.has(f), `tarball has ${f}`)
 expect(![...files].some((f) => /\.ts$/.test(f) && !f.endsWith(".d.ts")), "tarball has no TypeScript source")
 expect(![...files].some((f) => /\.test\.|^test\/|^scripts\//.test(f)), "tarball has no tests or scripts")
 const targets = [...Object.values(manifest.exports).flatMap((e) => (typeof e === "string" ? [e] : [e.types, e.default])), ...Object.values(manifest.bin)].map((p) => p.replace(/^\.\//, ""))
@@ -101,7 +101,7 @@ writeFileSync(
       name: "pack-check-app",
       private: true,
       scripts: { dev: "next dev", build: "next build", start: "next start" },
-      dependencies: { modelapp: `file:../${packed.filename}`, next: version("next"), react: version("react"), "react-dom": version("react-dom"), zod: version("zod") },
+      dependencies: { clegra: `file:../${packed.filename}`, next: version("next"), react: version("react"), "react-dom": version("react-dom"), zod: version("zod") },
       devDependencies: { typescript: version("typescript"), "@types/node": version("@types/node"), "@types/react": version("@types/react") },
     },
     null,
@@ -127,13 +127,13 @@ writeFileSync(join(app, "app", "page.tsx"), "export default function Home() {\n 
 const install = run(npm, ["install", "--no-audit", "--no-fund", "--loglevel=error"], { cwd: app, stdio: ["ignore", "pipe", "pipe"] })
 if (install.status !== 0) throw new Error(`pack-check: npm install failed:\n${install.stderr}`)
 ok("fresh Next.js app installed with the tarball")
-const installed = join(app, "node_modules", "modelapp")
-expect(existsSync(join(installed, "dist/spec/src/cli.js")) && !existsSync(join(installed, "src")), "node_modules/modelapp holds the built package only")
+const installed = join(app, "node_modules", "clegra")
+expect(existsSync(join(installed, "dist/spec/src/cli.js")) && !existsSync(join(installed, "src")), "node_modules/clegra holds the built package only")
 
-const init = run(npx, ["modelapp", "init"], { cwd: app })
-expect(init.status === 0 && /create\s+modelapp\.ts/.test(init.stdout) && /edit\s+next\.config\.ts/.test(init.stdout), "npx modelapp init (the CLI from the tarball): modelapp.ts, the route, next.config, .env.local")
+const init = run(npx, ["clegra", "init"], { cwd: app })
+expect(init.status === 0 && /create\s+clegra\.ts/.test(init.stdout) && /edit\s+next\.config\.ts/.test(init.stdout), "npx clegra init (the CLI from the tarball): clegra.ts, the route, next.config, .env.local")
 if (init.status !== 0) console.log(init.stdout + init.stderr)
-const token = /^MODELAPP_LOCAL_TOKEN=(.+)$/m.exec(readFileSync(join(app, ".env.local"), "utf8"))?.[1]?.trim()
+const token = /^CLEGRA_LOCAL_TOKEN=(.+)$/m.exec(readFileSync(join(app, ".env.local"), "utf8"))?.[1]?.trim()
 expect(Boolean(token), ".env.local has the local bearer")
 
 const running = new Set()
@@ -150,7 +150,7 @@ const nextBin = join(app, "node_modules", "next", "dist", "bin", "next")
 async function serve(mode, p) {
   const base = `http://localhost:${p}`
   let output = ""
-  const child = spawn(process.execPath, [nextBin, mode, "-p", String(p)], { cwd: app, detached: true, env: { ...process.env, MODELAPP_PUBLIC_URL: base, NEXT_TELEMETRY_DISABLED: "1", NODE_ENV: mode === "dev" ? "development" : "production" }, stdio: ["ignore", "pipe", "pipe"] })
+  const child = spawn(process.execPath, [nextBin, mode, "-p", String(p)], { cwd: app, detached: true, env: { ...process.env, CLEGRA_PUBLIC_URL: base, NEXT_TELEMETRY_DISABLED: "1", NODE_ENV: mode === "dev" ? "development" : "production" }, stdio: ["ignore", "pipe", "pipe"] })
   running.add(child)
   child.stdout.on("data", (d) => (output += d))
   child.stderr.on("data", (d) => (output += d))
@@ -158,35 +158,35 @@ async function serve(mode, p) {
   for (;;) {
     if (child.exitCode !== null) throw new Error(`pack-check: next ${mode} exited:\n${output}`)
     try {
-      if ((await fetch(`${base}/.well-known/modelapp.json`)).ok) break
+      if ((await fetch(`${base}/.well-known/clegra.json`)).ok) break
     } catch {}
     if (Date.now() > deadline) throw new Error(`pack-check: next ${mode} did not answer:\n${output}`)
     await new Promise((r) => setTimeout(r, 400))
   }
   return { base, child, log: () => output }
 }
-/** `npx modelapp check`: the failed check ids. */
+/** `npx clegra check`: the failed check ids. */
 function check(base, withToken) {
-  const r = run(npx, ["modelapp", "check", base, ...(withToken ? ["--token", token] : [])], { cwd: app, env: { MODELAPP_TOKEN: "" } })
+  const r = run(npx, ["clegra", "check", base, ...(withToken ? ["--token", token] : [])], { cwd: app, env: { CLEGRA_TOKEN: "" } })
   return { status: r.status, out: r.stdout + r.stderr, failed: r.stdout.split("\n").filter((l) => l.startsWith("FAIL ")) }
 }
 
 const devServer = await serve("dev", port)
 const devCheck = check(devServer.base, true)
-expect(devCheck.status === 1 && /auth\.mcp/.test(devCheck.out) && /NOT conformant|not conformant/i.test(devCheck.out), "next dev: npx modelapp check --token runs every check; the fresh app fails auth.mcp (no authorization server yet)")
+expect(devCheck.status === 1 && /auth\.mcp/.test(devCheck.out) && /NOT conformant|not conformant/i.test(devCheck.out), "next dev: npx clegra check --token runs every check; the fresh app fails auth.mcp (no authorization server yet)")
 const devFailed = devCheck.failed
 expect(devFailed.length === 1 && /auth\.mcp/.test(devFailed[0] ?? ""), `next dev: auth.mcp is the only failed check${devFailed.length !== 1 ? `:\n${devCheck.out}` : ""}`)
 stop(devServer.child)
 rmSync(join(app, ".next"), { recursive: true, force: true })
 
-const build = run(process.execPath, [nextBin, "build"], { cwd: app, env: { NEXT_TELEMETRY_DISABLED: "1", MODELAPP_PUBLIC_URL: `http://localhost:${port + 1}` } })
-expect(build.status === 0, "next build (next.config imports modelapp/next from node_modules)")
+const build = run(process.execPath, [nextBin, "build"], { cwd: app, env: { NEXT_TELEMETRY_DISABLED: "1", CLEGRA_PUBLIC_URL: `http://localhost:${port + 1}` } })
+expect(build.status === 0, "next build (next.config imports clegra/next from node_modules)")
 if (build.status !== 0) console.log(build.stdout + build.stderr)
 else {
   const startServer = await serve("start", port + 1)
   const startCheck = check(startServer.base, false)
   const startFailed = startCheck.failed
-  expect(startCheck.status === 1 && startFailed.length === 1 && /auth\.mcp/.test(startFailed[0] ?? ""), `next start: npx modelapp check (no token: the local bearer is refused in production) fails auth.mcp only${startFailed.length !== 1 ? `:\n${startCheck.out}` : ""}`)
+  expect(startCheck.status === 1 && startFailed.length === 1 && /auth\.mcp/.test(startFailed[0] ?? ""), `next start: npx clegra check (no token: the local bearer is refused in production) fails auth.mcp only${startFailed.length !== 1 ? `:\n${startCheck.out}` : ""}`)
   const refusedToken = await fetch(`${startServer.base}/mcp`, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) })
   expect(refusedToken.status === 401, "next start: the local bearer is refused (401)")
   stop(startServer.child)
@@ -197,16 +197,16 @@ const probe = join(app, "check")
 mkdirSync(probe, { recursive: true })
 writeFileSync(
   join(probe, "esm.mjs"),
-  `import { defineApp, MemoryStore, SPEC_VERSION, KINDS } from "modelapp"
-import { listen } from "modelapp/node"
-import { testClient } from "modelapp/testing"
-import { checkApp, formatReport } from "modelapp/spec"
-import { withModelApp, toNextHandlers } from "modelapp/next"
+  `import { defineApp, MemoryStore, SPEC_VERSION, KINDS } from "clegra"
+import { listen } from "clegra/node"
+import { testClient } from "clegra/testing"
+import { checkApp, formatReport } from "clegra/spec"
+import { withClegra, toNextHandlers } from "clegra/next"
 import { createRequire } from "node:module"
 import { z } from "zod"
 const require = createRequire(import.meta.url)
-const schema = require("modelapp/modelapp.schema.json")
-const kinds = require("modelapp/kinds.json")
+const schema = require("clegra/clegra.schema.json")
+const kinds = require("clegra/kinds.json")
 const app = defineApp({
   name: "probe", title: "Probe", version: "1.0.0",
   auth: { dev: { keyFile: new URL("./dev-key.json", import.meta.url).pathname } },
@@ -214,7 +214,7 @@ const app = defineApp({
 })
 const client = await testClient(app)
 const tools = await client.listTools()
-const out = { spec: SPEC_VERSION, kinds: Object.keys(KINDS).length > 0, store: typeof MemoryStore, listen: typeof listen, checkApp: typeof checkApp, formatReport: typeof formatReport, next: typeof withModelApp + typeof toNextHandlers, schema: typeof schema.$schema, kindsJson: typeof kinds, tools: tools.map((t) => t.name).sort() }
+const out = { spec: SPEC_VERSION, kinds: Object.keys(KINDS).length > 0, store: typeof MemoryStore, listen: typeof listen, checkApp: typeof checkApp, formatReport: typeof formatReport, next: typeof withClegra + typeof toNextHandlers, schema: typeof schema.$schema, kindsJson: typeof kinds, tools: tools.map((t) => t.name).sort() }
 console.log(JSON.stringify(out))
 `,
 )
@@ -228,11 +228,11 @@ expect(esm.status === 0 && esmOut?.tools?.includes("note_list") && esmOut.checkA
 // ------------------------------------------------------------ 4. TypeScript consumers
 // next.ts: every entry, as an app's code imports them (skipLibCheck on, as in every Next app: Next's own .d.ts
 // files need the DOM and react-dom types). core.ts: the entries that don't import next, with skipLibCheck OFF and
-// no DOM lib, so modelapp's own .d.ts files are type-checked too.
-const core = `import { defineApp, type App, type ResolvedCaller, type Manifest } from "modelapp"
-import { listen } from "modelapp/node"
-import { testClient } from "modelapp/testing"
-import { checkApp, type Report } from "modelapp/spec"
+// no DOM lib, so clegra's own .d.ts files are type-checked too.
+const core = `import { defineApp, type App, type ResolvedCaller, type Manifest } from "clegra"
+import { listen } from "clegra/node"
+import { testClient } from "clegra/testing"
+import { checkApp, type Report } from "clegra/spec"
 import { z } from "zod"
 export const app: App = defineApp({ name: "probe", title: "Probe", version: "1.0.0", auth: { resolve: async (): Promise<ResolvedCaller | null> => null }, entities: {} })
 export const manifest: Manifest = app.manifest()
@@ -241,9 +241,9 @@ export type CheckReport = Report
 export const s = z.string()
 `
 writeFileSync(join(probe, "core.ts"), core)
-writeFileSync(join(probe, "next.ts"), `${core}import { toNextHandlers, withModelApp, type NextHandlers } from "modelapp/next"
+writeFileSync(join(probe, "next.ts"), `${core}import { toNextHandlers, withClegra, type NextHandlers } from "clegra/next"
 export const handlers: NextHandlers = toNextHandlers(app)
-export const config = withModelApp({})
+export const config = withClegra({})
 `)
 const tsc = join(app, "node_modules", "typescript", "bin", "tsc")
 for (const [mode, module] of [["bundler", "esnext"], ["node16", "node16"]]) {
@@ -253,7 +253,7 @@ for (const [mode, module] of [["bundler", "esnext"], ["node16", "node16"]]) {
     const lib = strictLibs ? ["ES2023"] : ["ES2023", "DOM", "DOM.Iterable"]
     writeFileSync(config, `${JSON.stringify({ compilerOptions: { target: "ES2022", lib, types: ["node"], module, moduleResolution: mode, strict: true, noEmit: true, skipLibCheck: !strictLibs }, files: [file] }, null, 2)}\n`)
     const r = run(process.execPath, [tsc, "-p", config], { cwd: probe })
-    expect(r.status === 0, `tsc, moduleResolution ${mode}: ${file}${strictLibs ? " (skipLibCheck off, no DOM: modelapp's .d.ts type-check)" : " (modelapp/next too)"}${r.status !== 0 ? `:\n${r.stdout}${r.stderr}` : ""}`)
+    expect(r.status === 0, `tsc, moduleResolution ${mode}: ${file}${strictLibs ? " (skipLibCheck off, no DOM: clegra's .d.ts type-check)" : " (clegra/next too)"}${r.status !== 0 ? `:\n${r.stdout}${r.stderr}` : ""}`)
   }
 }
 

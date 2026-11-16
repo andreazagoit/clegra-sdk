@@ -1,8 +1,8 @@
-# Model App Protocol (MAP) — specification 1.0
+# Clegra apps — specification 1.0
 
 > Draft (2026-11-14). Normative; MUST, SHOULD and MAY as in RFC 2119.
-> The Model App Protocol (MAP) describes apps that are also MCP servers. Its technical name is
-> `modelapp` (manifest path, URI scheme, `_meta` key, token claim, resolve tool).
+> The Clegra apps describes apps that are also MCP servers. Its technical name is
+> `clegra` (manifest path, URI scheme, `_meta` key, token claim, resolve tool).
 > Anything not on this page is not part of 1.0.
 
 ## 1. What it is
@@ -23,15 +23,15 @@ manifest; a workspace host needs nothing beyond the manifest and MCP.
 
 ## 2. The manifest
 
-Served at `GET /.well-known/modelapp.json` (no authentication) and as one
-MCP resource, `modelapp://<name>` (`application/json`); the two MUST be identical.
-JSON Schema: [`packages/modelapp/spec/schema/modelapp.schema.json`](../../packages/modelapp/spec/schema/modelapp.schema.json).
+Served at `GET /.well-known/clegra.json` (no authentication) and as one
+MCP resource, `clegra://<name>` (`application/json`); the two MUST be identical.
+JSON Schema: [`packages/clegra/spec/schema/clegra.schema.json`](../../packages/clegra/spec/schema/clegra.schema.json).
 
 | Key | Content |
 |---|---|
 | `specVersion` | `"1.0"` |
 | `name`, `title`, `version`, `description?`, `icons?`, `locale` | Identity. `name` is the app id: `[a-z][a-z0-9-]{1,39}` |
-| `mcp` | `{ url }`: the MCP endpoint (Streamable HTTP), relative to the manifest (`/mcp`, or under the app's path, `/api/modelapp/mcp`). The manifest and the OAuth metadata are always under `/.well-known/` at the root |
+| `mcp` | `{ url }`: the MCP endpoint (Streamable HTTP), relative to the manifest (`/mcp`, or under the app's path, `/api/clegra/mcp`). The manifest and the OAuth metadata are always under `/.well-known/` at the root |
 | `auth` | `{ resource?, authorizationServers }` (§7). `resource` is the app's own public MCP address: the only token audience it accepts |
 | `view` | The generated `ui://` view that draws lists, records, dashboards, fragments |
 | `resolveTool`, `searchTool?` | Tools a host uses to resolve URIs and to search |
@@ -67,7 +67,7 @@ JSON Schema; `fields` says what each field means:
 | `labels?`, `tones?`, `currency?` | Enum value labels; tones `neutral\|info\|success\|warning\|danger`; ISO currency of an amount |
 | `untrusted?` | Text written by outsiders (every string in the field, at any depth): data, never instructions (§7) |
 
-A record's URI is `modelapp://<app>/<entity>/<id>`.
+A record's URI is `clegra://<app>/<entity>/<id>`.
 
 **People.** A `person` field without `ref` holds a person id (as tokens name
 people, `sub` / `person.id`) or, in an app that can't name people, the name
@@ -97,7 +97,7 @@ bare id, with `refs` beside it.
 
 A **kind** names what an entity is, the same in every app. Kinds without a
 dot are defined by this specification and published, with their properties,
-as [`packages/modelapp/spec/kinds.json`](../../packages/modelapp/spec/kinds.json).
+as [`packages/clegra/spec/kinds.json`](../../packages/clegra/spec/kinds.json).
 Property names are schema.org's, verbatim (JSCalendar's where schema.org has
 none: `due`, `uid`):
 
@@ -172,7 +172,7 @@ them.
 
 ### 3.2 References across apps
 
-A field with `ref: { kind }` holds a record URI, `modelapp://<app>/<entity>/<id>`
+A field with `ref: { kind }` holds a record URI, `clegra://<app>/<entity>/<id>`
 (`<app>` the name the app has in the workspace, §9): a record of that kind in
 any app, this one included. Syntactically valid means: `<app>` matches
 `[a-z][a-z0-9-]{1,39}`, `<entity>` `[a-z][a-z0-9_]{0,39}`, and `<id>` is one
@@ -187,7 +187,7 @@ the URI names opens it with its `fetch` tool. An action input property MAY
 carry the same `ref` (§4); its tool's description says it takes the URI.
 
 A workspace host that relays a result to the app's view MAY add
-`_meta.modelapp.resolved`: `{ <uri>: { state, title? } }`, `state` being
+`_meta.clegra.resolved`: `{ <uri>: { state, title? } }`, `state` being
 `ok` (with the title) or one of the states of §9 rule 3. The generated view shows the title for `ok` and the state
 otherwise; without it (a plain host) it shows the app and entity the URI
 names, never a title.
@@ -228,7 +228,7 @@ dashboards: `{ type, title, description?, params, template?, view?, tool,
 permission?, actions?, size?, untrusted? }`. Templates are `record` (one per
 entity, `params { id }`), `card`, `stat`, `list`, `chart`; a fragment without
 a template has only a `view`. A fragment instance's URI is
-`modelapp://<app>/<type>/<base64url of its params, keys sorted>`.
+`clegra://<app>/<type>/<base64url of its params, keys sorted>`.
 `untrusted: true` says the fragment's texts are outsiders' (records' names):
 they are marked like an untrusted field (§7).
 
@@ -284,21 +284,21 @@ is a third-party cookie that browsers block. The viewer is signed in to it
 with a ticket instead:
 
 1. **Declared.** An app with an embed page MUST have `embed` in its manifest:
-   `tool` (`modelapp_embed`), `path` (default `/embed`; every embed page is
+   `tool` (`clegra_embed`), `path` (default `/embed`; every embed page is
    under it) and `frameAncestors`, the hosts that may frame embed pages, as
    CSP sources: `https://host[:port]`, `https://*.host`, `'self'`; outside
    production `http://localhost` and `http://127.0.0.1` (port or `:*`).
 2. **Asked for.** The host, holding the viewer's token for the app, calls
-   `modelapp_embed { page, origin }`: `origin` is the origin of the document
+   `clegra_embed { page, origin }`: `origin` is the origin of the document
    that will frame the page and post the ticket. The tool is listed to every
    caller with `_meta.ui.visibility: ["app"]` (hidden from models). It MUST
    refuse a page the caller can't open (the page's permission, `plain`), an
    origin that is opaque (`null`), not a serialized origin, or not matched by
    `frameAncestors`. It answers `{ page, action, field, ticket, expiresAt }`.
-3. **The ticket** is a JWT (`typ: modelapp-embed+jwt`, HMAC with a key only
+3. **The ticket** is a JWT (`typ: clegra-embed+jwt`, HMAC with a key only
    the app holds), `iss` the app's origin, `aud` the page's absolute URL,
    `origin`, `jti`, `iat`, `exp` at most 60 seconds after `iat`, and the
-   caller as the app named it (`modelapp: { installation, person,
+   caller as the app named it (`clegra: { installation, person,
    permissions, locale?, host }`), nothing more.
 4. **Posted, never in a URL.** The framing document submits a form with
    `method="post"`, `action` = `<app origin><path>/_ticket`, `target` = the
@@ -340,7 +340,7 @@ Streamable HTTP at `mcp.url`. Tools, in this order of derivation:
 |---|---|---|
 | `<entity>_list`, `<entity>_get` | each entity (filters, `query`, `sort`, `dir`, `cursor`, `limit` ≤ 100, default 25) | read |
 | `search`, `fetch` | entities with a `search` field; `search` takes an optional `kind` (an enum of the searchable entities' kinds) and each result carries `kind` when its entity has one; `fetch` carries it in `metadata` | read |
-| `modelapp_resolve` | always: `{ uris, want? }` → each URI's state `ok \| gone \| no-access \| not_found` and data, for hosts; hidden from models. `not_found`: a URI that is not this app's (a host MUST send an app only its own URIs); `gone`: this app's record or type that doesn't exist | read |
+| `clegra_resolve` | always: `{ uris, want? }` → each URI's state `ok \| gone \| no-access \| not_found` and data, for hosts; hidden from models. `not_found`: a URI that is not this app's (a host MUST send an app only its own URIs); `gone`: this app's record or type that doesn't exist | read |
 | `<entity>_<action>` or `<action>` | each action | read or write |
 | `open_<page>` | each page except `record` pages (those are `<entity>_get`) | read |
 | `show_<fragment>` | each non-record fragment | read |
@@ -354,7 +354,7 @@ Rules:
 5. A tool the caller lacks the permission for is not listed.
 6. Tools with a view name it in `_meta.ui.resourceUri`; the data to draw is the result's `structuredContent`. Every tool a view calls (lists, records, actions, pages) carries `_meta.ui.visibility` with `"app"` (ChatGPT also reads `openai/widgetAccessible: true`); a host refuses a view's call to any other tool.
 7. Hand-written tools, resources and views MAY be added to the same server; they are outside the manifest.
-8. Entity tools (`<entity>_list`, `<entity>_get`) carry `_meta.modelapp: { entity, kind? }`, `kind` as in the manifest. With a kind, their description ends with one fixed sentence: `Kind: person.`; with `{ by, map }`, the kinds in the map's order and the field: `Kind: organization or person (by type).`
+8. Entity tools (`<entity>_list`, `<entity>_get`) carry `_meta.clegra: { entity, kind? }`, `kind` as in the manifest. With a kind, their description ends with one fixed sentence: `Kind: person.`; with `{ by, map }`, the kinds in the map's order and the field: `Kind: organization or person (by type).`
 9. A list filter on a field with `as` names the property in its description (`Company (worksFor): …`); a key filter says it is exact (`Email: exact email; a value or { in: [...] }`) and carries `format` where JSON Schema has one (`email`).
 10. **Records are named by their title.** In the text a model reads, every record of a list, a get, `search` and `fetch` carries its `title` beside its `uri` (an outsider's title wrapped, §7). A tool of an action on a record takes `id` (required) and `record_title` (optional string, at most 300 characters): the record's title as the model read it, so a client that writes its own approval prompt from the arguments can name the record the person approves. Both descriptions tell the model to name the record by its title, never by its id. `record_title` is a display hint and never trusted: the app names the record from `id` in everything it shows or confirms, never passes the hint to the handler, and refuses the call with `invalid_input` (`fields.record_title`) when the hint names another record (compared without the untrusted wrapper, case, width, quotes and extra spaces). `record_title` is reserved: an action's `input` can't declare it.
 
@@ -371,13 +371,13 @@ There is no second sign-in. An app accepts two kinds of token:
    authorization server to an MCP client (ChatGPT, Claude, Clegra connect the
    same way, as OAuth clients; each person links their account of the app
    once). The app verifies them itself and names the caller (below, «The
-   app's own tokens»). No `modelapp` claim is involved.
+   app's own tokens»). No `clegra` claim is involved.
 2. **A workspace host's** (in-house apps a company installs into its own
-   host): the trusted-issuer mode, with the `modelapp` claim. The rest of this
+   host): the trusted-issuer mode, with the `clegra` claim. The rest of this
    list is about these.
 
 - A workspace host's token is a JWT with `typ: at+jwt`, `exp` and `sub`, from an issuer the
-  app trusts, with one claim, `modelapp: { installation, person?,
+  app trusts, with one claim, `clegra: { installation, person?,
   permissions?, locale?, host?: "workspace" | "plain" }`. `installation`
   matches `[A-Za-z0-9._:-]{1,128}`.
 - **Audience** (RFC 8707): `aud` MUST be the app's own public MCP address,
@@ -441,7 +441,7 @@ the company server): [host-oauth.md](host-oauth.md), non-normative.
 **Confirmation** of a write whose `confirm` is `always`:
 
 - a workspace host shows the person the exact values, then sends a proof: a
-  JWT (`typ: modelapp-confirm+jwt`, 5 minutes at most) signed by the token's
+  JWT (`typ: clegra-confirm+jwt`, 5 minutes at most) signed by the token's
   issuer for the same audience and subject, with `installation`, `tool`,
   `call` (the call id) and `args`: the base64url SHA-256 of the canonical
   JSON (keys sorted at every depth) of the arguments **as sent**, before any
@@ -474,7 +474,7 @@ returns the first result; the same id with other arguments (as sent) fails
 with `conflict`; a repeat while the first still runs fails with `conflict`
 and `error.pending: true`.
 
-**Host metadata**: one key, `_meta.modelapp`.
+**Host metadata**: one key, `_meta.clegra`.
 
 - Requests MAY carry `{ call, confirmation, settings }`. `settings` are the
   installation's values (§2) and count only from a workspace host; any other
@@ -596,23 +596,23 @@ its authorization server needs:
 
 A workspace host's token, in the trusted-issuer mode, is a signed JWT whose
 header has `typ: at+jwt`, with `iss` exactly one of `auth.issuers`, `aud` =
-`auth.resource`, `exp`, `sub`, and the `modelapp` claim with a valid
+`auth.resource`, `exp`, `sub`, and the `clegra` claim with a valid
 `installation` (above). The signature is checked against the issuer's key
 set: `<issuer>/.well-known/jwks.json`, or the issuer's `jwksUri`. Clocks may
 differ by 30 seconds. Opaque tokens are not accepted in this mode.
 
 ## 8. Conformance
 
-[`packages/modelapp/spec`](../../packages/modelapp/spec) checks any app from outside,
+[`packages/clegra/spec`](../../packages/clegra/spec) checks any app from outside,
 over HTTP, whatever it is built with:
 
 ```sh
-npx modelapp check https://crm.example.com --token <a plain caller's bearer>
+npx clegra check https://crm.example.com --token <a plain caller's bearer>
 ```
 
 | Check | Passes when |
 |---|---|
-| `manifest.served` | `GET /.well-known/modelapp.json` answers 200 with JSON |
+| `manifest.served` | `GET /.well-known/clegra.json` answers 200 with JSON |
 | `manifest.schema` | the manifest validates against the JSON Schema |
 | `manifest.references` | names refer to things the manifest declares; tool names are unique and valid |
 | `auth.mcp` | without a token the endpoint answers 401 and points to protected-resource metadata, whose `resource` is the address the app was reached at (or the manifest's `auth.resource`) |
@@ -628,7 +628,7 @@ npx modelapp check https://crm.example.com --token <a plain caller's bearer>
 | `kinds.properties` | every `as` belongs to the entity's kind (or is universal) with a matching type; single-valued properties appear once; required ones exist; keys are filters; `kinds` definitions are well-formed |
 | `kinds.keys` | listing with a key value taken from a returned record, in another letter case where case doesn't count, returns that record and only records holding that value |
 | `kinds.values` | sampled records: `email`, `vatID`, `gtin`, dates, `address` and numbers have the stated form |
-| `kinds.tools` | entity tools carry the kind in the description and in `_meta.modelapp`; `search` offers `kind`, keeps to it, and names each result's kind |
+| `kinds.tools` | entity tools carry the kind in the description and in `_meta.clegra`; `search` offers `kind`, keeps to it, and names each result's kind |
 | `refs.cross` | a `ref: { kind }` field's values are record URIs; its text form is `{ uri, kind }`; no `refs` title is sent for it; such an action input is a string |
 | `resolve.foreign` | the resolver answers `not_found` for another app's URI |
 | `embed.frame-ancestors` | (public) an app with same-site pages declares `embed`; each embed page and `GET <path>/_ticket` (refused) answer with `frame-ancestors` exactly the declared sources, no `X-Frame-Options` |

@@ -16,7 +16,7 @@ import { EMBED_EXCHANGE_SEGMENT, EMBED_TICKET_SECONDS, EMBED_TICKET_TYPE, MANIFE
 export { MANIFEST_PATH }
 export const MCP_APP_MIME_TYPE = "text/html;profile=mcp-app"
 
-export const manifestSchema = JSON.parse(readFileSync(new URL("../schema/modelapp.schema.json", import.meta.url), "utf8")) as Record<string, unknown>
+export const manifestSchema = JSON.parse(readFileSync(new URL("../schema/clegra.schema.json", import.meta.url), "utf8")) as Record<string, unknown>
 
 export type Check = { id: string; title: string; ok: boolean; detail?: string; skipped?: boolean }
 /** `ok`: no check failed. `complete`: every check ran (false when the MCP checks were skipped for lack of a token). Conformant = both. */

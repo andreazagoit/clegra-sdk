@@ -1,6 +1,6 @@
 {
-  "$id": "urn:modelapp:manifest:1.0",
-  "title": "Model App Protocol (MAP) manifest 1.0",
+  "$id": "urn:clegra:manifest:1.0",
+  "title": "Clegra app manifest 1.0",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {

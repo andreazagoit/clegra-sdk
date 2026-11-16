@@ -1,11 +1,11 @@
 # The reference app: a CRM
 
-> Non-normative. Runnable code: [`examples/modelapp/crm`](../../../examples/modelapp/crm). Invented data.
+> Non-normative. Runnable code: [`examples/apps/crm`](../../../examples/apps/crm). Invented data.
 
 A small sales team's CRM — **companies**, **contacts**, **deals**, **calls** — built the way a developer
 already builds a web app: Next.js (App Router), its own sign-in (better-auth: email + password,
 organizations as tenants), its own database (Drizzle on Postgres; an embedded PGlite locally). MAP is
-added on top in one file, `modelapp/app.ts`, over the functions the pages already use.
+added on top in one file, `clegra/app.ts`, over the functions the pages already use.
 
 **The pitch:** the page's «Mark as won» button and the MCP tool `deal_mark_won` call the same
 `markWon(orgId, dealId)` in `lib/crm.ts`. Nothing is written twice; the SDK adds the tenant from the
@@ -19,13 +19,13 @@ verified caller, the permissions, the confirmations and the MCP surface.
 | `lib/db.ts` | Postgres (postgres.js) with `DATABASE_URL`; PGlite in `.data/` without; production without it is an error |
 | `lib/crm.ts` | The app's functions: `listDeals(orgId, query)` (filters, search, sort, paging in SQL), `markWon`, `setStage`, `logCall`, `createDeal`, pipeline totals, workspace provisioning |
 | `lib/auth-options.ts`, `lib/auth.ts` | better-auth: email + password, organizations, and the OAuth server for MCP clients (`jwt` + `mcp` + `cimd`) |
-| `lib/site.ts` | The one public address, `MODELAPP_PUBLIC_URL`: the issuer `<origin>/api/auth` and the MCP resource `<origin>/mcp` |
+| `lib/site.ts` | The one public address, `CLEGRA_PUBLIC_URL`: the issuer `<origin>/api/auth` and the MCP resource `<origin>/mcp` |
 | `lib/session.ts`, `lib/permissions.ts` | The signed-in member of the active organization; role → permissions |
 | `app/(crm)/…`, `app/embed/pipeline` | Pages and server actions; the board page made to be framed, signed in with a host's ticket (`getEmbedCaller`; `proxy.ts`: `embedProxy`, spec §5.1) |
 | `app/sign-in`, `app/oauth/consent` | better-auth's login and consent pages; they also continue an OAuth authorization |
-| `modelapp/app.ts`, `modelapp/index.ts` | The MAP definition, `createCrmApp({ auth, store })`, and the app as served |
-| `modelapp/auth.ts` | The app's own `resolve` for better-auth access tokens, the issuer metadata, workspace hosts (`MODELAPP_ISSUERS`) |
-| `app/api/modelapp/[...path]/route.ts`, `next.config.ts` | `toNextHandlers` and `withModelApp`: MCP at `/mcp`, metadata under `/.well-known/` |
+| `clegra/app.ts`, `clegra/index.ts` | The MAP definition, `createCrmApp({ auth, store })`, and the app as served |
+| `clegra/auth.ts` | The app's own `resolve` for better-auth access tokens, the issuer metadata, workspace hosts (`CLEGRA_ISSUERS`) |
+| `app/api/clegra/[...path]/route.ts`, `next.config.ts` | `toNextHandlers` and `withClegra`: MCP at `/mcp`, metadata under `/.well-known/` |
 | `test/` | The lib on PGlite, the MCP surface (`mcp.snapshot.json`), real OAuth tokens (`oauth.test.ts`) |
 
 ## What it declares
@@ -67,7 +67,7 @@ over MCP.
 
 - **The app's own users** (the app's own `auth.resolve` for better-auth's tokens, see below): the installation is the
   organization id, the person the user id. Names come from the organization's members.
-- **A workspace host** (e.g. a Clegra node, `MODELAPP_ISSUERS`): the installation is
+- **A workspace host** (e.g. a Clegra node, `CLEGRA_ISSUERS`): the installation is
   `<installation>@<issuer>`, never an organization. On its first call it gets its own copy of the demo
   data (`provisionWorkspace`: one transaction, idempotent). Its people are named from their tokens and
   remembered in `people` once they own a deal.
@@ -77,7 +77,7 @@ Both are just values of `org_id`; `tenants` records which kind each one is.
 ## Run it
 
 ```sh
-cd examples/modelapp/crm
+cd examples/apps/crm
 npm run setup     # .env.local with generated secrets (if missing), migrations, demo data
 npm run dev       # http://localhost:3920 — «Enter as Alice Morgan (sales manager)» on /sign-in
 npm test          # lib + MAP tests on in-memory PGlite
@@ -98,7 +98,7 @@ a change for every client, reviewed as a diff (`UPDATE_SNAPSHOTS=1 npm test` rew
 ## MCP for the app's own users: better-auth as the OAuth server
 
 This is the example's own choice. The SDK only asks for `auth.resolve(token) → caller`, and any sign-in works.
-better-auth runs with `organization`, `jwt`, `mcp` (scope `modelapp`) and `cimd`
+better-auth runs with `organization`, `jwt`, `mcp` (scope `clegra`) and `cimd`
 (`lib/auth-options.ts`):
 
 - **Clients** are identified by a metadata document (an https `client_id`), as ChatGPT and Claude do. Dynamic
@@ -110,7 +110,7 @@ better-auth runs with `organization`, `jwt`, `mcp` (scope `modelapp`) and `cimd`
   with the signed request, and so do the demo buttons. `/oauth/consent` shows the client's name and id, the
   organization and what it may do, with Allow / Deny.
 
-`modelapp/auth.ts` has `resolveUser`, about 40 lines a developer can copy. It accepts a token only when all of
+`clegra/auth.ts` has `resolveUser`, about 40 lines a developer can copy. It accepts a token only when all of
 these hold:
 
 - It is a JWT with `typ: at+jwt`, verified against better-auth's JWKS. The JWKS is read in-process and cached, and
@@ -119,7 +119,7 @@ these hold:
 - `aud` is exactly this server.
 - `exp` holds, with 30 s of skew.
 - It has no `cnf`.
-- It carries the `modelapp` scope.
+- It carries the `clegra` scope.
 - It names an organization.
 
 Then the membership and role are read live, so a role change or a removed member takes effect on the next call. It
@@ -128,10 +128,10 @@ returns `{ installation: orgId, person, permissions: permissionsForRole(role) }`
 workspace-host `issuers`.
 
 ```sh
-T=$(MODELAPP_OAUTH_EMAIL=alice@orbit.example MODELAPP_OAUTH_PASSWORD=… npm run --silent token -- http://localhost:3920)
-npm run modelapp:check -- http://localhost:3920 --token "$T"     # from the repository root → Conformant.
+T=$(CLEGRA_OAUTH_EMAIL=alice@orbit.example CLEGRA_OAUTH_PASSWORD=… npm run --silent token -- http://localhost:3920)
+npm run clegra:check -- http://localhost:3920 --token "$T"     # from the repository root → Conformant.
 ```
 
 `npm run token` runs the real flow over HTTP: sign in → authorize (PKCE, `resource`) → consent → token. MCP
 Inspector connects to `http://localhost:3920/mcp`. Claude and ChatGPT need a public https origin, set as
-`MODELAPP_PUBLIC_URL` (a deployment or a tunnel), and then `<origin>/mcp` as a custom connector.
+`CLEGRA_PUBLIC_URL` (a deployment or a tunnel), and then `<origin>/mcp` as a custom connector.

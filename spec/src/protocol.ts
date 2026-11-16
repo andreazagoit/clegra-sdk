@@ -1,20 +1,16 @@
 /**
- * THE PROTOCOL'S NAMES, IN ONE PLACE. Everything that carries the name on the
- * wire derives from `id` below: the SDK, the conformance checks and hosts
- * import these, so renaming the protocol is this file plus a search-replace
- * of the package and folder names. No dependencies.
+ * THE NAMES CLEGRA APPS CARRY ON THE WIRE, IN ONE PLACE. Everything derives from
+ * `PROTOCOL_ID` below: the package, the conformance checks and the Clegra host
+ * import these. No dependencies.
  */
 
-/** In prose: «Model App Protocol (MAP)» on first use, then «MAP». */
-export const PROTOCOL_NAME = "Model App Protocol"
-export const PROTOCOL_SHORT_NAME = "MAP"
-/** The technical name (never the ambiguous word «map»). */
-export const PROTOCOL_ID = "modelapp"
+/** The technical name: the package's, the manifest's path, the URI scheme, the `_meta` key, the claim and the scope. */
+export const PROTOCOL_ID = "clegra"
 export const SPEC_VERSION = "1.0"
 
 /** Where every app serves its manifest. */
 export const MANIFEST_PATH = `/.well-known/${PROTOCOL_ID}.json`
-/** The scheme of record and fragment URIs: `modelapp://<app>/<type>/<key>`; the manifest's own resource is `modelapp://<app>`. */
+/** The scheme of record and fragment URIs: `clegra://<app>/<type>/<key>`; the manifest's own resource is `clegra://<app>`. */
 export const URI_SCHEME = PROTOCOL_ID
 export const uriPrefix = (app: string) => `${URI_SCHEME}://${app}`
 /** The one `_meta` key of the host protocol: `{ call, confirmation, settings }` on requests, `{ notifications, untrusted }` on results. */

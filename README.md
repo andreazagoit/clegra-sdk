@@ -1,62 +1,62 @@
-# modelapp
+# clegra
 
-The Model App Protocol (MAP) SDK. MIT. You write one typed object, `defineApp({ entities, actions, pages, fragments,
+The Clegra apps SDK. MIT. You write one typed object, `defineApp({ entities, actions, pages, fragments,
 agents, … })`. It becomes a JSON manifest for workspace hosts and a plain, conformant MCP server for ChatGPT, Claude
-and any MCP client. Spec: [docs/map/spec.md](../../docs/map/spec.md).
+and any MCP client. Spec: [docs/developers/spec.md](../../docs/developers/spec.md).
 
 ```sh
-npm i modelapp zod
+npm i clegra zod
 ```
 
 ESM JavaScript with its type declarations, Node 20+; `zod` 4 is a peer dependency, `next` (15+) an optional one.
-Not on npm yet: [docs/map/RELEASE.md](../../docs/map/RELEASE.md) says how the tarball is made, checked and
+Not on npm yet: [docs/developers/RELEASE.md](../../docs/developers/RELEASE.md) says how the tarball is made, checked and
 (after the owner's yes) published.
 
 | Entry | What |
 | --- | --- |
-| `modelapp` | `defineApp`, `AuthError`, `SqlStore`, `MemoryStore`, types. Framework-agnostic (`app.fetch(request)`) |
-| `modelapp/next` | `toNextHandlers`, `withModelApp`, `modelAppRewrites`; `embedProxy`, `getEmbedCaller` for embedded pages (`next` is an optional peer dependency) |
-| `modelapp/node` | `listen(app)`: the app on Node's own HTTP server |
-| `modelapp/testing` | `testClient(app)`: JSON-RPC to `app.fetch` with dev tokens |
-| `modelapp/spec` | `checkApp`, `formatReport`: the conformance checks |
-| CLI | `npx modelapp init [dir] [--dry-run]`; `npx modelapp check <url> [--token …]` (or `MODELAPP_TOKEN`) |
+| `clegra` | `defineApp`, `AuthError`, `SqlStore`, `MemoryStore`, types. Framework-agnostic (`app.fetch(request)`) |
+| `clegra/next` | `toNextHandlers`, `withClegra`, `clegraRewrites`; `embedProxy`, `getEmbedCaller` for embedded pages (`next` is an optional peer dependency) |
+| `clegra/node` | `listen(app)`: the app on Node's own HTTP server |
+| `clegra/testing` | `testClient(app)`: JSON-RPC to `app.fetch` with dev tokens |
+| `clegra/spec` | `checkApp`, `formatReport`: the conformance checks |
+| CLI | `npx clegra init [dir] [--dry-run]`; `npx clegra check <url> [--token …]` (or `CLEGRA_TOKEN`) |
 
-## Next.js: `npx modelapp init`
+## Next.js: `npx clegra init`
 
-In an existing App Router app, `npx modelapp init` writes the three files below and wraps next.config. It also puts a
-random local bearer in `.env.local` (`MODELAPP_LOCAL_TOKEN`), which the generated `resolve` accepts only when
+In an existing App Router app, `npx clegra init` writes the three files below and wraps next.config. It also puts a
+random local bearer in `.env.local` (`CLEGRA_LOCAL_TOKEN`), which the generated `resolve` accepts only when
 `NODE_ENV` isn't `production`. It never overwrites a file, prints what it can't edit safely, and `--dry-run` writes
-nothing. Then `npm run dev` and `npx modelapp check http://localhost:3000 --token <MODELAPP_LOCAL_TOKEN>`.
-See [docs/map/quickstart.md](../../docs/map/quickstart.md).
+nothing. Then `npm run dev` and `npx clegra check http://localhost:3000 --token <CLEGRA_LOCAL_TOKEN>`.
+See [docs/developers/quickstart.md](../../docs/developers/quickstart.md).
 
 ## Next.js: three files
 
 ```ts
 // next.config.ts
-import { withModelApp } from "modelapp/next"
+import { withClegra } from "clegra/next"
 
-export default withModelApp({ /* your config: your rewrites, in any shape, are kept */ })
+export default withClegra({ /* your config: your rewrites, in any shape, are kept */ })
 ```
 
 ```ts
-// app/api/modelapp/[...path]/route.ts
-import { toNextHandlers } from "modelapp/next"
-import { app } from "@/modelapp"
+// app/api/clegra/[...path]/route.ts
+import { toNextHandlers } from "clegra/next"
+import { app } from "@/clegra"
 
 export const { GET, POST, DELETE, OPTIONS } = toNextHandlers(app)
 ```
 
 ```ts
-// modelapp.ts
-import { defineApp } from "modelapp"
+// clegra.ts
+import { defineApp } from "clegra"
 
 export const app = defineApp({
   name: "crm",
   title: "CRM",
   version: "1.0.0",
   auth: {
-    resource: `${process.env.MODELAPP_PUBLIC_URL}/mcp`,
-    authorizationServers: [`${process.env.MODELAPP_PUBLIC_URL}/api/auth`],
+    resource: `${process.env.CLEGRA_PUBLIC_URL}/mcp`,
+    authorizationServers: [`${process.env.CLEGRA_PUBLIC_URL}/api/auth`],
     resolve: async (token, request, { resource }) => {
       // Verify the token of your own sign-in (signature, expiry, aud === resource), then say who is calling.
       return { installation: "org-id", person: { id: "user-id", name: "Ada" }, permissions: ["deals.view"] }
@@ -66,7 +66,7 @@ export const app = defineApp({
 })
 ```
 
-- **`withModelApp`** adds `beforeFiles` rewrites to the route for `/mcp`, `/.well-known/modelapp.json` and the OAuth
+- **`withClegra`** adds `beforeFiles` rewrites to the route for `/mcp`, `/.well-known/clegra.json` and the OAuth
   metadata paths (`oauth-protected-resource`, `oauth-authorization-server` and `openid-configuration`, each bare or
   with a path).
   - It keeps the app's own rewrites, in any shape: an array, an object, a sync or async function, or a config
@@ -74,21 +74,21 @@ export const app = defineApp({
   - It refuses `basePath` (the well-known paths must be at the root of the host) and `trailingSlash: true` (which
     redirects `/mcp` to `/mcp/`).
 - **`toNextHandlers`** hands `app.fetch` each request at its public address.
-  - The mount is taken off (`/api/modelapp/mcp` → `/mcp`). A rewritten request arrives with its source path, and
+  - The mount is taken off (`/api/clegra/mcp` → `/mcp`). A rewritten request arrives with its source path, and
     that path is kept.
   - Responses, SSE included, pass through unbuffered. Nothing is kept between requests, so it runs on serverless.
-  - Options: `mount` (default `/api/modelapp`, the same value in both functions) and `publicUrl`.
+  - Options: `mount` (default `/api/clegra`, the same value in both functions) and `publicUrl`.
   - Leave defineApp's `path` unset: the mount does that job.
 
 ## Embedded pages (`/embed/*`)
 
 A page `url: "/embed/board"` is a page of your site that hosts frame. The frame is cross-site, so the viewer is signed
-in with a one-minute, single-use ticket the host asks for (`modelapp_embed`) and posts into the frame; the app
+in with a one-minute, single-use ticket the host asks for (`clegra_embed`) and posts into the frame; the app
 answers with a `Secure; HttpOnly; SameSite=None; Partitioned` cookie for that page's path (spec §5.1).
 
 ```ts
-// modelapp.ts
-defineApp({ …, embed: { frameAncestors: ["https://app.clegra.com", "https://chatgpt.com"], secret: process.env.MODELAPP_EMBED_SECRET } })
+// clegra.ts
+defineApp({ …, embed: { frameAncestors: ["https://app.clegra.com", "https://chatgpt.com"], secret: process.env.CLEGRA_EMBED_SECRET } })
 
 // proxy.ts
 export const proxy = embedProxy(app)            // POST /embed/_ticket; frame-ancestors on every /embed response
@@ -99,13 +99,13 @@ const caller = await getEmbedCaller(app, "board") // null: no ticket, expired, o
 ```
 
 `app.embed.exchange(request)` and `app.embed.caller(page, request)` are the same, framework-neutral; `app.fetch`
-answers `POST <path>/_ticket` too (`modelapp/node`).
+answers `POST <path>/_ticket` too (`clegra/node`).
 
 ## Public URL behind proxies and on Vercel
 
-The public origin is `publicUrl`, else `MODELAPP_PUBLIC_URL` (an origin only, like `https://crm.example.com`), else
+The public origin is `publicUrl`, else `CLEGRA_PUBLIC_URL` (an origin only, like `https://crm.example.com`), else
 what the request says (`x-forwarded-host` / `x-forwarded-proto`, else `host`). A client can send those headers, so in
-production set `MODELAPP_PUBLIC_URL` and `auth.resource`. Tokens are only accepted for `auth.resource`. Without
+production set `CLEGRA_PUBLIC_URL` and `auth.resource`. Tokens are only accepted for `auth.resource`. Without
 `auth.resource` in production, every request answers `500 misconfigured`. On Vercel, preview deployments have other
 hosts: give each environment its own value.
 
@@ -120,11 +120,11 @@ The app verifies its own access tokens: those its sign-in (better-auth, Clerk, A
 - `auth.authorizationServers` names your authorization server in the protected-resource metadata.
 - `auth.serve(request)` can answer its RFC 8414 metadata at the root.
 
-Recipes for better-auth, Clerk, Auth0 and WorkOS: [docs/map/auth.md](../../docs/map/auth.md).
+Recipes for better-auth, Clerk, Auth0 and WorkOS: [docs/developers/auth.md](../../docs/developers/auth.md).
 
 Dev sign-in (`auth.dev`) answers loopback callers only. A Next route handler can't know the caller's address:
 `x-forwarded-for` is whatever the client sent. So `toNextHandlers` refuses an app with `auth.dev`. Locally,
-use init's bearer (`MODELAPP_LOCAL_TOKEN`) or your own sign-in, or run the app with `listen` from `modelapp/node`.
+use init's bearer (`CLEGRA_LOCAL_TOKEN`) or your own sign-in, or run the app with `listen` from `clegra/node`.
 
 ## Kinds and references across apps
 
@@ -136,12 +136,12 @@ holds the URI of a record in any app (spec §3.2). Both are optional: apps witho
 ## Tests
 
 ```sh
-npm test            # core + modelapp/next unit tests
-npx tsx --test "spec/src/**/*.test.ts"   # modelapp init (fixture projects in temp folders)
-npm run test:next   # test/fixture with next dev (port 3942), then next build + next start (3943); modelapp check through the rewrites
+npm test            # core + clegra/next unit tests
+npx tsx --test "spec/src/**/*.test.ts"   # clegra init (fixture projects in temp folders)
+npm run test:next   # test/fixture with next dev (port 3942), then next build + next start (3943); clegra check through the rewrites
 npm run typecheck
 npm run build       # dist/ (git-ignored): what the tarball ships; npm pack builds it itself
-npm run pack:check  # slow: npm pack, then a fresh Next.js app outside the repository with the tarball (docs/map/RELEASE.md)
+npm run pack:check  # slow: npm pack, then a fresh Next.js app outside the repository with the tarball (docs/developers/RELEASE.md)
 ```
 
 In this repository the package exports its TypeScript source: the examples, Clegra and the tests import it through

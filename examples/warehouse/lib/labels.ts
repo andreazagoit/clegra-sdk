@@ -1,6 +1,6 @@
 import type { Category, MovementKind, OrderStatus, StockStatus, Unit } from "./warehouse"
 
-/** The UI's words for the stored values, in English and Italian: shared by the pages and the MAP definition. */
+/** The UI's words for the stored values, in English and Italian: shared by the pages and the app definition. */
 export const CATEGORY_LABELS: Record<Category, { en: string; it: string }> = {
   fasteners: { en: "Fasteners", it: "Viteria" },
   tools: { en: "Tools", it: "Utensili" },

@@ -10,13 +10,13 @@ import { fileURLToPath } from "node:url"
 
 import { chromium } from "playwright"
 
-// A REAL Next.js run of test/fixture (App Router, withModelApp + toNextHandlers): `next dev`, then `next build` +
-// `next start`. Through the rewrites: `modelapp check` with a token, what a route handler sees of a rewritten
+// A REAL Next.js run of test/fixture (App Router, withClegra + toNextHandlers): `next dev`, then `next build` +
+// `next start`. Through the rewrites: `clegra check` with a token, what a route handler sees of a rewritten
 // request, an SSE stream arriving chunk by chunk. Servers are stopped by PID; the fixture's .next is deleted.
 // In next dev, the embedded page in a real Chromium (spec §5.1): a host harness on http://localhost (another site
 // than the app on 127.0.0.1) frames the SDK's url-page view, which asks for a ticket over the bridge and posts it.
 // (.next is removed with retries: next dev may still be writing in it while it stops.)
-// Run: npm run test:next (ports 3942 dev, 3943 start, 3944 the harness; MODELAPP_TEST_NEXT_PORT=<n> uses n, n+1, n+2).
+// Run: npm run test:next (ports 3942 dev, 3943 start, 3944 the harness; CLEGRA_TEST_NEXT_PORT=<n> uses n, n+1, n+2).
 
 const here = dirname(fileURLToPath(import.meta.url))
 const fixture = join(here, "fixture")
@@ -26,7 +26,7 @@ const nextBin = join(root, "node_modules", "next", "dist", "bin", "next")
 const token = randomBytes(24).toString("base64url")
 const embedSecret = randomBytes(32).toString("base64url")
 const running = new Set<ChildProcess>()
-const devPort = Number(process.env.MODELAPP_TEST_NEXT_PORT || 3942)
+const devPort = Number(process.env.CLEGRA_TEST_NEXT_PORT || 3942)
 
 function stop(child: ChildProcess) {
   // The process group we started (next dev forks a worker): only our own PIDs.
@@ -49,7 +49,7 @@ async function serve(mode: "dev" | "start", port: number): Promise<{ base: strin
   const child = spawn(process.execPath, [nextBin, mode, "-p", String(port), "-H", "127.0.0.1"], {
     cwd: fixture,
     detached: true,
-    env: { ...process.env, FIXTURE_TOKEN: token, FIXTURE_EMBED_SECRET: embedSecret, MODELAPP_PUBLIC_URL: base, NEXT_TELEMETRY_DISABLED: "1" },
+    env: { ...process.env, FIXTURE_TOKEN: token, FIXTURE_EMBED_SECRET: embedSecret, CLEGRA_PUBLIC_URL: base, NEXT_TELEMETRY_DISABLED: "1" },
     stdio: ["ignore", "pipe", "pipe"],
   })
   running.add(child)
@@ -59,7 +59,7 @@ async function serve(mode: "dev" | "start", port: number): Promise<{ base: strin
   for (;;) {
     if (child.exitCode !== null) throw new Error(`next ${mode} exited: ${output}`)
     try {
-      if ((await fetch(`${base}/api/modelapp/health`)).ok) break
+      if ((await fetch(`${base}/api/clegra/health`)).ok) break
     } catch {}
     if (Date.now() > deadline) throw new Error(`next ${mode} did not answer: ${output}`)
     await new Promise((r) => setTimeout(r, 300))
@@ -67,22 +67,22 @@ async function serve(mode: "dev" | "start", port: number): Promise<{ base: strin
   return { base, log: () => output, close: () => stop(child) }
 }
 
-function modelappCheck(base: string, withToken: boolean) {
-  const r = spawnSync("npx", ["tsx", cli, "check", base], { cwd: root, encoding: "utf8", env: { ...process.env, ...(withToken ? { MODELAPP_TOKEN: token } : {}) } })
+function clegraCheck(base: string, withToken: boolean) {
+  const r = spawnSync("npx", ["tsx", cli, "check", base], { cwd: root, encoding: "utf8", env: { ...process.env, ...(withToken ? { CLEGRA_TOKEN: token } : {}) } })
   return { status: r.status, out: `${r.stdout}${r.stderr}` }
 }
 
 async function expectations(base: string) {
-  // modelapp check: public checks without a token (exit 3: incomplete, nothing failed), everything with one.
-  const pub = modelappCheck(base, false)
+  // clegra check: public checks without a token (exit 3: incomplete, nothing failed), everything with one.
+  const pub = clegraCheck(base, false)
   assert.equal(pub.status, 3, pub.out)
   assert.doesNotMatch(pub.out, /FAIL/)
-  const full = modelappCheck(base, true)
+  const full = clegraCheck(base, true)
   assert.equal(full.status, 0, full.out)
   assert.match(full.out, /Conformant\./)
 
   // Every rewritten public path reaches the app (bare and with a path).
-  for (const path of ["/.well-known/modelapp.json", "/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp"]) {
+  for (const path of ["/.well-known/clegra.json", "/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp"]) {
     assert.equal((await fetch(`${base}${path}`)).status, 200, path)
   }
   // No auth.serve in the fixture: the app's own 404, which proves the rewrite reached it (Next's 404 is HTML).
@@ -98,7 +98,7 @@ async function expectations(base: string) {
   assert.equal(new URL(raw.nextUrl).pathname, "/probe-src/a/raw")
   // x-forwarded-for is whatever the client sent: no basis for a loopback check (dev sign-in stays refused).
   assert.equal(raw.forwardedFor, "10.9.9.9")
-  // The adapter: the public origin from MODELAPP_PUBLIC_URL.
+  // The adapter: the public origin from CLEGRA_PUBLIC_URL.
   const echo = (await (await fetch(`${base}/api/probe/echo`)).json()) as { adapterUrl: string }
   assert.equal(echo.adapterUrl, `${base}/echo`)
 
@@ -158,7 +158,7 @@ async function embedInBrowser(base: string, port: number) {
   const host = await harness(base, port)
   // Third-party cookies blocked (Chromium's own setting, in a fresh profile), as Safari and Firefox do and Chrome
   // users can: only a partitioned cookie can work. (The headless shell ignores the setting: the full Chromium.)
-  const profile = mkdtempSync(join(tmpdir(), "modelapp-embed-profile-"))
+  const profile = mkdtempSync(join(tmpdir(), "clegra-embed-profile-"))
   mkdirSync(join(profile, "Default"))
   writeFileSync(join(profile, "Default", "Preferences"), JSON.stringify({ profile: { cookie_controls_mode: 1, block_third_party_cookies: true } }))
   const context = await chromium.launchPersistentContext(profile, { headless: true, channel: "chromium" })
@@ -166,12 +166,12 @@ async function embedInBrowser(base: string, port: number) {
   try {
     const page = await context.newPage()
     await page.goto(host.url)
-    const embedded = page.frameLocator("#v").frameLocator("iframe[name=modelapp-page]").locator("[data-caller]")
+    const embedded = page.frameLocator("#v").frameLocator("iframe[name=developers-page]").locator("[data-caller]")
     await embedded.waitFor({ timeout: 30_000 })
     assert.equal(await embedded.textContent(), "Test person · org-a · notes.view", "the frame of another site is signed in by the ticket")
     // The browser's cookie store (every partition: Playwright reports each cookie's partition key).
     const cookies = await context.cookies()
-    const session = cookies.find((c) => c.name === "__Secure-modelapp-embed-board")
+    const session = cookies.find((c) => c.name === "__Secure-clegra-embed-board")
     assert.ok(session, JSON.stringify(cookies))
     assert.equal(session.path, "/embed/board")
     assert.equal(session.secure, true)
@@ -180,7 +180,7 @@ async function embedInBrowser(base: string, port: number) {
     assert.equal(session.domain, "127.0.0.1", "a host-only cookie (no Domain)")
     assert.equal(session.partitionKey, "http://localhost", "the cookie is kept under the host's top-level site only")
     // The address bar of the frame holds no ticket: it is the page.
-    const frameUrl = page.frames().find((f) => f.name() === "modelapp-page")?.url()
+    const frameUrl = page.frames().find((f) => f.name() === "developers-page")?.url()
     assert.equal(frameUrl, `${base}/embed/board`)
 
     // The session opened top-level, in the same browser: another partition, and not a frame: signed out.

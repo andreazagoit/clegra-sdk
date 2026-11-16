@@ -166,7 +166,7 @@ export type AppDefinition<E extends Schemas, A extends Schemas, F extends Schema
   people?: PeopleResolver
   /**
    * Pages on the app's own site that hosts frame (spec §5.1): the hosts that may frame them (`frameAncestors`), the
-   * signing secret (default `MODELAPP_EMBED_SECRET`), their path (default `/embed`). Required with a same-site `url` page.
+   * signing secret (default `CLEGRA_EMBED_SECRET`), their path (default `/embed`). Required with a same-site `url` page.
    */
   embed?: EmbedOptions
 }

@@ -7,18 +7,18 @@ import { randomBytes } from "node:crypto"
 import { describe, test } from "node:test"
 
 const SITE = "http://localhost:3922"
-process.env.MODELAPP_PUBLIC_URL = SITE
+process.env.CLEGRA_PUBLIC_URL = SITE
 // The node's client calls http only on a development host (apps/node/lib/kernel/mcp-client.ts allowedUrl).
 process.env.PLUGIN_DEV_HOSTS = "localhost:3922"
 process.env.MAIL_CREDENTIALS_KEY ??= randomBytes(32).toString("base64")
 process.env.CLIENT_ORIGINS = "https://app.clegra.test"
 const { password } = await import("./setup")
 
-import { toNextHandlers } from "modelapp/next"
+import { toNextHandlers } from "clegra/next"
 
 import { createAuth } from "../lib/auth"
-import { createCrmApp } from "../modelapp/app"
-import { crmAuth } from "../modelapp/auth"
+import { createCrmApp } from "../clegra/app"
+import { crmAuth } from "../clegra/auth"
 
 import { appLinkCallback } from "../../../../packages/platform/lib/app-link/callback"
 import { appLinkClientId, appLinkRedirectUri, clientDocument } from "../../../../packages/platform/lib/app-link/client"
@@ -64,7 +64,7 @@ const route = toNextHandlers(createCrmApp({ auth: crmAuth() }), { publicUrl: SIT
 /** The network as the node sees it: the CRM's site (MCP, well-known metadata, better-auth). */
 const crm: Fetcher = async (url, init) => {
   const u = new URL(url)
-  const request = new Request(u.pathname === "/mcp" ? `${SITE}/api/modelapp/mcp` : url, { method: init.method, headers: init.headers, ...(init.body !== undefined ? { body: init.body } : {}) })
+  const request = new Request(u.pathname === "/mcp" ? `${SITE}/api/clegra/mcp` : url, { method: init.method, headers: init.headers, ...(init.body !== undefined ? { body: init.body } : {}) })
   const response = u.pathname.startsWith("/api/auth/") ? await auth.handler(request) : init.method === "POST" ? await route.POST(request) : await route.GET(request)
   return { status: response.status, headers: response.headers, text: () => response.text() }
 }
@@ -111,7 +111,7 @@ async function link(client: ClientCredentials, email = "alice@orbit.example") {
   const { verifier, challenge } = pkcePair()
   const state = signAppLinkState({ nodeId: NODE_ID, client: "https://app.clegra.test", key: randomBytes(32).toString("base64url"), expiresAt: Date.now() + 600_000 }, appLinkStateKey())
   const scope = chooseScopes(undefined, resource.scopes, server.scopes)
-  assert.equal(scope, "modelapp offline_access")
+  assert.equal(scope, "clegra offline_access")
   const landed = await personAuthorizes(authorizationUrl({ endpoint: server.authorizationEndpoint, clientId: client.clientId, redirectUri: appLinkRedirectUri(CORE), state, challenge, resource: RESOURCE, scope }), email)
   assert.equal(`${landed.origin}${landed.pathname}`, appLinkRedirectUri(CORE))
   // 4. The core bounces the answer to the client, which hands it in to the node.
@@ -168,9 +168,9 @@ describe("Clegra links a person's CRM account (better-auth 1.7.7, metadata docum
     const server = await discoverServer(ISSUER, crm)
     const { verifier, challenge } = pkcePair()
     const state = signAppLinkState({ nodeId: NODE_ID, client: "https://app.clegra.test", key: randomBytes(32).toString("base64url"), expiresAt: Date.now() + 600_000 }, appLinkStateKey())
-    const landed = await personAuthorizes(authorizationUrl({ endpoint: server.authorizationEndpoint, clientId: clients.private_key_jwt.clientId, redirectUri: appLinkRedirectUri(CORE), state, challenge, resource: RESOURCE, scope: "modelapp" }), "ben@orbit.example")
+    const landed = await personAuthorizes(authorizationUrl({ endpoint: server.authorizationEndpoint, clientId: clients.private_key_jwt.clientId, redirectUri: appLinkRedirectUri(CORE), state, challenge, resource: RESOURCE, scope: "clegra" }), "ben@orbit.example")
     const code = landed.searchParams.get("code")!
-    const trade = (v: string) => exchangeCode({ tokenEndpoint: server.tokenEndpoint, code, verifier: v, redirectUri: appLinkRedirectUri(CORE), resource: RESOURCE, scope: "modelapp", client: clients.private_key_jwt }, crm)
+    const trade = (v: string) => exchangeCode({ tokenEndpoint: server.tokenEndpoint, code, verifier: v, redirectUri: appLinkRedirectUri(CORE), resource: RESOURCE, scope: "clegra", client: clients.private_key_jwt }, crm)
     await assert.rejects(trade(pkcePair().verifier), (e: OAuthFlowError) => e.code === "invalid-grant" || e.code === "token")
     await assert.rejects(trade(verifier), (e: OAuthFlowError) => e.code === "invalid-grant" || e.code === "token", "a code tried once is gone")
   })

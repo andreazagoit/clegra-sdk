@@ -18,7 +18,7 @@ import { testClient } from "./testing"
  * Every threat the design names is a test here.
  */
 
-const keyFile = join(tmpdir(), `modelapp-embed-key-${randomUUID()}.json`)
+const keyFile = join(tmpdir(), `clegra-embed-key-${randomUUID()}.json`)
 after(() => rmSync(keyFile, { force: true }))
 
 const SECRET = "an-embed-secret-for-the-tests-only-0123456789"
@@ -44,7 +44,7 @@ function makeApp(options: { secret?: string | null; frameAncestors?: string[] } 
 
 async function ticketFor(app: App, page = "board", origin = HOST, who: Parameters<typeof testClient>[1] = { permissions: ["deals.view"], installation: "org-1", person: "ada" }): Promise<EmbedTicket> {
   const c = await testClient(app, who)
-  const r = await c.call("modelapp_embed", { page, origin })
+  const r = await c.call("clegra_embed", { page, origin })
   assert.ok(!r.isError, JSON.stringify(r.structuredContent))
   return r.structuredContent as unknown as EmbedTicket
 }
@@ -59,17 +59,17 @@ function post(app: App, ticket: string, init: { origin?: string | null; dest?: s
 
 const cookieOf = (r: Response) => r.headers.get("set-cookie") ?? ""
 const valueOf = (setCookie: string) => /^[^=]+=([^;]+)/.exec(setCookie)?.[1] ?? ""
-const pageRequest = (cookie: string, page = "board", dest = "iframe") => new Request(`${APP}/embed/${page}`, { headers: { cookie: `__Secure-modelapp-embed-${page}=${cookie}`, "sec-fetch-dest": dest } })
+const pageRequest = (cookie: string, page = "board", dest = "iframe") => new Request(`${APP}/embed/${page}`, { headers: { cookie: `__Secure-clegra-embed-${page}=${cookie}`, "sec-fetch-dest": dest } })
 
 describe("embedded pages: the ticket", () => {
   test("the tool: app-only, hidden from models, in the manifest with the declared hosts", async () => {
     const app = makeApp()
     const tools = await (await testClient(app, { permissions: "all" })).listTools()
-    const tool = tools.find((t) => t.name === "modelapp_embed")
+    const tool = tools.find((t) => t.name === "clegra_embed")
     assert.ok(tool)
     assert.deepEqual((tool._meta as { ui: unknown }).ui, { visibility: ["app"] })
     assert.equal((tool._meta as Record<string, unknown>)["openai/visibility"], "private")
-    assert.deepEqual(app.manifest().embed, { tool: { name: "modelapp_embed", plain: true }, path: "/embed", frameAncestors: [HOST, "https://*.sandbox.example"] })
+    assert.deepEqual(app.manifest().embed, { tool: { name: "clegra_embed", plain: true }, path: "/embed", frameAncestors: [HOST, "https://*.sandbox.example"] })
   })
 
   test("a ticket: one minute, HS256, for one page, one origin, the caller as resolve named it", async () => {
@@ -77,14 +77,14 @@ describe("embedded pages: the ticket", () => {
     const t = await ticketFor(app)
     assert.equal(t.action, `${APP}/embed/_ticket`)
     assert.equal(t.field, "ticket")
-    assert.deepEqual(decodeProtectedHeader(t.ticket), { alg: "HS256", typ: "modelapp-embed+jwt" })
+    assert.deepEqual(decodeProtectedHeader(t.ticket), { alg: "HS256", typ: "clegra-embed+jwt" })
     const claims = decodeJwt(t.ticket) as Record<string, unknown> & { exp: number; iat: number }
     assert.equal(claims.exp - claims.iat, 60)
     assert.equal(claims.aud, `${APP}/embed/board`)
     assert.equal(claims.iss, APP)
     assert.equal(claims.origin, HOST)
     assert.equal(typeof claims.jti, "string")
-    const caller = claims.modelapp as { installation: string; person: { id: string }; permissions: string[] }
+    const caller = claims.clegra as { installation: string; person: { id: string }; permissions: string[] }
     assert.equal(caller.person.id, "ada")
     assert.match(caller.installation, /^org-1@/)
     assert.deepEqual(caller.permissions, ["deals.view"])
@@ -93,16 +93,16 @@ describe("embedded pages: the ticket", () => {
   test("refused: a page the caller may not open, an unknown page, a page on another site", async () => {
     const app = makeApp()
     const c = await testClient(app, { permissions: ["deals.view"] })
-    assert.equal(((await c.call("modelapp_embed", { page: "values", origin: HOST })).structuredContent as { error: { code: string } }).error.code, "permission_denied")
-    assert.equal(((await c.call("modelapp_embed", { page: "nope", origin: HOST })).structuredContent as { error: { code: string } }).error.code, "not_found")
-    assert.equal(((await c.call("modelapp_embed", { page: "site", origin: HOST })).structuredContent as { error: { code: string } }).error.code, "not_found")
+    assert.equal(((await c.call("clegra_embed", { page: "values", origin: HOST })).structuredContent as { error: { code: string } }).error.code, "permission_denied")
+    assert.equal(((await c.call("clegra_embed", { page: "nope", origin: HOST })).structuredContent as { error: { code: string } }).error.code, "not_found")
+    assert.equal(((await c.call("clegra_embed", { page: "site", origin: HOST })).structuredContent as { error: { code: string } }).error.code, "not_found")
   })
 
   test("refused: an origin the app does not declare, an opaque one, one that is not an origin", async () => {
     const app = makeApp()
     const c = await testClient(app, { permissions: ["deals.view"] })
     for (const origin of ["https://evil.example", "null", "https://host.example/path", "HTTPS://HOST.EXAMPLE", "https://sandbox.example"]) {
-      const r = await c.call("modelapp_embed", { page: "board", origin })
+      const r = await c.call("clegra_embed", { page: "board", origin })
       assert.equal(r.isError, true, origin)
       assert.match((r.structuredContent as { error: { code: string } }).error.code, /^(invalid_input|permission_denied)$/, origin)
     }
@@ -111,18 +111,18 @@ describe("embedded pages: the ticket", () => {
   })
 
   test("without a secret: a clear misconfiguration, never an unsigned or guessed key", async () => {
-    const before = process.env.MODELAPP_EMBED_SECRET
-    delete process.env.MODELAPP_EMBED_SECRET
+    const before = process.env.CLEGRA_EMBED_SECRET
+    delete process.env.CLEGRA_EMBED_SECRET
     try {
       const app = makeApp({ secret: null })
-      const r = await (await testClient(app, { permissions: ["deals.view"] })).call("modelapp_embed", { page: "board", origin: HOST })
+      const r = await (await testClient(app, { permissions: ["deals.view"] })).call("clegra_embed", { page: "board", origin: HOST })
       assert.equal((r.structuredContent as { error: { code: string } }).error.code, "internal")
       const refused = await post(app, "x")
       assert.equal(refused.status, 500)
-      assert.match(await refused.text(), /MODELAPP_EMBED_SECRET/)
+      assert.match(await refused.text(), /CLEGRA_EMBED_SECRET/)
       assert.throws(() => makeApp({ secret: "short" }) && undefined)
     } finally {
-      if (before !== undefined) process.env.MODELAPP_EMBED_SECRET = before
+      if (before !== undefined) process.env.CLEGRA_EMBED_SECRET = before
     }
   })
 
@@ -148,7 +148,7 @@ describe("embedded pages: the exchange", () => {
     assert.equal(r.headers.get("content-security-policy"), `frame-ancestors ${HOST} https://*.sandbox.example`)
     assert.equal(r.headers.get("x-frame-options"), null)
     const cookie = cookieOf(r)
-    assert.match(cookie, /^__Secure-modelapp-embed-board=/)
+    assert.match(cookie, /^__Secure-clegra-embed-board=/)
     for (const attribute of ["Path=/embed/board", "Max-Age=600", "Secure", "HttpOnly", "SameSite=None", "Partitioned"]) assert.ok(cookie.split("; ").includes(attribute), `${attribute} in ${cookie}`)
     const caller = await app.embed!.caller("board", pageRequest(valueOf(cookie)))
     assert.ok(caller)
@@ -206,12 +206,12 @@ describe("embedded pages: the exchange", () => {
     const t = (await ticketFor(app)).ticket
     const [h, p, sig] = t.split(".")
     const claims = JSON.parse(Buffer.from(p!, "base64url").toString())
-    claims.modelapp.installation = "org-2@app"
+    claims.clegra.installation = "org-2@app"
     const changed = `${h}.${Buffer.from(JSON.stringify(claims)).toString("base64url")}.${sig}`
     assert.equal((await post(app, changed)).status, 401)
-    const none = `${Buffer.from(JSON.stringify({ alg: "none", typ: "modelapp-embed+jwt" })).toString("base64url")}.${p}.`
+    const none = `${Buffer.from(JSON.stringify({ alg: "none", typ: "clegra-embed+jwt" })).toString("base64url")}.${p}.`
     assert.equal((await post(app, none)).status, 401)
-    const other = await new SignJWT(claims).setProtectedHeader({ alg: "HS256", typ: "modelapp-embed+jwt" }).sign(new TextEncoder().encode("another-secret-another-secret-0123456789"))
+    const other = await new SignJWT(claims).setProtectedHeader({ alg: "HS256", typ: "clegra-embed+jwt" }).sign(new TextEncoder().encode("another-secret-another-secret-0123456789"))
     assert.equal((await post(app, other)).status, 401)
     // Another app with another secret: its ticket is not ours.
     const theirs = (await ticketFor(makeApp({ secret: "a-different-secret-for-another-app-0123456789" }))).ticket
@@ -230,7 +230,7 @@ describe("embedded pages: the exchange", () => {
     // A tenant can't be swapped inside a session either.
     const [h, p, s] = session.split(".")
     const claims = JSON.parse(Buffer.from(p!, "base64url").toString())
-    claims.modelapp.installation = "org-2@app"
+    claims.clegra.installation = "org-2@app"
     assert.equal(await app.embed!.caller("board", pageRequest(`${h}.${Buffer.from(JSON.stringify(claims)).toString("base64url")}.${s}`)), null)
   })
 
@@ -264,7 +264,7 @@ describe("embedded pages: the url-page view", () => {
     const app = makeApp()
     const c = await testClient(app, { permissions: "all" })
     const [own] = await c.readResource("ui://crm/pages/board")
-    assert.match(own!.text!, /"embed":\{"tool":"modelapp_embed","page":"board"\}/)
+    assert.match(own!.text!, /"embed":\{"tool":"clegra_embed","page":"board"\}/)
     assert.match(own!.text!, /form\.method = "post"/)
     assert.deepEqual((own!._meta as { ui: { csp: unknown } }).ui.csp, { frameDomains: [APP] })
     const [site] = await c.readResource("ui://crm/pages/site")

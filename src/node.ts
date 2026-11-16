@@ -6,9 +6,9 @@ import { isLoopback } from "./auth"
 import type { App } from "./define"
 
 /**
- * `modelapp/node`: an app on Node's own HTTP server, for a standalone
+ * `clegra/node`: an app on Node's own HTTP server, for a standalone
  * app or local tools. A web app serves `app.fetch` from its framework instead
- * (`modelapp/next`); the core itself never opens a socket.
+ * (`clegra/next`); the core itself never opens a socket.
  */
 export async function listen(app: App, options: { port?: number; host?: string; log?: boolean } = {}): Promise<{ url: string; close: () => Promise<void> }> {
   const port = options.port ?? 3000
@@ -42,7 +42,7 @@ export async function listen(app: App, options: { port?: number; host?: string; 
   const address = http.address()
   const url = `http://${host}:${typeof address === "object" && address ? address.port : port}`
   const base = app.manifest().mcp.url
-  console.log(`${app.name} — MCP ${url}${base} · manifest ${url}/.well-known/modelapp.json`)
+  console.log(`${app.name} — MCP ${url}${base} · manifest ${url}/.well-known/clegra.json`)
   if (devCode) console.log(`DEV AUTH ON (never in production) — sign-in code: ${devCode}`)
   return { url, close: () => new Promise((resolve) => http.close(() => resolve())) }
 }

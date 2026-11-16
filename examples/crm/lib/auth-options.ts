@@ -11,8 +11,8 @@ import { jwt, organization } from "better-auth/plugins"
 
 import { mcpResource } from "./site"
 
-/** The scope MAP servers announce in their protected-resource metadata; tokens without it are refused. */
-export const MODELAPP_SCOPE = "modelapp"
+/** The scope Clegra app servers announce in their protected-resource metadata; tokens without it are refused. */
+export const CLEGRA_SCOPE = "clegra"
 
 /** The access-token claim that names the organization a connection is for. */
 export const ORG_CLAIM = "org"
@@ -35,7 +35,7 @@ export function authSchemaOptions(env?: Record<string, string | undefined>, cimd
         resource: mcpResource(env),
         loginPage: "/sign-in",
         consentPage: "/oauth/consent",
-        scopes: ["openid", "profile", "email", "offline_access", MODELAPP_SCOPE],
+        scopes: ["openid", "profile", "email", "offline_access", CLEGRA_SCOPE],
         // A connection is for one organization. Here a person belongs to exactly one (organizations are made by the
         // operator), and a new session starts in it (lib/auth.ts), so there is no organization page to choose on:
         // never redirect there. The organization is still always in the token, or the authorization fails.

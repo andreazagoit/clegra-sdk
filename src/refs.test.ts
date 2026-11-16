@@ -15,7 +15,7 @@ const auth = { dev: { keyFile: false, code: "TEST1" } } as AuthOptions
 
 type Deal = { id: string; name: string; customer?: string }
 
-function dealsApp(stored: () => Deal[] = () => [{ id: "d1", name: "Forty seats", customer: "modelapp://erp/customer/42" }, { id: "d2", name: "Pilot" }]) {
+function dealsApp(stored: () => Deal[] = () => [{ id: "d1", name: "Forty seats", customer: "clegra://erp/customer/42" }, { id: "d2", name: "Pilot" }]) {
   const deals = new Map(stored().map((d) => [d.id, d]))
   return defineApp({
     name: "deals",
@@ -64,8 +64,8 @@ describe("refs across apps: definition", () => {
     const input = manifest.actions[0]!.input as { properties: Record<string, { ref?: unknown; pattern?: string }> }
     assert.deepEqual(input.properties.customer!.ref, { kind: "organization" })
     assert.ok(input.properties.customer!.pattern, "the input checks the URI's syntax")
-    assert.equal(ref.kind("organization").safeParse("modelapp://erp/customer/42").success, true)
-    for (const bad of ["42", "https://erp.example/customer/42", "modelapp://erp/customer", "modelapp://ERP/customer/42", "modelapp://erp/customer/42/x"]) assert.equal(ref.kind("organization").safeParse(bad).success, false, bad)
+    assert.equal(ref.kind("organization").safeParse("clegra://erp/customer/42").success, true)
+    for (const bad of ["42", "https://erp.example/customer/42", "clegra://erp/customer", "clegra://ERP/customer/42", "clegra://erp/customer/42/x"]) assert.equal(ref.kind("organization").safeParse(bad).success, false, bad)
   })
 })
 
@@ -74,13 +74,13 @@ describe("refs across apps: the MCP server", () => {
     const c = await testClient(dealsApp())
     const r = await c.call("deal_list", {})
     const text = JSON.parse(r.content![0]!.text!) as { rows: Record<string, unknown>[] }
-    assert.deepEqual(text.rows[0]!.customer, { uri: "modelapp://erp/customer/42", kind: "organization" })
+    assert.deepEqual(text.rows[0]!.customer, { uri: "clegra://erp/customer/42", kind: "organization" })
     assert.equal(text.rows[1]!.customer, undefined)
     const s = r.structuredContent as { rows: Deal[]; refs: Record<string, unknown> }
-    assert.equal(s.rows[0]!.customer, "modelapp://erp/customer/42")
+    assert.equal(s.rows[0]!.customer, "clegra://erp/customer/42")
     assert.ok(!("customer" in s.refs), "the app never names another app's record")
     const got = JSON.parse((await c.call("deal_get", { id: "d1" })).content![0]!.text!)
-    assert.deepEqual(got.customer, { uri: "modelapp://erp/customer/42", kind: "organization" })
+    assert.deepEqual(got.customer, { uri: "clegra://erp/customer/42", kind: "organization" })
     const tools = new Map((await c.listTools()).map((t) => [t.name, t]))
     assert.ok(tools.get("deal_list")!.description!.endsWith(CROSS_APP_HINT), "no kind: the hint ends it")
     assert.ok(tools.get("deal_link_customer")!.description!.endsWith(CROSS_INPUT_HINT))
@@ -89,9 +89,9 @@ describe("refs across apps: the MCP server", () => {
 
   test("an action accepts any record URI, never calls the other app, and refuses what is not one, field by field", async () => {
     const c = await testClient(dealsApp())
-    const ok = await c.call("deal_link_customer", { id: "d2", customer: "modelapp://warehouse/customer/7" })
+    const ok = await c.call("deal_link_customer", { id: "d2", customer: "clegra://warehouse/customer/7" })
     assert.ok(!ok.isError, JSON.stringify(ok))
-    assert.equal(((await c.call("deal_get", { id: "d2" })).structuredContent as { record: Deal }).record.customer, "modelapp://warehouse/customer/7")
+    assert.equal(((await c.call("deal_get", { id: "d2" })).structuredContent as { record: Deal }).record.customer, "clegra://warehouse/customer/7")
     const bad = await c.call("deal_link_customer", { id: "d2", customer: "Hartley Engineering" })
     const error = (bad.structuredContent as { error: { code: string; fields: Record<string, string> } }).error
     assert.equal(error.code, "invalid_input")
@@ -103,7 +103,7 @@ describe("refs across apps: the MCP server", () => {
 
   test("the resolver answers not_found for another app's URI, gone for its own missing record", async () => {
     const c = await testClient(dealsApp())
-    const r = await c.call("modelapp_resolve", { uris: ["modelapp://erp/customer/42", "modelapp://deals/deal/zz", "modelapp://deals/deal/d1", "not a uri"] })
+    const r = await c.call("clegra_resolve", { uris: ["clegra://erp/customer/42", "clegra://deals/deal/zz", "clegra://deals/deal/d1", "not a uri"] })
     assert.deepEqual((r.structuredContent as { results: { state: string }[] }).results.map((x) => x.state), ["not_found", "gone", "ok", "not_found"])
   })
 
@@ -113,7 +113,7 @@ describe("refs across apps: the MCP server", () => {
     assert.doesNotThrow(() => new Function(script), "the view's script parses")
     assert.ok(script.includes("m.resolved") && script.includes('"unknown-app": "refUnknownApp"') && script.includes('"no-access": "noAccess"'))
     assert.ok(script.includes('m[1] + " · " + m[2]'), "a plain host: app · entity")
-    assert.ok(script.includes('placeholder="modelapp://…"'), "an input for another app's record takes its URI")
+    assert.ok(script.includes('placeholder="clegra://…"'), "an input for another app's record takes its URI")
   })
 })
 
@@ -151,7 +151,7 @@ describe("refs across apps: conformance", () => {
     const app = dealsApp()
     const fetch = changedCall(app, "deal_list", (r) => {
       const refs = (r.structuredContent as { refs?: Record<string, unknown> } | undefined)?.refs
-      if (refs) refs.customer = { "modelapp://erp/customer/42": "Hartley Engineering" }
+      if (refs) refs.customer = { "clegra://erp/customer/42": "Hartley Engineering" }
     })
     const report = await checkApp({ url: "http://127.0.0.1:3961", token: await app.devToken(), fetch })
     assert.match(byId(report, "refs.cross").detail!, /sends refs titles for customer/)
@@ -159,7 +159,7 @@ describe("refs across apps: conformance", () => {
 
   test("resolve.foreign fails when the resolver answers for another app", async () => {
     const app = dealsApp()
-    const fetch = changedCall(app, "modelapp_resolve", (r) => void ((r.structuredContent as { results: { state: string }[] }).results[0]!.state = "gone"))
+    const fetch = changedCall(app, "clegra_resolve", (r) => void ((r.structuredContent as { results: { state: string }[] }).results[0]!.state = "gone"))
     const report = await checkApp({ url: "http://127.0.0.1:3961", token: await app.devToken(), fetch })
     assert.equal(byId(report, "resolve.foreign").ok, false)
   })

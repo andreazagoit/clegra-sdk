@@ -1,9 +1,9 @@
-// The MAP server (MCP at /mcp, its manifest and OAuth metadata under /.well-known/), rewritten here by
-// withModelApp in next.config.ts.
-import { toNextHandlers, type NextHandlers } from "modelapp/next"
+// The Clegra app server (MCP at /mcp, its manifest and OAuth metadata under /.well-known/), rewritten here by
+// withClegra in next.config.ts.
+import { toNextHandlers, type NextHandlers } from "clegra/next"
 
 import { publicOrigin } from "@/lib/site"
-import { crmApp } from "@/modelapp"
+import { crmApp } from "@/clegra"
 
 let handlers: NextHandlers | undefined
 const route = () => (handlers ??= toNextHandlers(crmApp(), { publicUrl: publicOrigin() }))

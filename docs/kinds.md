@@ -9,7 +9,7 @@ A kind says what an entity *is*, the same in every app: `person`, `organization`
 `product`, `order`. A workspace host that holds several apps uses it to
 
 - draw one picker over every app that has organizations (an action input `ref: { kind: "organization" }`);
-- show a reference stored in one app (`modelapp://erp/customer/42`) with the owning app's live title, for each viewer;
+- show a reference stored in one app (`clegra://erp/customer/42`) with the owning app's live title, for each viewer;
 - list people, companies, events and tasks of every app on one page, each row with its source;
 - find the same customer in two apps by an equal **key** (`vatID`, `email`, `gtin`, `uid`) — never by name;
 - give an assistant one tool (`find_records`) instead of N list tools.

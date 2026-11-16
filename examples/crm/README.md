@@ -1,10 +1,10 @@
-# CRM: a Next.js app that is also a MAP app
+# CRM: a Next.js app that is also a Clegra app
 
 This is a small sales team's CRM (companies, contacts, deals, calls). It has its own sign-in (better-auth with
 organizations) and its own database (Drizzle on Postgres, or an embedded PGlite locally). The file
-`modelapp/app.ts` turns it into a MAP app: an MCP server that ChatGPT, Claude, MCP Inspector or Clegra can connect
+`clegra/app.ts` turns it into a Clegra app: an MCP server that ChatGPT, Claude, MCP Inspector or Clegra can connect
 to. It uses the same functions the pages use (`lib/crm.ts`). better-auth is also the OAuth server those clients sign
-in through. All data is invented. Walkthrough: [docs/map/examples/crm.md](../../../docs/map/examples/crm.md).
+in through. All data is invented. Walkthrough: [docs/developers/examples/crm.md](../../../docs/developers/examples/crm.md).
 
 ```sh
 npm run setup      # .env.local (generated BETTER_AUTH_SECRET, DEMO_PASSWORD) if missing, then migrate + seed
@@ -29,15 +29,15 @@ organization.
   because registration is off.
 - **Claude / ChatGPT**: they need a public https address.
   1. Deploy the CRM, or put a tunnel in front of it (e.g. `cloudflared tunnel --url http://localhost:3920`).
-  2. Set `MODELAPP_PUBLIC_URL` to that origin and restart.
+  2. Set `CLEGRA_PUBLIC_URL` to that origin and restart.
   3. Add `https://<that origin>/mcp` as a custom connector.
 
   These clients identify themselves with a client metadata document (CIMD). Dynamic client registration is off.
-- **A token for `modelapp check`**, through the real flow (credentials only from the environment):
+- **A token for `clegra check`**, through the real flow (credentials only from the environment):
 
   ```sh
-  T=$(MODELAPP_OAUTH_EMAIL=alice@orbit.example MODELAPP_OAUTH_PASSWORD=… npm run --silent token -- http://localhost:3920)
-  (cd ../../.. && npm run modelapp:check -- http://localhost:3920 --token "$T")   # → Conformant.
+  T=$(CLEGRA_OAUTH_EMAIL=alice@orbit.example CLEGRA_OAUTH_PASSWORD=… npm run --silent token -- http://localhost:3920)
+  (cd ../../.. && npm run clegra:check -- http://localhost:3920 --token "$T")   # → Conformant.
   ```
 
 | Command | What it does |
@@ -52,11 +52,11 @@ organization.
 
 | Variable | |
 |---|---|
-| `MODELAPP_PUBLIC_URL` | The public origin. better-auth (`<origin>/api/auth`, the issuer) and MCP (`<origin>/mcp`) both derive from it. Required in production, https |
+| `CLEGRA_PUBLIC_URL` | The public origin. better-auth (`<origin>/api/auth`, the issuer) and MCP (`<origin>/mcp`) both derive from it. Required in production, https |
 | `BETTER_AUTH_SECRET` | Required. Long and random. The embed tickets' signing key is derived from it too |
 | `DATABASE_URL` | Postgres. Required in production (a Neon pooled URL with `sslmode=require` works) |
 | `DEMO_PASSWORD`, `DEMO_SIGNIN=1` | The demo accounts' password (used by the seed) and the one-click sign-in |
-| `MODELAPP_ISSUERS` | Workspace hosts (e.g. a Clegra node) whose tokens are accepted, as `issuer\|jwksUri`, comma-separated. Each installation gets its own copy of the demo data |
+| `CLEGRA_ISSUERS` | Workspace hosts (e.g. a Clegra node) whose tokens are accepted, as `issuer\|jwksUri`, comma-separated. Each installation gets its own copy of the demo data |
 
 A missing variable is an error, never a silent fallback.
 

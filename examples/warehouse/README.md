@@ -13,7 +13,7 @@ npm run dev     # http://localhost:3930
 
 No Postgres is needed locally. Without `DATABASE_URL` the app uses PGlite (Postgres in
 WebAssembly) in `.data/`. PGlite allows one process at a time, so stop the dev server before
-running `db:migrate` or `db:seed`. In production `DATABASE_URL` and `MODELAPP_PUBLIC_URL` are
+running `db:migrate` or `db:seed`. In production `DATABASE_URL` and `CLEGRA_PUBLIC_URL` are
 required: the app refuses to start without them. Every variable is listed in `.env.example`.
 
 ## Demo people
@@ -46,24 +46,24 @@ The same rules apply in the pages and over MCP.
 - **The app's functions** (`lib/warehouse.ts`), such as `listProducts`, `registerMovement` and
   `confirmOrder`, are always scoped by the tenant: an organization, or a workspace host's
   installation. The pages and server actions call them.
-- **The MAP definition** is `lib/modelapp.ts`. It is one `defineApp`, and its handlers call
+- **The MAP definition** is `lib/clegra.ts`. It is one `defineApp`, and its handlers call
   those same functions with the tenant the SDK verified (`ctx.installation`):
   - entities `product`, `movement` and `order`;
   - actions `register_movement`, `confirm_order` (always confirmed first) and `create_order`;
   - fragments, pages (one is the app's own `/embed/stock` board) and an agent.
-- **Who is calling** (`lib/modelapp-auth.ts`): the app verifies better-auth's access tokens
+- **Who is calling** (`lib/clegra-auth.ts`): the app verifies better-auth's access tokens
   itself in `auth.resolve`, in about 40 lines with `jose`. A token counts only if all of these hold:
   - it is a JWT (`typ: at+jwt`) signed with better-auth's own keys, by its issuer;
   - it was issued for this MCP server alone (`aud`) and has not expired;
-  - it is not DPoP-bound and carries the `modelapp` scope and the organization;
+  - it is not DPoP-bound and carries the `clegra` scope and the organization;
   - the person is still a member of that organization, with their role read live.
-- **Workspace hosts** (a Clegra node, `MODELAPP_ISSUERS`): the SDK verifies their tokens itself.
+- **Workspace hosts** (a Clegra node, `CLEGRA_ISSUERS`): the SDK verifies their tokens itself.
   Their tenant is `<installation>@<issuer>`, never an organization (`lib/tenants.ts`). Each
   installation gets its own copy of the demo data (Aurora Hardware) on its first call, in one
   transaction. A host's person is not a better-auth user: their name comes from the token and is
   kept in `person` when they change something, so lists show who did it.
-- **Wiring**: `app/api/modelapp/[...path]/route.ts` (`toNextHandlers`) and `withModelApp` in
-  `next.config.ts`. The rewrites put `/mcp`, `/.well-known/modelapp.json` and the OAuth metadata
+- **Wiring**: `app/api/clegra/[...path]/route.ts` (`toNextHandlers`) and `withClegra` in
+  `next.config.ts`. The rewrites put `/mcp`, `/.well-known/clegra.json` and the OAuth metadata
   at the root of the site.
 
 ## Connect an MCP client
@@ -81,23 +81,23 @@ person then goes through these steps:
   with URL `http://localhost:3930/mcp`, then connect and follow the OAuth flow.
 - **Claude and ChatGPT** need a public https address. They identify themselves with a Client ID
   Metadata Document, an https URL. Dynamic client registration is off.
-  - Deploy the app (below), or tunnel the local server and set `MODELAPP_PUBLIC_URL` to the
+  - Deploy the app (below), or tunnel the local server and set `CLEGRA_PUBLIC_URL` to the
     tunnel's https origin.
   - Then add `<site>/mcp` as a custom connector in Claude (Settings → Connectors) or ChatGPT
     (developer mode → connectors).
-- **An access token by script**, for `modelapp check` or curl. It runs the real flow over HTTP:
+- **An access token by script**, for `clegra check` or curl. It runs the real flow over HTTP:
   sign in → authorize (PKCE, `resource`) → consent → token. Credentials come only from the
   environment or `.env.local`. For a demo person, the email is enough:
 
   ```sh
-  MODELAPP_OAUTH_EMAIL=luke.marsh@aurora.example npm run --silent token -- http://localhost:3930
+  CLEGRA_OAUTH_EMAIL=luke.marsh@aurora.example npm run --silent token -- http://localhost:3930
   ```
 
 - **The conformance check**, from the repository root:
 
   ```sh
-  MODELAPP_TOKEN=$(cd examples/modelapp/warehouse && MODELAPP_OAUTH_EMAIL=ada.fernley@aurora.example npm run --silent token -- http://localhost:3930) \
-    npm run modelapp:check -- http://localhost:3930
+  CLEGRA_TOKEN=$(cd examples/apps/warehouse && CLEGRA_OAUTH_EMAIL=ada.fernley@aurora.example npm run --silent token -- http://localhost:3930) \
+    npm run clegra:check -- http://localhost:3930
   ```
 
 ## Deploy (Vercel + Neon Postgres)
@@ -111,20 +111,20 @@ person then goes through these steps:
      DATABASE_URL='postgres://…' DEMO_PASSWORD='…' npm run db:seed
      ```
 
-2. Create a Vercel project with Root Directory `examples/modelapp/warehouse` and framework
+2. Create a Vercel project with Root Directory `examples/apps/warehouse` and framework
    Next.js. Set these environment variables:
    - `DATABASE_URL`
-   - `MODELAPP_PUBLIC_URL`: the production origin, e.g. `https://warehouse.example.com`
+   - `CLEGRA_PUBLIC_URL`: the production origin, e.g. `https://warehouse.example.com`
    - `BETTER_AUTH_SECRET` (`openssl rand -base64 32`)
    - `DEMO_PASSWORD` and `DEMO_SIGNIN=1`, for a demo
-   - optionally `MODELAPP_ISSUERS`: workspace hosts (e.g. a Clegra node) whose tokens are
+   - optionally `CLEGRA_ISSUERS`: workspace hosts (e.g. a Clegra node) whose tokens are
      accepted, as `issuer|jwksUri`, comma-separated. Each installation gets its own copy of the
      demo data
-3. Deploy, then run the token script and `modelapp check` against the public URL.
+3. Deploy, then run the token script and `clegra check` against the public URL.
 
 Nothing is written to disk at runtime: sessions, OAuth clients, signing keys, rate limits and
-MAP's idempotency store (also the used embed tickets) all live in Postgres. `/embed/*` pages may be
-framed only by the hosts declared in `lib/modelapp.ts` (`EMBED_HOSTS`), signed in with a one-minute ticket
+Clegra apps' idempotency store (also the used embed tickets) all live in Postgres. `/embed/*` pages may be
+framed only by the hosts declared in `lib/clegra.ts` (`EMBED_HOSTS`), signed in with a one-minute ticket
 (spec §5.1); every other page can't be framed at all.
 
 ## Tests

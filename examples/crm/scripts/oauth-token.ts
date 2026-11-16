@@ -1,15 +1,15 @@
 /**
  * An access token from the running CRM (better-auth is its authorization server), by the real
  * OAuth flow over HTTP — sign in → organization → authorize (PKCE, resource) → consent → token — for
- * `modelapp check` against real URLs:
+ * `clegra check` against real URLs:
  *
- *   MODELAPP_OAUTH_EMAIL=alice@orbit.example MODELAPP_OAUTH_PASSWORD=… npm run --silent token -- http://localhost:3920
- *   npm run modelapp:check -- http://localhost:3920 --token <that token>     (from the repository root)
+ *   CLEGRA_OAUTH_EMAIL=alice@orbit.example CLEGRA_OAUTH_PASSWORD=… npm run --silent token -- http://localhost:3920
+ *   npm run clegra:check -- http://localhost:3920 --token <that token>     (from the repository root)
  *
  * Arguments: <site URL> [--resource <MCP URL, default <site>/mcp>] [--org <organization id>].
- * Secrets only from the environment, never argv: MODELAPP_OAUTH_EMAIL + MODELAPP_OAUTH_PASSWORD, or
- * MODELAPP_OAUTH_COOKIE (a session cookie, `name=value`). Optional: MODELAPP_OAUTH_CLIENT_ID +
- * MODELAPP_OAUTH_REDIRECT_URI (an existing client; default: a public client created for the signed-in person).
+ * Secrets only from the environment, never argv: CLEGRA_OAUTH_EMAIL + CLEGRA_OAUTH_PASSWORD, or
+ * CLEGRA_OAUTH_COOKIE (a session cookie, `name=value`). Optional: CLEGRA_OAUTH_CLIENT_ID +
+ * CLEGRA_OAUTH_REDIRECT_URI (an existing client; default: a public client created for the signed-in person).
  * The authorization server is read from the app's protected-resource metadata. Prints only the access token.
  */
 import { oauthAccessToken } from "./oauth-flow"
@@ -26,12 +26,12 @@ const fail = (message: string): never => {
   console.error(`oauth-token: ${message}`)
   process.exit(1)
 }
-if (!site || args.length > 1) fail("usage: oauth-token <site URL> [--resource <MCP URL>] [--org <organization id>] (credentials in MODELAPP_OAUTH_EMAIL + MODELAPP_OAUTH_PASSWORD, or MODELAPP_OAUTH_COOKIE)")
+if (!site || args.length > 1) fail("usage: oauth-token <site URL> [--resource <MCP URL>] [--org <organization id>] (credentials in CLEGRA_OAUTH_EMAIL + CLEGRA_OAUTH_PASSWORD, or CLEGRA_OAUTH_COOKIE)")
 const origin = new URL(site!).origin
 const resource = resourceArg ?? `${origin}/mcp`
-const { MODELAPP_OAUTH_EMAIL: email, MODELAPP_OAUTH_PASSWORD: password, MODELAPP_OAUTH_COOKIE: cookie, MODELAPP_OAUTH_CLIENT_ID: clientId, MODELAPP_OAUTH_REDIRECT_URI: redirectUri } = process.env
-const signIn = email && password ? { email, password } : cookie ? { cookie } : fail("set MODELAPP_OAUTH_EMAIL and MODELAPP_OAUTH_PASSWORD, or MODELAPP_OAUTH_COOKIE")
-if (Boolean(clientId) !== Boolean(redirectUri)) fail("MODELAPP_OAUTH_CLIENT_ID and MODELAPP_OAUTH_REDIRECT_URI go together")
+const { CLEGRA_OAUTH_EMAIL: email, CLEGRA_OAUTH_PASSWORD: password, CLEGRA_OAUTH_COOKIE: cookie, CLEGRA_OAUTH_CLIENT_ID: clientId, CLEGRA_OAUTH_REDIRECT_URI: redirectUri } = process.env
+const signIn = email && password ? { email, password } : cookie ? { cookie } : fail("set CLEGRA_OAUTH_EMAIL and CLEGRA_OAUTH_PASSWORD, or CLEGRA_OAUTH_COOKIE")
+if (Boolean(clientId) !== Boolean(redirectUri)) fail("CLEGRA_OAUTH_CLIENT_ID and CLEGRA_OAUTH_REDIRECT_URI go together")
 
 const resourceUrl = new URL(resource)
 const metadataUrl = `${resourceUrl.origin}/.well-known/oauth-protected-resource${resourceUrl.pathname}`

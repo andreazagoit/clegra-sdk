@@ -9,8 +9,8 @@ import { jwt, organization } from "better-auth/plugins"
 import { getDb, type Pool } from "./db"
 import { mcpResource, publicUrl } from "./site"
 
-/** The scope MCP clients ask for, and the MAP route requires on every access token. */
-export const MODELAPP_SCOPE = "modelapp"
+/** The scope MCP clients ask for, and the clegra route requires on every access token. */
+export const CLEGRA_SCOPE = "clegra"
 
 export type AuthOptions = {
   /** Off while migrating: on start better-auth compares its tables with the plugins and logs what is missing. */
@@ -79,7 +79,7 @@ export function createAuth(pool: Pool, options: AuthOptions = {}) {
         resource: mcpResource(),
         loginPage: "/sign-in",
         consentPage: "/oauth/consent",
-        scopes: ["openid", "profile", "email", "offline_access", MODELAPP_SCOPE],
+        scopes: ["openid", "profile", "email", "offline_access", CLEGRA_SCOPE],
         postLogin: {
           // No organization step: the session hook above already chose the person's one organization.
           // (An app whose people belong to several would show a picker here and set shouldRedirect.)

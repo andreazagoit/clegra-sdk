@@ -1,6 +1,6 @@
 // The published build: tsc → dist/ (ESM JavaScript, .d.ts, source maps with the sources inlined), the same layout
 // as the package (dist/src, dist/spec/src), so every path a module resolves at run time relative to itself
-// (`../schema/modelapp.schema.json`) holds in dist as in the repository. Then:
+// (`../schema/clegra.schema.json`) holds in dist as in the repository. Then:
 //   - relative imports get their ".js": the sources import "./define" for the bundlers and tsx; Node's ESM loader
 //     and `moduleResolution: node16` need the extension (in the .js and in the .d.ts);
 //   - the JSON assets (the manifest's JSON Schema, kinds.json) are copied next to the code that reads them;
@@ -16,7 +16,7 @@ const pkg = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const dist = join(pkg, "dist")
 
 /** Files copied as they are: read at run time by path relative to the built module, or exported as data. */
-export const ASSETS = ["spec/schema/modelapp.schema.json", "spec/kinds.json"]
+export const ASSETS = ["spec/schema/clegra.schema.json", "spec/kinds.json"]
 /** The CLI, built. */
 export const CLI = "dist/spec/src/cli.js"
 

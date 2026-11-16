@@ -1,5 +1,5 @@
 // What a member of an organization may do, from their better-auth role.
-// The same list is the MAP app's `permissions` (modelapp/app.ts): the UI and
+// The same list is the Clegra app's `permissions` (clegra/app.ts): the UI and
 // MCP callers are held to the same rules.
 
 export const PERMISSIONS = ["deals.view", "deals.edit", "deals.values", "contacts.edit"] as const

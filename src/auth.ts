@@ -32,12 +32,12 @@ import { CONFIRMATION_TYPE, OAUTH_SCOPE, PROTOCOL_ID, TOKEN_CLAIM } from "../spe
  *   `auth.issuers`,
  * verified with the issuer's JWKS. Their audience is this server's own
  * public MCP address (`auth.resource`, RFC 8707): a token signed for another
- * app is refused whatever that app calls itself. The `modelapp` claim says
+ * app is refused whatever that app calls itself. The `clegra` claim says
  * who is calling for which installation; the tenant handlers see is the
  * installation of that issuer (`<installation>@<issuer>`), so one issuer
  * can never name another's. A workspace host's token is for one request
  * (60 seconds, used once). A workspace host proves a person's confirmation
- * with a second JWT (`modelapp-confirm+jwt`) bound to the installation, the
+ * with a second JWT (`clegra-confirm+jwt`) bound to the installation, the
  * call and the arguments as sent.
  *
  * Dev mode: the SDK is its own authorization server with a local key
@@ -72,7 +72,7 @@ export type Caller = {
   subject: string
 }
 
-/** The `modelapp` claim of an access token. */
+/** The `clegra` claim of an access token. */
 export type HostClaim = {
   installation: string
   person?: Person
@@ -127,7 +127,7 @@ export type AuthOptions = {
    * metadata under `/.well-known/…`), on the same routes as MCP: null for any other path.
    */
   serve?: (request: Request) => Promise<Response | null> | Response | null
-  /** Workspace hosts whose tokens (with the `modelapp` claim) are accepted. With issuers, `resource` is required. */
+  /** Workspace hosts whose tokens (with the `clegra` claim) are accepted. With issuers, `resource` is required. */
   issuers?: Issuer[]
   /**
    * This server's public MCP address, exactly as hosts and clients reach it
@@ -153,8 +153,8 @@ export type DevOptions = {
   /** The installation dev tokens are for (default `dev`). */
   installation?: string
   /**
-   * Where the dev key is kept so tokens survive a restart (default `.modelapp-dev-key.json` in the working
-   * directory); `false` keeps it in memory only. `MODELAPP_DEV_KEY` (a private JWK as JSON) wins over both.
+   * Where the dev key is kept so tokens survive a restart (default `.clegra-dev-key.json` in the working
+   * directory); `false` keeps it in memory only. `CLEGRA_DEV_KEY` (a private JWK as JSON) wins over both.
    */
   keyFile?: string | false
   /** The one-time code the sign-in page asks for (default: random, printed on start). */
@@ -318,9 +318,9 @@ export async function generateSigningKey(): Promise<SigningKey> {
 }
 
 /** An access token as a host or the dev authority signs it. */
-export async function signAccessToken(key: SigningKey, claims: { iss: string; aud: string | string[]; sub: string; modelapp: HostClaim; lifetimeSeconds?: number; scope?: string }): Promise<string> {
+export async function signAccessToken(key: SigningKey, claims: { iss: string; aud: string | string[]; sub: string; clegra: HostClaim; lifetimeSeconds?: number; scope?: string }): Promise<string> {
   const now = Math.floor(Date.now() / 1000)
-  return new SignJWT({ [TOKEN_CLAIM]: claims.modelapp, ...(claims.scope ? { scope: claims.scope } : {}) })
+  return new SignJWT({ [TOKEN_CLAIM]: claims.clegra, ...(claims.scope ? { scope: claims.scope } : {}) })
     .setProtectedHeader({ alg: "EdDSA", typ: ACCESS_TOKEN_TYPE, kid: key.kid })
     .setIssuer(claims.iss)
     .setAudience(claims.aud)
@@ -723,7 +723,7 @@ export class DevAuthority {
       const kid = String(jwk.kid ?? createHash("sha256").update(String(jwk.x)).digest("base64url").slice(0, 16))
       return { privateKey, publicJwk: { ...pub, kid, alg: "EdDSA", use: "sig" }, kid }
     }
-    const env = process.env.MODELAPP_DEV_KEY
+    const env = process.env.CLEGRA_DEV_KEY
     const file = this.options.keyFile === false ? null : (this.options.keyFile ?? `.${PROTOCOL_ID}-dev-key.json`)
     if (env) this.#key = await fromJwk(JSON.parse(env) as JWK)
     else if (!file) this.#key = await generateSigningKey()

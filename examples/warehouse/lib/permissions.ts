@@ -1,6 +1,6 @@
 /**
  * What each role of an organization may do. One table, read by the pages,
- * the server actions and the MAP definition alike.
+ * the server actions and the app definition alike.
  */
 export const PERMISSIONS = {
   "products.view": { en: "See products and stock", it: "Vedere prodotti e giacenze" },

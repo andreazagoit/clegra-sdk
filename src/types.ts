@@ -17,7 +17,7 @@ export type Context = {
   readonly host: Caller["host"]
   /** The installation's settings (spec §2), as its workspace host sent them, defaults filled in. A plain client's are the defaults. */
   readonly settings: Readonly<Record<string, unknown>>
-  /** The call id (`_meta.modelapp.call`), when the host sent one. */
+  /** The call id (`_meta.clegra.call`), when the host sent one. */
   readonly call: string | null
   /** A label in the caller's language. */
   t(label: Label | undefined): string

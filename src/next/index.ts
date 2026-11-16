@@ -3,10 +3,10 @@ import type { EmbedCaller } from "../embed"
 import type { NextConfig } from "next"
 
 /**
- * `modelapp/next`: a MAP app (a `defineApp` object) inside a Next.js app.
+ * `clegra/next`: a Clegra app (a `defineApp` object) inside a Next.js app.
  *
- * - `toNextHandlers(app)` → the route handlers of `app/api/modelapp/[...path]/route.ts`.
- * - `withModelApp(nextConfig)` → the rewrites that put MCP and the manifest where hosts and clients look for
+ * - `toNextHandlers(app)` → the route handlers of `app/api/clegra/[...path]/route.ts`.
+ * - `withClegra(nextConfig)` → the rewrites that put MCP and the manifest where hosts and clients look for
  *   them: `/mcp` and `/.well-known/…` at the root of the site, served by that one route.
  *
  * - `embedProxy(app)` → proxy.ts for the embedded pages (`/embed/*`, spec §5.1): the ticket exchange and the
@@ -16,25 +16,25 @@ import type { NextConfig } from "next"
  * peer dependency: types here, and `next/server` / `next/headers` loaded only when the proxy or a page runs.
  */
 
-/** Where the catch-all route lives by default (`app/api/modelapp/[...path]/route.ts`). */
-export const DEFAULT_MOUNT = "/api/modelapp"
+/** Where the catch-all route lives by default (`app/api/clegra/[...path]/route.ts`). */
+export const DEFAULT_MOUNT = "/api/clegra"
 
 /** The paths rewritten to the route: MCP, the manifest and the OAuth metadata (RFC 9728, RFC 8414, OpenID discovery). */
 const PUBLIC_PATHS = [
   "/mcp",
   // MANIFEST_PATH (a test keeps the two equal; not imported so that next.config does not load the SDK).
-  "/.well-known/modelapp.json",
+  "/.well-known/clegra.json",
   "/.well-known/oauth-protected-resource/:path*",
   "/.well-known/oauth-authorization-server/:path*",
   "/.well-known/openid-configuration/:path*",
 ] as const
 
 export type NextHandlerOptions = {
-  /** Where the catch-all route is mounted (default `/api/modelapp`): the same value as in `withModelApp`. */
+  /** Where the catch-all route is mounted (default `/api/clegra`): the same value as in `withClegra`. */
   mount?: string
   /**
    * The site's public origin (`https://crm.example.com`), when the request alone can't say it (a proxy that
-   * rewrites the host). Default: the `MODELAPP_PUBLIC_URL` environment variable; without either, the origin is
+   * rewrites the host). Default: the `CLEGRA_PUBLIC_URL` environment variable; without either, the origin is
    * what the request says (`x-forwarded-host` / `x-forwarded-proto`, else `host`).
    */
   publicUrl?: string
@@ -45,7 +45,7 @@ export type NextHandlers = { GET: NextRouteHandler; POST: NextRouteHandler; DELE
 
 function mountOf(mount: string | undefined): string {
   const m = (mount ?? DEFAULT_MOUNT).replace(/\/+$/, "")
-  if (!/^(\/[A-Za-z0-9._~-]+)+$/.test(m)) throw new Error(`modelapp/next: mount "${mount}" must be a URL path like /api/modelapp`)
+  if (!/^(\/[A-Za-z0-9._~-]+)+$/.test(m)) throw new Error(`clegra/next: mount "${mount}" must be a URL path like /api/clegra`)
   return m
 }
 
@@ -55,40 +55,40 @@ function publicOrigin(value: string | undefined, where: string): URL | null {
   try {
     url = new URL(value)
   } catch {
-    throw new Error(`modelapp/next: ${where} "${value}" is not a URL`)
+    throw new Error(`clegra/next: ${where} "${value}" is not a URL`)
   }
   if (!/^https?:$/.test(url.protocol) || (url.pathname !== "/" && url.pathname !== "") || url.search || url.hash || url.username || url.password) {
-    throw new Error(`modelapp/next: ${where} "${value}" must be an origin only, like https://crm.example.com (no path, query or credentials)`)
+    throw new Error(`clegra/next: ${where} "${value}" must be an origin only, like https://crm.example.com (no path, query or credentials)`)
   }
   return url
 }
 
 /**
- * The route handlers for `app/api/modelapp/[...path]/route.ts`:
+ * The route handlers for `app/api/clegra/[...path]/route.ts`:
  *
  * ```ts
  * export const { GET, POST, DELETE, OPTIONS } = toNextHandlers(app)
  * ```
  *
- * Each request reaches `app.fetch` at its PUBLIC address: the mount taken off (`/api/modelapp/mcp` → `/mcp`),
+ * Each request reaches `app.fetch` at its PUBLIC address: the mount taken off (`/api/clegra/mcp` → `/mcp`),
  * the origin `publicUrl` when given. Responses (JSON or an SSE stream) are returned as they are, never buffered.
  * Nothing is kept between requests (MCP is stateless): it runs on serverless as on one server.
  *
  * Dev sign-in (`auth.dev`) is refused: it answers loopback callers only, and a Next route handler can't know the
  * peer's address (`x-forwarded-for` is whatever the client sent). Sign people in with the app's own auth
- * (`auth.resolve`), or run the app with `listen` from `modelapp/node` while developing.
+ * (`auth.resolve`), or run the app with `listen` from `clegra/node` while developing.
  */
 export function toNextHandlers(app: App, options: NextHandlerOptions = {}): NextHandlers {
   const mount = mountOf(options.mount)
-  const fixedOrigin = options.publicUrl !== undefined ? publicOrigin(options.publicUrl, "publicUrl") : publicOrigin(process.env.MODELAPP_PUBLIC_URL, "MODELAPP_PUBLIC_URL")
+  const fixedOrigin = options.publicUrl !== undefined ? publicOrigin(options.publicUrl, "publicUrl") : publicOrigin(process.env.CLEGRA_PUBLIC_URL, "CLEGRA_PUBLIC_URL")
   if (app.devMode) {
     throw new Error(
-      "modelapp/next: auth.dev can't run inside Next.js — dev sign-in answers loopback callers only and a route handler can't know the caller's address. Use the app's own sign-in (auth.resolve) or run the app with listen() from modelapp/node.",
+      "clegra/next: auth.dev can't run inside Next.js — dev sign-in answers loopback callers only and a route handler can't know the caller's address. Use the app's own sign-in (auth.resolve) or run the app with listen() from clegra/node.",
     )
   }
   const mcpPath = app.manifest().mcp.url
   if (mcpPath !== "/mcp") {
-    throw new Error(`modelapp/next: the app serves MCP at ${mcpPath}; with Next.js leave defineApp's \`path\` unset — the route's mount (${mount}) is taken off and withModelApp puts MCP at /mcp`)
+    throw new Error(`clegra/next: the app serves MCP at ${mcpPath}; with Next.js leave defineApp's \`path\` unset — the route's mount (${mount}) is taken off and withClegra puts MCP at /mcp`)
   }
 
   const handle: NextRouteHandler = async (request) => {
@@ -97,7 +97,7 @@ export function toNextHandlers(app: App, options: NextHandlerOptions = {}): Next
     if (path === mount || path.startsWith(`${mount}/`)) path = path.slice(mount.length) || "/"
     else if (path !== "/mcp" && !path.startsWith("/.well-known/")) {
       // The route file is somewhere else than `mount` says: a configuration error, said instead of guessed around.
-      return new Response(JSON.stringify({ error: "misconfigured", error_description: `modelapp/next: request for ${path} reached the MAP route, but its mount is ${mount} (set the same mount in toNextHandlers and withModelApp)` }), {
+      return new Response(JSON.stringify({ error: "misconfigured", error_description: `clegra/next: request for ${path} reached the clegra route, but its mount is ${mount} (set the same mount in toNextHandlers and withClegra)` }), {
         status: 500,
         headers: { "content-type": "application/json" },
       })
@@ -153,7 +153,7 @@ const embedOf = async (source: AppSource, where: string) => {
  * declared hosts>` and `Referrer-Policy: no-referrer`. Options: `publicUrl` as in `toNextHandlers`.
  */
 export function embedProxy(source: AppSource, options: { publicUrl?: string } = {}): (request: Request) => Promise<Response> {
-  const fixedOrigin = options.publicUrl !== undefined ? publicOrigin(options.publicUrl, "publicUrl") : publicOrigin(process.env.MODELAPP_PUBLIC_URL, "MODELAPP_PUBLIC_URL")
+  const fixedOrigin = options.publicUrl !== undefined ? publicOrigin(options.publicUrl, "publicUrl") : publicOrigin(process.env.CLEGRA_PUBLIC_URL, "CLEGRA_PUBLIC_URL")
   return async (request) => {
     const embed = await embedOf(source, "embedProxy")
     const { pathname } = new URL(request.url)
@@ -175,7 +175,7 @@ export function embedProxy(source: AppSource, options: { publicUrl?: string } = 
  * (opened outside a host's frame, expired, or a top-level visit). Scope everything by `caller.installation`.
  */
 export async function getEmbedCaller(source: AppSource, page: string, options: { publicUrl?: string } = {}): Promise<EmbedCaller | null> {
-  const fixedOrigin = options.publicUrl !== undefined ? publicOrigin(options.publicUrl, "publicUrl") : publicOrigin(process.env.MODELAPP_PUBLIC_URL, "MODELAPP_PUBLIC_URL")
+  const fixedOrigin = options.publicUrl !== undefined ? publicOrigin(options.publicUrl, "publicUrl") : publicOrigin(process.env.CLEGRA_PUBLIC_URL, "CLEGRA_PUBLIC_URL")
   // The request first: it makes the page dynamic before the app (its database, its auth) is touched, never at build time.
   const { headers } = await import("next/headers")
   const given = publicHeaders(new Headers(await headers()), fixedOrigin)
@@ -189,23 +189,23 @@ type Rewrite = { source: string; destination: string; basePath?: false; locale?:
 type Rewrites = Rewrite[] | { beforeFiles?: Rewrite[]; afterFiles?: Rewrite[]; fallback?: Rewrite[] }
 type ConfigFunction = (phase: string, context: { defaultConfig: NextConfig }) => NextConfig | Promise<NextConfig>
 
-export type WithModelAppOptions = {
-  /** Where the catch-all route is mounted (default `/api/modelapp`): the same value as in `toNextHandlers`. */
+export type WithClegraOptions = {
+  /** Where the catch-all route is mounted (default `/api/clegra`): the same value as in `toNextHandlers`. */
   mount?: string
 }
 
-/** The rewrites `withModelApp` adds (in `beforeFiles`, so no page or public file can shadow them). */
-export function modelAppRewrites(options: WithModelAppOptions = {}): Rewrite[] {
+/** The rewrites `withClegra` adds (in `beforeFiles`, so no page or public file can shadow them). */
+export function clegraRewrites(options: WithClegraOptions = {}): Rewrite[] {
   const mount = mountOf(options.mount)
   return PUBLIC_PATHS.map((source) => ({ source, destination: `${mount}${source}` }))
 }
 
-function withConfig(config: NextConfig, options: WithModelAppOptions): NextConfig {
-  if (config.basePath) throw new Error(`withModelApp: basePath "${config.basePath}" is not supported — /mcp and /.well-known/… must be at the root of the host (RFC 8615, RFC 9728)`)
-  if (config.trailingSlash) throw new Error("withModelApp: trailingSlash: true redirects /mcp to /mcp/, and MCP clients use the exact address of the protected resource; turn it off")
-  const ours = modelAppRewrites(options)
+function withConfig(config: NextConfig, options: WithClegraOptions): NextConfig {
+  if (config.basePath) throw new Error(`withClegra: basePath "${config.basePath}" is not supported — /mcp and /.well-known/… must be at the root of the host (RFC 8615, RFC 9728)`)
+  if (config.trailingSlash) throw new Error("withClegra: trailingSlash: true redirects /mcp to /mcp/, and MCP clients use the exact address of the protected resource; turn it off")
+  const ours = clegraRewrites(options)
   const theirs = config.rewrites as (() => Rewrites | Promise<Rewrites>) | undefined
-  if (theirs !== undefined && typeof theirs !== "function") throw new Error("withModelApp: next.config `rewrites` must be a function (sync or async)")
+  if (theirs !== undefined && typeof theirs !== "function") throw new Error("withClegra: next.config `rewrites` must be a function (sync or async)")
   const rewrites = async () => {
     const given = theirs ? await theirs() : []
     if (Array.isArray(given)) return { beforeFiles: ours, afterFiles: given, fallback: [] }
@@ -215,13 +215,13 @@ function withConfig(config: NextConfig, options: WithModelAppOptions): NextConfi
 }
 
 /**
- * next.config: adds the rewrites for `/mcp`, `/.well-known/modelapp.json` and the OAuth metadata paths to the
- * MAP route (before the app's own, merged with them in any shape: array, object, sync or async function). The rest
+ * next.config: adds the rewrites for `/mcp`, `/.well-known/clegra.json` and the OAuth metadata paths to the
+ * clegra route (before the app's own, merged with them in any shape: array, object, sync or async function). The rest
  * of the config is kept as it is. Takes the config object or a config function.
  */
-export function withModelApp(config: NextConfig, options?: WithModelAppOptions): NextConfig
-export function withModelApp(config: ConfigFunction, options?: WithModelAppOptions): ConfigFunction
-export function withModelApp(config: NextConfig | ConfigFunction, options: WithModelAppOptions = {}): NextConfig | ConfigFunction {
+export function withClegra(config: NextConfig, options?: WithClegraOptions): NextConfig
+export function withClegra(config: ConfigFunction, options?: WithClegraOptions): ConfigFunction
+export function withClegra(config: NextConfig | ConfigFunction, options: WithClegraOptions = {}): NextConfig | ConfigFunction {
   mountOf(options.mount)
   if (typeof config === "function") return async (phase, context) => withConfig(await config(phase, context), options)
   return withConfig(config, options)

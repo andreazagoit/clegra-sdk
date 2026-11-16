@@ -4,14 +4,14 @@
 > authorization server». This page shows how to meet them with the sign-in you already have.
 
 An MCP client (Claude, ChatGPT, the MCP Inspector) connects to `https://app.example.com/mcp` as an OAuth client.
-Each person signs in once with your app's own sign-in and gets an access token for your MCP server. modelapp
+Each person signs in once with your app's own sign-in and gets an access token for your MCP server. clegra
 answers the `401`, serves the protected-resource metadata (RFC 9728) and enforces everything after that point. Your
 code does one thing: it says whether a token is good and who it belongs to.
 
 ```ts
 defineApp({
   auth: {
-    resource: `${process.env.MODELAPP_PUBLIC_URL}/mcp`,            // the only audience accepted; required in production
+    resource: `${process.env.CLEGRA_PUBLIC_URL}/mcp`,            // the only audience accepted; required in production
     authorizationServers: ["https://app.example.com/api/auth"],    // the issuer, named in the protected-resource metadata
     resolve: async (token, request, { resource }) => {
       // 1. verify: signature (JWKS), expiry, issuer, aud === resource
@@ -28,7 +28,7 @@ The contract:
 - `installation` is the tenant your handlers scope by (`ctx.installation`): an organization, a workspace, an account.
   It must come from the verified token or your database. Never take it from a request parameter. It must match
   `[A-Za-z0-9._:-]{1,128}`.
-- `permissions` are ids you declared under `permissions`, or `"all"`. modelapp drops ids you didn't declare. Map them
+- `permissions` are ids you declared under `permissions`, or `"all"`. clegra drops ids you didn't declare. Map them
   from your roles, and read the roles live when you can, so a removed member loses access on the next call.
 - `subject` (optional, default `person.id`): idempotency of writes is kept per subject.
 - Return `null` for a token that isn't yours. Throw `AuthError("reason")` to refuse with a reason; the reason goes
@@ -53,15 +53,15 @@ Each recipe says how far it was verified. None of them is a package: copy the co
 
 | Recipe | Verified |
 |---|---|
-| [better-auth](#a-better-auth) | Tested in this repo's examples (better-auth 1.7.7, `examples/modelapp/crm/modelapp/auth.ts`) |
+| [better-auth](#a-better-auth) | Tested in this repo's examples (better-auth 1.7.7, `examples/apps/crm/clegra/auth.ts`) |
 | [Clerk](#b-clerk) | From Clerk's docs on 2026-11-15, not run here |
 | [Auth0](#c-auth0) | From Auth0's docs on 2026-11-15, not run here |
 | [WorkOS AuthKit](#d-workos-authkit) | From WorkOS's docs on 2026-11-15, not run here |
 
 ### (a) better-auth
 
-*Tested in this repo's examples:* the CRM (`examples/modelapp/crm/lib/auth-options.ts`, `modelapp/auth.ts`) passes
-`modelapp check` with a token from the real OAuth flow.
+*Tested in this repo's examples:* the CRM (`examples/apps/crm/lib/auth-options.ts`, `clegra/auth.ts`) passes
+`clegra check` with a token from the real OAuth flow.
 
 better-auth 1.7.7 has no built-in MCP plugin. Use `@better-auth/mcp` (authorization server), `jwt` (signed access
 tokens) and `@better-auth/cimd` (Client ID Metadata Documents), all 1.7.7.
@@ -75,7 +75,7 @@ import { betterAuth } from "better-auth"
 import { APIError } from "better-auth/api"
 import { jwt, organization } from "better-auth/plugins"
 
-const site = process.env.MODELAPP_PUBLIC_URL!       // https://app.example.com
+const site = process.env.CLEGRA_PUBLIC_URL!       // https://app.example.com
 export const resource = `${site}/mcp`               // mcp({ resource }) and defineApp's auth.resource: the same string
 export const issuer = `${site}/api/auth`            // better-auth at /api/auth
 
@@ -92,7 +92,7 @@ export const auth = betterAuth({
       resource,
       loginPage: "/sign-in",
       consentPage: "/oauth/consent",
-      scopes: ["openid", "profile", "email", "offline_access", "modelapp"],   // `modelapp`: the scope the metadata announces
+      scopes: ["openid", "profile", "email", "offline_access", "clegra"],   // `clegra`: the scope the metadata announces
       postLogin: {                                  // one connection = one organization: the session's active one
         page: "/oauth/organization",
         shouldRedirect: ({ session }) => !session.activeOrganizationId,
@@ -111,10 +111,10 @@ export const auth = betterAuth({
 The `resolve` (about 40 lines). Each check closes one specific hole:
 
 ```ts
-// modelapp-auth.ts
+// clegra-auth.ts
 import { oauthProviderAuthServerMetadata, oauthProviderOpenIdConfigMetadata } from "@better-auth/oauth-provider"
 import { createLocalJWKSet, decodeProtectedHeader, errors, jwtVerify, type JWK } from "jose"
-import { AuthError, type AuthOptions, type CallerResolver } from "modelapp"
+import { AuthError, type AuthOptions, type CallerResolver } from "clegra"
 import { auth, issuer, resource } from "@/lib/auth"
 
 let keys: { set: ReturnType<typeof createLocalJWKSet>; at: number } | null = null
@@ -142,7 +142,7 @@ const resolve: CallerResolver = async (token, _request, { resource }) => {
   // This server alone, plus better-auth's own userinfo endpoint when `openid` was asked (ChatGPT and Claude ask): any other audience could replay it here
   if ([claims.aud].flat().some((aud) => aud !== resource && aud !== `${issuer}/oauth2/userinfo`)) throw new AuthError("the access token is for several servers")
   if (claims.cnf !== undefined) throw new AuthError("sender-constrained (DPoP) tokens are not accepted")                     // we don't verify DPoP proofs
-  if (typeof claims.scope !== "string" || !claims.scope.split(" ").includes("modelapp")) throw new AuthError("the access token lacks the modelapp scope")
+  if (typeof claims.scope !== "string" || !claims.scope.split(" ").includes("clegra")) throw new AuthError("the access token lacks the clegra scope")
   const org = claims.org
   if (typeof org !== "string" || !org) throw new AuthError("the access token names no organization")
   const member = await membership(org, claims.sub!)        // YOUR query: member ⨝ user, read now (removed members, changed roles count at once)
@@ -150,7 +150,7 @@ const resolve: CallerResolver = async (token, _request, { resource }) => {
   return { installation: org, person: { id: claims.sub!, name: member.name }, permissions: permissionsForRole(member.role), subject: claims.sub! }
 }
 
-// RFC 8414 / OpenID discovery for an issuer with a path live at the root (/.well-known/…/api/auth): withModelApp rewrites them here.
+// RFC 8414 / OpenID discovery for an issuer with a path live at the root (/.well-known/…/api/auth): withClegra rewrites them here.
 const serve = async (request: Request) => {
   const path = new URL(request.url).pathname
   if (path === "/.well-known/oauth-authorization-server/api/auth") return oauthProviderAuthServerMetadata(auth)(request)
@@ -165,7 +165,7 @@ The pitfalls the checks above handle:
 
 - **One audience.** `aud` must be exactly `resource` and nothing else. better-auth's `aud` can be an array.
 - **No `cnf`.** A DPoP-bound token is only safe with its proof. The SDK doesn't verify proofs, so refuse the token.
-- **The scope.** Clients ask for `modelapp` because your protected-resource metadata announces it.
+- **The scope.** Clients ask for `clegra` because your protected-resource metadata announces it.
 - **Live membership.** The organization comes from the token. The role is read from your database now, never from
   the token.
 - **Key rotation.** For an unknown `kid`, read the JWKS again, but at most every 10 seconds, so tokens with random
@@ -214,7 +214,7 @@ opens a public endpoint that anyone can use to create clients.
 ```ts
 // `clerk`: the Clerk backend client (@clerk/backend), and verifyClerkToken (@clerk/mcp-tools), set up and imported
 // exactly as in Clerk's MCP guide for Next.js.
-import { AuthError, type AuthOptions } from "modelapp"
+import { AuthError, type AuthOptions } from "clegra"
 
 export const appAuth: AuthOptions = {
   resource,
@@ -265,7 +265,7 @@ issuer in `authorizationServers` and leaving `serve` out.
 
 ```ts
 import { ApiClient } from "@auth0/auth0-api-js"
-import { AuthError, type AuthOptions } from "modelapp"
+import { AuthError, type AuthOptions } from "clegra"
 
 const api = new ApiClient({ domain: process.env.AUTH0_DOMAIN!, audience: resource })   // checks iss, aud, exp, nbf
 
@@ -309,7 +309,7 @@ so name your MAP permissions the same (`deals.view`) or map between them. Not co
 
 ```ts
 import { createRemoteJWKSet, jwtVerify } from "jose"
-import { AuthError, type AuthOptions } from "modelapp"
+import { AuthError, type AuthOptions } from "clegra"
 
 const AUTHKIT = process.env.WORKOS_AUTHKIT_DOMAIN!                    // https://<your-authkit-domain>
 const jwks = createRemoteJWKSet(new URL(`${AUTHKIT}/oauth2/jwks`))   // jose caches and refetches on an unknown kid
@@ -338,7 +338,7 @@ metadata announces CIMD once it is on, and which SDK call returns the person's n
 
 A page of your app framed by a host (`url: "/embed/…"`, spec §5.1) never sees your session cookie: the frame is on
 another site, and browsers block that cookie there. You don't add a sign-in for it. The host, which already holds the
-viewer's token, asks your app for a one-minute ticket (`modelapp_embed`); your app checks the token with the same
+viewer's token, asks your app for a one-minute ticket (`clegra_embed`); your app checks the token with the same
 `resolve` as every call, and the ticket carries exactly the caller `resolve` returned (installation, person,
 permissions). The frame posts it to `/embed/_ticket` and gets a partitioned cookie for that page only.
 
@@ -347,11 +347,11 @@ permissions). The frame posts it to `/embed/_ticket` and gets a partitioned cook
   app secret, e.g. better-auth's, may be reused). Without it the tool and the exchange answer `misconfigured`.
 - The page's permissions are the ticket's for the session's life (10 minutes by default, `embed.sessionSeconds`):
   re-read anything live (membership, role) in the page when that matters.
-- Used tickets are kept in the app's `store` (`SqlStore`'s `modelapp_store` table): no new table.
+- Used tickets are kept in the app's `store` (`SqlStore`'s `clegra_store` table): no new table.
 
 ## Locally, before any of this
 
-`npx modelapp init` writes a `resolve` that also accepts one bearer from `.env.local` (`MODELAPP_LOCAL_TOKEN`). It is
+`npx clegra init` writes a `resolve` that also accepts one bearer from `.env.local` (`CLEGRA_LOCAL_TOKEN`). It is
 refused whenever `NODE_ENV` is `production`, which `next build`, `next start` and every deployment set. Use it to see
 the app in the Inspector on day one, and keep it as you plug in one of the recipes above. The
 [quickstart](quickstart.md) has the details.

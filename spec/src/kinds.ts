@@ -117,7 +117,7 @@ export const RESERVED_KINDS = ["message", "place", "invoice", "project"] as cons
 export const NAMESPACED_KIND = /^[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*)+$/
 /** A property name of a namespaced kind. */
 export const PROPERTY_NAME = /^[a-z][A-Za-z0-9]{0,63}$/
-/** A record URI, `modelapp://<app>/<entity>/<id>` (spec §3): what a cross-app reference holds. */
+/** A record URI, `clegra://<app>/<entity>/<id>` (spec §3): what a cross-app reference holds. */
 export const RECORD_URI = new RegExp(`^${URI_SCHEME}://[a-z][a-z0-9-]{1,39}/[a-z][a-z0-9_]{0,39}/[^/?#\\s]+$`)
 
 /** The published vocabulary (`spec/kinds.json`). */

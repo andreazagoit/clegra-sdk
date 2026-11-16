@@ -1,14 +1,14 @@
-import { getEmbedCaller } from "modelapp/next"
+import { getEmbedCaller } from "clegra/next"
 
 import { boardDeals, companyNames, isWorkspaceInstallation, provisionWorkspace, STAGES } from "@/lib/crm"
 import { formatDate, formatMoney, STAGE_LABELS } from "@/lib/format"
-import { crmApp } from "@/modelapp"
+import { crmApp } from "@/clegra"
 
 import { NoAccess } from "../../_components/ui"
 
 export const metadata = { title: "Pipeline board" }
 
-// The pipeline as a board, by stage, with totals: the MAP page `board`, framed by a host. Who looks is the caller the
+// The pipeline as a board, by stage, with totals: the app page `board`, framed by a host. Who looks is the caller the
 // host's sign-in ticket named (spec §5.1), never the CRM's own session: in a frame on another site that cookie is a
 // third-party one and never arrives.
 export default async function PipelineBoard() {

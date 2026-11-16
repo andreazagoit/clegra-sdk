@@ -1,9 +1,9 @@
-import { AuthError, defineApp } from "modelapp"
+import { AuthError, defineApp } from "clegra"
 import { z } from "zod"
 
-// A tiny MAP app for the real-Next test. Its "own tokens" are one random bearer the test passes in the environment
-// (FIXTURE_TOKEN), accepted only for the configured audience — enough to run `modelapp check` with a token.
-const resource = `${process.env.MODELAPP_PUBLIC_URL ?? "http://127.0.0.1:3941"}/mcp`
+// A tiny Clegra app for the real-Next test. Its "own tokens" are one random bearer the test passes in the environment
+// (FIXTURE_TOKEN), accepted only for the configured audience — enough to run `clegra check` with a token.
+const resource = `${process.env.CLEGRA_PUBLIC_URL ?? "http://127.0.0.1:3941"}/mcp`
 const notes = [
   { id: "n1", title: "First note", org: "org-a" },
   { id: "n2", title: "Second note", org: "org-a" },

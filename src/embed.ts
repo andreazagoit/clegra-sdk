@@ -9,7 +9,7 @@ import type { IdempotencyStore } from "./store"
 /**
  * EMBEDDED PAGES (spec §5.1). A `url` page on the app's own site (`/embed/pipeline`) is framed by a host on another
  * site, where the app's own session cookie is a third-party cookie and never arrives. So the host, which holds the
- * viewer's token for the app, asks the app for a TICKET (the `modelapp_embed` tool): one minute, signed, for one
+ * viewer's token for the app, asks the app for a TICKET (the `clegra_embed` tool): one minute, signed, for one
  * page and one framing origin, used once. The host's frame POSTs it to `<embed path>/_ticket` (a form whose target
  * is the frame: the ticket is never in a URL, the history or a Referer, and the browser itself states the poster's
  * `Origin`, which must be the ticket's). The app answers with a partitioned session cookie for that page's path
@@ -17,7 +17,7 @@ import type { IdempotencyStore } from "./store"
  * page. The page reads the caller from that cookie (`session`). Every embed response says who may frame it:
  * `Content-Security-Policy: frame-ancestors` with the hosts the app declares, never `X-Frame-Options`.
  *
- * Framework-neutral: `exchange(request)` returns a standard Response; `modelapp/next` wires it into proxy.ts.
+ * Framework-neutral: `exchange(request)` returns a standard Response; `clegra/next` wires it into proxy.ts.
  */
 
 export type EmbedOptions = {
@@ -30,7 +30,7 @@ export type EmbedOptions = {
   frameAncestors: string[]
   /**
    * The secret tickets and sessions are signed with (HMAC keys derived from it with HKDF, one per use, so a secret
-   * the app also uses elsewhere stays separated). 32 characters at least. Default: `MODELAPP_EMBED_SECRET`.
+   * the app also uses elsewhere stays separated). 32 characters at least. Default: `CLEGRA_EMBED_SECRET`.
    * Required: without it the ticket tool and the exchange fail with a clear `misconfigured`.
    */
   secret?: string
@@ -102,7 +102,7 @@ export class EmbedAuthority {
     this.exchangePath = `${path}/${EMBED_EXCHANGE_SEGMENT}`
     this.frameAncestors = [...new Set(options.frameAncestors)]
     this.sessionSeconds = seconds
-    this.#secret = options.secret ?? process.env.MODELAPP_EMBED_SECRET
+    this.#secret = options.secret ?? process.env.CLEGRA_EMBED_SECRET
     // A missing secret is said when a ticket is asked for (a build may define the app without its environment); a weak one at once.
     if (this.#secret !== undefined && this.#secret.length < 32) throw new Error("embed: the signing secret must have 32 characters at least (openssl rand -base64 32)")
     this.#store = store
@@ -113,7 +113,7 @@ export class EmbedAuthority {
   #key(use: "ticket" | "session"): Uint8Array {
     if (!this.#keys) {
       const secret = this.#secret
-      if (!secret) throw new EmbedError(500, "misconfigured", "embed: no signing secret. Set MODELAPP_EMBED_SECRET (32+ random characters: openssl rand -base64 32) or pass embed.secret to defineApp")
+      if (!secret) throw new EmbedError(500, "misconfigured", "embed: no signing secret. Set CLEGRA_EMBED_SECRET (32+ random characters: openssl rand -base64 32) or pass embed.secret to defineApp")
       const derive = (info: string) => new Uint8Array(hkdfSync("sha256", secret, `${PROTOCOL_ID}-embed`, info, 32))
       this.#keys = { ticket: derive("ticket v1"), session: derive("session v1") }
     }

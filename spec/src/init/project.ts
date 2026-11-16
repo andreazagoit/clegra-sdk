@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs"
 import { dirname, join, posix, relative, resolve, sep } from "node:path"
 
 /**
- * What `modelapp init` needs to know of an existing Next.js project, read from its files: never guessed.
+ * What `clegra init` needs to know of an existing Next.js project, read from its files: never guessed.
  * A project that isn't a Next.js App Router project is an `InitError` with what is missing.
  */
 
@@ -23,14 +23,14 @@ export type Project = {
   ts: boolean
   /** The existing next.config file, relative to root, or null. */
   nextConfig: string | null
-  /** The `paths` alias that points at the folder of modelapp.ts (`@/*` → `@/`), or null: then imports are relative. */
+  /** The `paths` alias that points at the folder of clegra.ts (`@/*` → `@/`), or null: then imports are relative. */
   alias: string | null
-  /** The package name, made a valid MAP app id. */
+  /** The package name, made a valid Clegra app id. */
   appName: string
   appTitle: string
   /** Dependencies the generated files import that package.json lacks. */
   missing: string[]
-  /** The installed zod's major version when it is not 4 (modelapp needs zod 4), else null. */
+  /** The installed zod's major version when it is not 4 (clegra needs zod 4), else null. */
   oldZod: string | null
   /** The port `next dev` uses (from the dev script's -p/--port), default 3000. */
   port: number
@@ -73,7 +73,7 @@ function readJson(path: string, jsonc = false): Record<string, unknown> | null {
   }
 }
 
-/** A package name as a MAP app id: `[a-z][a-z0-9-]{1,39}`. */
+/** A package name as a Clegra app id: `[a-z][a-z0-9-]{1,39}`. */
 export function appNameOf(packageName: unknown): string {
   const base = typeof packageName === "string" ? packageName.replace(/^@[^/]+\//, "") : ""
   const name = base.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^[^a-z]+/, "").replace(/-+/g, "-").slice(0, 40).replace(/-+$/, "")
@@ -111,19 +111,19 @@ function ignoresEnvLocal(root: string): boolean {
 
 export function detectProject(root: string): Project {
   const pkg = readJson(join(root, "package.json"))
-  if (!pkg) throw new InitError(`no package.json in ${root}: run modelapp init in the folder of an existing Next.js app`)
+  if (!pkg) throw new InitError(`no package.json in ${root}: run clegra init in the folder of an existing Next.js app`)
   const deps = { ...((pkg.dependencies ?? {}) as Record<string, string>), ...((pkg.devDependencies ?? {}) as Record<string, string>) }
-  if (!deps.next) throw new InitError(`${join(root, "package.json")} has no "next" dependency: modelapp init adds MAP to an existing Next.js app (for another server, see listen() in modelapp/node)`)
+  if (!deps.next) throw new InitError(`${join(root, "package.json")} has no "next" dependency: clegra init adds the clegra package to an existing Next.js app (for another server, see listen() in clegra/node)`)
   const installed = readJson(join(root, "node_modules", "next", "package.json"))
   const nextVersion = typeof installed?.version === "string" ? installed.version : deps.next
   const appDir = existsSync(join(root, "app")) ? "app" : existsSync(join(root, "src", "app")) ? "src/app" : null
-  if (!appDir) throw new InitError(`no app/ or src/app/ folder in ${root}: modelapp init needs the App Router (a Pages Router app can mount app.fetch in an API route by hand)`)
+  if (!appDir) throw new InitError(`no app/ or src/app/ folder in ${root}: clegra init needs the App Router (a Pages Router app can mount app.fetch in an API route by hand)`)
   const ts = existsSync(join(root, "tsconfig.json"))
   const nextConfig = CONFIG_FILES.find((f) => existsSync(join(root, f))) ?? null
-  const modelappDir = appDir === "src/app" ? join(root, "src") : root
-  const alias = aliasFor(root, modelappDir, readJson(join(root, ts ? "tsconfig.json" : "jsconfig.json"), true))
+  const clegraDir = appDir === "src/app" ? join(root, "src") : root
+  const alias = aliasFor(root, clegraDir, readJson(join(root, ts ? "tsconfig.json" : "jsconfig.json"), true))
   const appName = appNameOf(pkg.name)
-  const missing = ["modelapp", "zod"].filter((d) => !deps[d])
+  const missing = ["clegra", "zod"].filter((d) => !deps[d])
   const zod = readJson(join(root, "node_modules", "zod", "package.json"))
   const zodMajor = typeof zod?.version === "string" ? zod.version.split(".")[0]! : null
   const proxy = ["proxy", "middleware"].flatMap((n) => ["ts", "js", "mjs"].flatMap((e) => [`${n}.${e}`, `src/${n}.${e}`])).find((f) => existsSync(join(root, f))) ?? null
@@ -144,20 +144,20 @@ export function detectProject(root: string): Project {
   }
 }
 
-/** Where modelapp.ts goes (beside app/: the project root, or src/), relative to root. */
-export function modelappPath(project: Project): string {
-  return posix.join(project.appDir === "src/app" ? "src" : ".", `modelapp.${project.ts ? "ts" : "js"}`).replace(/^\.\//, "")
+/** Where clegra.ts goes (beside app/: the project root, or src/), relative to root. */
+export function clegraPath(project: Project): string {
+  return posix.join(project.appDir === "src/app" ? "src" : ".", `clegra.${project.ts ? "ts" : "js"}`).replace(/^\.\//, "")
 }
 
 export function routePath(project: Project): string {
-  return `${project.appDir}/api/modelapp/[...path]/route.${project.ts ? "ts" : "js"}`
+  return `${project.appDir}/api/clegra/[...path]/route.${project.ts ? "ts" : "js"}`
 }
 
-/** How the route imports modelapp.ts: through the alias, else a relative path. */
+/** How the route imports clegra.ts: through the alias, else a relative path. */
 export function importPathFor(project: Project): string {
-  if (project.alias) return `${project.alias}modelapp`
+  if (project.alias) return `${project.alias}clegra`
   const from = dirname(join(project.root, routePath(project)))
-  const to = join(project.root, modelappPath(project)).replace(/\.(ts|js)$/, "")
+  const to = join(project.root, clegraPath(project)).replace(/\.(ts|js)$/, "")
   const rel = relative(from, to).split(sep).join("/")
   return rel.startsWith(".") ? rel : `./${rel}`
 }

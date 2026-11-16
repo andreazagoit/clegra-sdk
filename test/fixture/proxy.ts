@@ -1,6 +1,6 @@
-import { embedProxy } from "modelapp/next"
+import { embedProxy } from "clegra/next"
 
-import { app } from "./modelapp"
+import { app } from "./clegra"
 
 // The embedded pages: the ticket exchange (POST /embed/_ticket) and frame-ancestors on every /embed response.
 export const proxy = embedProxy(app)

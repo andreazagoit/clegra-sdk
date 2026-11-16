@@ -1,8 +1,8 @@
-// The CRM as a MAP app (docs/map/examples/crm.md): one defineApp object over
+// The CRM as a Clegra app (docs/developers/examples/crm.md): one defineApp object over
 // the functions the CRM already has (lib/crm.ts). Hosts and MCP clients get
 // the same rules as the pages: the tenant from the verified caller, the field
 // permissions applied by the SDK, the changes through the same functions.
-import { AppError, defineApp, ref, SqlStore, type App, type AuthOptions, type Context, type IdempotencyStore } from "modelapp"
+import { AppError, defineApp, ref, SqlStore, type App, type AuthOptions, type Context, type IdempotencyStore } from "clegra"
 import { z } from "zod"
 
 import {
@@ -113,9 +113,9 @@ export const EMBED_HOSTS = [
 ]
 
 export type CrmAppOptions = {
-  /** Who may call: the app's own users (`resolve`: better-auth access tokens, modelapp/auth.ts) and workspace hosts (`issuers`). */
+  /** Who may call: the app's own users (`resolve`: better-auth access tokens, clegra/auth.ts) and workspace hosts (`issuers`). */
   auth: AuthOptions
-  /** Default: the `modelapp_store` table in the CRM's database. */
+  /** Default: the `clegra_store` table in the CRM's database. */
   store?: IdempotencyStore
 }
 
