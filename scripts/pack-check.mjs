@@ -36,7 +36,11 @@ const fail = (what) => {
   console.log(`FAIL ${what}`)
 }
 const expect = (cond, what) => (cond ? ok(what) : fail(what))
-const run = (cmd, args, opts = {}) => spawnSync(cmd, args, { encoding: "utf8", ...opts })
+// Child npm runs as a stranger's would: without the npm_* settings an `npm run pack:check` passes down (they would
+// make a nested `npm publish` act on this package's run, e.g. as a workspace).
+const cleanEnv = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^npm_/i.test(k)))
+const run = (cmd, args, opts = {}) => spawnSync(cmd, args, { encoding: "utf8", ...opts, env: { ...cleanEnv, ...(opts.env ?? {}) } })
+const tail = (r) => `${r.stdout ?? ""}${r.stderr ?? ""}`.trim().split("\n").slice(-4).join(" | ")
 
 // ------------------------------------------------------------ the folder
 const work = resolve(values.dir ?? mkdtempSync(join(tmpdir(), "modelapp-pack-check-")))
@@ -80,11 +84,11 @@ expect(findings.length === 0, `hygiene check (nothing internal ships)${findings.
 // The guard. A registry on a closed local port with a dummy token: nothing can be uploaded anywhere.
 const registry = `http://127.0.0.1:${port + 2}/`
 const fake = run(npm, ["publish", tarball, "--registry", registry, `--//127.0.0.1:${port + 2}/:_authToken=not-a-token`, "--force"], { cwd: work })
-expect(fake.status !== 0 && /EPRIVATE/.test(fake.stdout + fake.stderr), "npm publish of an unapproved tarball is refused (EPRIVATE)")
-const refused = run(process.execPath, [join(pkgDir, "scripts/prepack.mjs")], { cwd: pkgDir, env: { ...process.env, npm_command: "publish", npm_config_dry_run: "" } })
+expect(fake.status !== 0 && /EPRIVATE/.test(fake.stdout + fake.stderr), `npm publish of an unapproved tarball is refused (EPRIVATE)${/EPRIVATE/.test(fake.stdout + fake.stderr) ? "" : `: ${tail(fake)}`}`)
+const refused = run(process.execPath, [join(pkgDir, "scripts/prepack.mjs")], { cwd: pkgDir, env: { npm_command: "publish", npm_config_dry_run: "" } })
 expect(refused.status === 1 && /not published/.test(refused.stderr), "npm publish from the package folder is refused by prepack")
 const dry = run(npm, ["publish", "--dry-run", tarball], { cwd: work })
-expect(dry.status === 0 && /\(dry-run\)/.test(dry.stdout + dry.stderr), "npm publish --dry-run of the tarball runs (uploads nothing)")
+expect(dry.status === 0 && /\(dry-run\)/.test(dry.stdout + dry.stderr), `npm publish --dry-run of the tarball runs (uploads nothing)${dry.status === 0 ? "" : `: ${tail(dry)}`}`)
 
 // ------------------------------------------------------------ 2. a fresh Next.js app
 const version = (name) => createRequire(join(repoRoot, "package.json"))(`${name}/package.json`).version
@@ -163,7 +167,7 @@ async function serve(mode, p) {
 }
 /** `npx modelapp check`: the failed check ids. */
 function check(base, withToken) {
-  const r = run(npx, ["modelapp", "check", base, ...(withToken ? ["--token", token] : [])], { cwd: app, env: { ...process.env, MODELAPP_TOKEN: "" } })
+  const r = run(npx, ["modelapp", "check", base, ...(withToken ? ["--token", token] : [])], { cwd: app, env: { MODELAPP_TOKEN: "" } })
   return { status: r.status, out: r.stdout + r.stderr, failed: r.stdout.split("\n").filter((l) => l.startsWith("FAIL ")) }
 }
 
@@ -175,7 +179,7 @@ expect(devFailed.length === 1 && /auth\.mcp/.test(devFailed[0] ?? ""), `next dev
 stop(devServer.child)
 rmSync(join(app, ".next"), { recursive: true, force: true })
 
-const build = run(process.execPath, [nextBin, "build"], { cwd: app, env: { ...process.env, NEXT_TELEMETRY_DISABLED: "1", MODELAPP_PUBLIC_URL: `http://localhost:${port + 1}` } })
+const build = run(process.execPath, [nextBin, "build"], { cwd: app, env: { NEXT_TELEMETRY_DISABLED: "1", MODELAPP_PUBLIC_URL: `http://localhost:${port + 1}` } })
 expect(build.status === 0, "next build (next.config imports modelapp/next from node_modules)")
 if (build.status !== 0) console.log(build.stdout + build.stderr)
 else {

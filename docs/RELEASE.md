@@ -50,13 +50,16 @@ It uses `--port` and `--port + 1` (and `--port + 2`, a closed port, for the guar
 
 ## Publish day (after the owner's yes)
 
-Before the first release, two things the owner decides: the public home of the spec and the code (the package's
-`repository`, `homepage`, `bugs`; the README's links to `docs/map/*.md` point inside this repository today) and
-that the unscoped name `modelapp` is free on npm (`npm view modelapp` must answer 404).
+Decided (owner, 2026-11-16): the unscoped name `modelapp` (no scope), first version `0.1.0`, MIT. The name was
+free on 2026-11-16 (`npm view modelapp` answered 404). Still open, not blocking: a public home for the spec and the
+code (`repository`, `homepage`, `bugs`; the README's links to `docs/map/*.md` point inside this repository today).
+
+Publish from the branch that has the build (`packages/modelapp/scripts/prepack.mjs`): a package.json that still
+exports `./src/*.ts` with no `prepack` would publish TypeScript source.
 
 ```sh
 cd packages/modelapp
-npm run typecheck && npm test && npm run test:next && npm run pack:check -- --dir "$(mktemp -d /tmp/pc.XXXX)"
+npm run typecheck && npm test && npm run pack:check -- --dir "$(mktemp -d /tmp/pc.XXXX)"
 npm whoami                                        # the account that will own the package
 mkdir -p /tmp/modelapp-release
 MODELAPP_PUBLISH=approved npm pack --pack-destination /tmp/modelapp-release
