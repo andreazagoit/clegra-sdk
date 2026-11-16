@@ -5,6 +5,16 @@ changelog in [future/CHANGELOG.md](future/CHANGELOG.md).
 
 ## Unreleased (1.0 draft)
 
+### The `modelapp` package is built for npm
+
+- The tarball ships ESM JavaScript with `.d.ts` files and source maps (`dist/`), not TypeScript source: a
+  `next.config` importing `modelapp/next` from `node_modules` now loads (Node refuses `.ts` there). Every entry has
+  `types` and `default` conditions; `moduleResolution` `bundler` and `node16` both resolve it. The CLI is
+  `dist/spec/src/cli.js` with a `node` shebang; the JSON Schema and `kinds.json` ship next to the code
+  (`modelapp/modelapp.schema.json`, `modelapp/kinds.json`).
+- `withModelApp` no longer adds `modelapp` to `transpilePackages`: the package is JavaScript.
+- Not published yet: see [RELEASE.md](RELEASE.md).
+
 ### The generated view in hosts (spec §5)
 
 - **Clicking a row in ChatGPT looked dead.** The view now finishes `ui/initialize` before any `tools/call`

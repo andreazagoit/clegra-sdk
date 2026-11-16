@@ -132,9 +132,6 @@ export type WithModelAppOptions = {
   mount?: string
 }
 
-/** The package Next must compile: the MAP SDK ships TypeScript source. */
-const SDK_PACKAGES = ["modelapp"]
-
 /** The rewrites `withModelApp` adds (in `beforeFiles`, so no page or public file can shadow them). */
 export function modelAppRewrites(options: WithModelAppOptions = {}): Rewrite[] {
   const mount = mountOf(options.mount)
@@ -152,14 +149,13 @@ function withConfig(config: NextConfig, options: WithModelAppOptions): NextConfi
     if (Array.isArray(given)) return { beforeFiles: ours, afterFiles: given, fallback: [] }
     return { beforeFiles: [...ours, ...(given.beforeFiles ?? [])], afterFiles: given.afterFiles ?? [], fallback: given.fallback ?? [] }
   }
-  const transpilePackages = [...new Set([...(config.transpilePackages ?? []), ...SDK_PACKAGES])]
-  return { ...config, transpilePackages, rewrites: rewrites as NextConfig["rewrites"] }
+  return { ...config, rewrites: rewrites as NextConfig["rewrites"] }
 }
 
 /**
  * next.config: adds the rewrites for `/mcp`, `/.well-known/modelapp.json` and the OAuth metadata paths to the
- * MAP route (before the app's own, merged with them in any shape: array, object, sync or async function), and
- * `transpilePackages` for the SDK. Takes the config object or a config function.
+ * MAP route (before the app's own, merged with them in any shape: array, object, sync or async function). The rest
+ * of the config is kept as it is. Takes the config object or a config function.
  */
 export function withModelApp(config: NextConfig, options?: WithModelAppOptions): NextConfig
 export function withModelApp(config: ConfigFunction, options?: WithModelAppOptions): ConfigFunction

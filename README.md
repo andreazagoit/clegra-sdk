@@ -8,6 +8,10 @@ and any MCP client. Spec: [docs/map/spec.md](../../docs/map/spec.md).
 npm i modelapp zod
 ```
 
+ESM JavaScript with its type declarations, Node 20+; `zod` 4 is a peer dependency, `next` (15+) an optional one.
+Not on npm yet: [docs/map/RELEASE.md](../../docs/map/RELEASE.md) says how the tarball is made, checked and
+(after the owner's yes) published.
+
 | Entry | What |
 | --- | --- |
 | `modelapp` | `defineApp`, `AuthError`, `SqlStore`, `MemoryStore`, types. Framework-agnostic (`app.fetch(request)`) |
@@ -67,7 +71,6 @@ export const app = defineApp({
   with a path).
   - It keeps the app's own rewrites, in any shape: an array, an object, a sync or async function, or a config
     function.
-  - It adds `modelapp` to `transpilePackages`, because the package ships TypeScript source.
   - It refuses `basePath` (the well-known paths must be at the root of the host) and `trailingSlash: true` (which
     redirects `/mcp` to `/mcp/`).
 - **`toNextHandlers`** hands `app.fetch` each request at its public address.
@@ -116,4 +119,10 @@ npm test            # core + modelapp/next unit tests
 npx tsx --test "spec/src/**/*.test.ts"   # modelapp init (fixture projects in temp folders)
 npm run test:next   # test/fixture with next dev (port 3942), then next build + next start (3943); modelapp check through the rewrites
 npm run typecheck
+npm run build       # dist/ (git-ignored): what the tarball ships; npm pack builds it itself
+npm run pack:check  # slow: npm pack, then a fresh Next.js app outside the repository with the tarball (docs/map/RELEASE.md)
 ```
+
+In this repository the package exports its TypeScript source: the examples, Clegra and the tests import it through
+the workspace with no build step. `npm pack` builds `dist/` and packs a package.json whose exports point there
+(scripts/prepack.mjs; scripts/postpack.mjs puts the repository's back).

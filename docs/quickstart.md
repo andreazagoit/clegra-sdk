@@ -1,7 +1,7 @@
 # Quickstart
 
-> Model App Protocol (MAP): an app that is also an MCP server. One package, `modelapp` (private for now, in
-> [`packages/modelapp`](../../packages/modelapp)). For a Next.js app that already has data and a sign-in: **five
+> Model App Protocol (MAP): an app that is also an MCP server. One package, `modelapp` (ESM JavaScript with its
+> types, Node 20+; not on npm yet: until it is, install its tarball, see [RELEASE.md](RELEASE.md)). For a Next.js app that already has data and a sign-in: **five
 > minutes to see it, a day to ship it.**
 
 ## Next.js in 5 minutes
@@ -9,7 +9,7 @@
 In an existing Next.js App Router app (`app/` or `src/app/`):
 
 ```sh
-npm i modelapp zod
+npm i modelapp zod         # before the first release: npm i ./modelapp-0.1.0.tgz zod (the tarball of `npm pack`)
 npx modelapp init          # --dry-run prints what it would do
 ```
 
@@ -35,7 +35,7 @@ What it writes:
   your sign-in go.
 - **`app/api/modelapp/[...path]/route.ts`**: `export const { GET, POST, DELETE, OPTIONS } = toNextHandlers(app)`.
 - **`next.config`** wrapped in `withModelApp(…)`. It adds rewrites for `/mcp`, `/.well-known/modelapp.json` and the
-  OAuth metadata paths, and `modelapp` to `transpilePackages`. init edits the file only when the edit is certain (one
+  OAuth metadata paths. init edits the file only when the edit is certain (one
   `export default <expression>` line). Otherwise it prints the edit for you to make.
 - **`.env.local`**: `MODELAPP_LOCAL_TOKEN`, a random bearer.
 

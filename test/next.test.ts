@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url"
 // A REAL Next.js run of test/fixture (App Router, withModelApp + toNextHandlers): `next dev`, then `next build` +
 // `next start`. Through the rewrites: `modelapp check` with a token, what a route handler sees of a rewritten
 // request, an SSE stream arriving chunk by chunk. Servers are stopped by PID; the fixture's .next is deleted.
-// Run: npm run test:next (ports 3942 dev, 3943 start).
+// Run: npm run test:next (ports 3942 dev, 3943 start; MODELAPP_TEST_NEXT_PORT=<n> uses n and n+1).
 
 const here = dirname(fileURLToPath(import.meta.url))
 const fixture = join(here, "fixture")
@@ -18,6 +18,7 @@ const cli = join(here, "..", "spec", "src", "cli.ts")
 const nextBin = join(root, "node_modules", "next", "dist", "bin", "next")
 const token = randomBytes(24).toString("base64url")
 const running = new Set<ChildProcess>()
+const devPort = Number(process.env.MODELAPP_TEST_NEXT_PORT || 3942)
 
 function stop(child: ChildProcess) {
   // The process group we started (next dev forks a worker): only our own PIDs.
@@ -108,7 +109,7 @@ async function expectations(base: string) {
 
 describe("a real Next.js app (test/fixture)", { concurrency: false }, () => {
   test("next dev", { timeout: 180_000 }, async () => {
-    const server = await serve("dev", 3942)
+    const server = await serve("dev", devPort)
     try {
       await expectations(server.base)
     } catch (error) {
@@ -123,7 +124,7 @@ describe("a real Next.js app (test/fixture)", { concurrency: false }, () => {
     rmSync(join(fixture, ".next"), { recursive: true, force: true })
     const build = spawnSync(process.execPath, [nextBin, "build"], { cwd: fixture, encoding: "utf8", env: { ...process.env, NEXT_TELEMETRY_DISABLED: "1" } })
     assert.equal(build.status, 0, `${build.stdout}${build.stderr}`)
-    const server = await serve("start", 3943)
+    const server = await serve("start", devPort + 1)
     try {
       await expectations(server.base)
     } catch (error) {
