@@ -36,16 +36,18 @@ The same rules apply in the pages and over MCP.
 ## How it is built
 
 - **Sign-in and OAuth**: better-auth, with email and password and the organization plugin.
-  The tenant is the session's active organization. The same instance is the authorization
+  The tenant is the session's active organization (each organization gets its `tenant` row
+  when it is created). The same instance is the authorization
   server for MCP clients, through its `jwt`, `mcp` and `cimd` plugins (`lib/auth.ts`).
 - **Data: plain SQL, on purpose.** There is no ORM: one `sql(text, params)` and one
   `transaction(fn)` (`lib/db.ts`) run over a `pg` Pool or PGlite. The schema is `.sql` files in
   `db/migrations`. better-auth's tables come from its own migration plan, in the same database
   (`npm run db:migrate`). The other reference app (the CRM) uses Drizzle; MAP doesn't care.
 - **The app's functions** (`lib/warehouse.ts`), such as `listProducts`, `registerMovement` and
-  `confirmOrder`, are always scoped by the organization. The pages and server actions call them.
+  `confirmOrder`, are always scoped by the tenant: an organization, or a workspace host's
+  installation. The pages and server actions call them.
 - **The MAP definition** is `lib/modelapp.ts`. It is one `defineApp`, and its handlers call
-  those same functions with the organization the SDK verified (`ctx.installation`):
+  those same functions with the tenant the SDK verified (`ctx.installation`):
   - entities `product`, `movement` and `order`;
   - actions `register_movement`, `confirm_order` (always confirmed first) and `create_order`;
   - fragments, pages (one is the app's own `/embed/stock` board) and an agent.
@@ -55,6 +57,11 @@ The same rules apply in the pages and over MCP.
   - it was issued for this MCP server alone (`aud`) and has not expired;
   - it is not DPoP-bound and carries the `modelapp` scope and the organization;
   - the person is still a member of that organization, with their role read live.
+- **Workspace hosts** (a Clegra node, `MODELAPP_ISSUERS`): the SDK verifies their tokens itself.
+  Their tenant is `<installation>@<issuer>`, never an organization (`lib/tenants.ts`). Each
+  installation gets its own copy of the demo data (Aurora Hardware) on its first call, in one
+  transaction. A host's person is not a better-auth user: their name comes from the token and is
+  kept in `person` when they change something, so lists show who did it.
 - **Wiring**: `app/api/modelapp/[...path]/route.ts` (`toNextHandlers`) and `withModelApp` in
   `next.config.ts`. The rewrites put `/mcp`, `/.well-known/modelapp.json` and the OAuth metadata
   at the root of the site.
@@ -110,6 +117,9 @@ person then goes through these steps:
    - `MODELAPP_PUBLIC_URL`: the production origin, e.g. `https://warehouse.example.com`
    - `BETTER_AUTH_SECRET` (`openssl rand -base64 32`)
    - `DEMO_PASSWORD` and `DEMO_SIGNIN=1`, for a demo
+   - optionally `MODELAPP_ISSUERS`: workspace hosts (e.g. a Clegra node) whose tokens are
+     accepted, as `issuer|jwksUri`, comma-separated. Each installation gets its own copy of the
+     demo data
 3. Deploy, then run the token script and `modelapp check` against the public URL.
 
 Nothing is written to disk at runtime: sessions, OAuth clients, signing keys, rate limits and
@@ -121,7 +131,8 @@ framed only by the hosts declared in `lib/modelapp.ts` (`EMBED_HOSTS`), signed i
 
 `npm test` uses real better-auth tokens from the in-process OAuth flow, on an in-memory PGlite. It covers:
 
-- tenant isolation;
+- tenant isolation, also for a workspace host's installations (a host token signed with a local key set);
+- the `004_tenants.sql` migration on a database that already has data;
 - the purchase-cost permission;
 - list filters, sort, search and the cursor;
 - the actions and fragments;

@@ -13,7 +13,7 @@ What it shows:
 
 - **Plain SQL, no ORM.** The app has one `sql(text, params)` and one `transaction(fn)` over `pg` or PGlite
   (`lib/db.ts`), and its functions (`listProducts`, `registerMovement`, `confirmOrder`, … in `lib/warehouse.ts`)
-  always take the organization first. The MAP definition (`lib/modelapp.ts`) calls those same functions with
+  always take the tenant first. The MAP definition (`lib/modelapp.ts`) calls those same functions with
   `ctx.installation`. Filters, sort, search and the cursor arrive already checked, and the list functions turn them
   into SQL.
 - **A field permission.** `product.purchaseCost` carries `permission: "products.cost"`, which admins have and members
@@ -32,6 +32,10 @@ What it shows:
   `lib/modelapp.ts`, `embedProxy` in `proxy.ts`, `getEmbedCaller` in `app/embed/stock/page.tsx`.
 - **Its own `resolve`.** better-auth is the authorization server. The app verifies better-auth's access tokens
   itself and reads the person's role live (`lib/modelapp-auth.ts`), following the recipe in [auth.md](../auth.md).
+- **Workspace hosts too.** With `MODELAPP_ISSUERS` (`issuer|jwksUri`, comma-separated) it also accepts a workspace
+  host's tokens (a Clegra node), verified by the SDK. Such a tenant is `<installation>@<issuer>`: a `tenant` row of
+  kind `workspace` beside the organizations', which gets its own copy of the demo data on its first call. A host's
+  person is not a better-auth user, so who registered a movement is a person id of the tenant, named in `person`.
 
 The tests run the MAP app over its real HTTP path on an in-memory PGlite. They cover tenant isolation, the
 purchase-cost permission, list filters, sort, search and cursor, and the actions and fragments.

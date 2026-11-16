@@ -106,7 +106,7 @@ export async function registerMovementAction(_state: ActionState, form: FormData
   if (!MOVEMENT_KINDS.includes(kind)) return { error: "Choose in, out or adjustment.", values: typed(form) }
   const quantity = Number(text(form, "quantity"))
   try {
-    const { movement, stock } = await registerMovement(viewer.orgId, viewer.userId, { productId: text(form, "productId"), kind, quantity, note: text(form, "note") || undefined })
+    const { movement, stock } = await registerMovement(viewer.orgId, { id: viewer.userId }, { productId: text(form, "productId"), kind, quantity, note: text(form, "note") || undefined })
     revalidatePath("/", "layout")
     return { ok: `Registered ${movement.summary}. Now ${stock} in stock.` }
   } catch (error) {
@@ -117,7 +117,7 @@ export async function registerMovementAction(_state: ActionState, form: FormData
 export async function confirmOrderAction(_state: ActionState, form: FormData): Promise<ActionState> {
   const viewer = await requirePermission("orders.manage")
   try {
-    const order = await confirmOrder(viewer.orgId, viewer.userId, text(form, "orderId"))
+    const order = await confirmOrder(viewer.orgId, { id: viewer.userId }, text(form, "orderId"))
     revalidatePath("/", "layout")
     return { ok: `Order ${order.number} confirmed: the goods left the warehouse.` }
   } catch (error) {

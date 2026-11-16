@@ -15,6 +15,7 @@ import { chromium } from "playwright"
 // request, an SSE stream arriving chunk by chunk. Servers are stopped by PID; the fixture's .next is deleted.
 // In next dev, the embedded page in a real Chromium (spec §5.1): a host harness on http://localhost (another site
 // than the app on 127.0.0.1) frames the SDK's url-page view, which asks for a ticket over the bridge and posts it.
+// (.next is removed with retries: next dev may still be writing in it while it stops.)
 // Run: npm run test:next (ports 3942 dev, 3943 start, 3944 the harness; MODELAPP_TEST_NEXT_PORT=<n> uses n, n+1, n+2).
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -39,7 +40,7 @@ function stop(child: ChildProcess) {
 
 after(() => {
   for (const child of running) stop(child)
-  rmSync(join(fixture, ".next"), { recursive: true, force: true })
+  rmSync(join(fixture, ".next"), { recursive: true, force: true, maxRetries: 10, retryDelay: 300 })
 })
 
 async function serve(mode: "dev" | "start", port: number): Promise<{ base: string; log: () => string; close: () => void }> {
@@ -219,7 +220,7 @@ describe("a real Next.js app (test/fixture)", { concurrency: false }, () => {
   })
 
   test("next build + next start", { timeout: 300_000 }, async () => {
-    rmSync(join(fixture, ".next"), { recursive: true, force: true })
+    rmSync(join(fixture, ".next"), { recursive: true, force: true, maxRetries: 10, retryDelay: 300 })
     const build = spawnSync(process.execPath, [nextBin, "build"], { cwd: fixture, encoding: "utf8", env: { ...process.env, NEXT_TELEMETRY_DISABLED: "1" } })
     assert.equal(build.status, 0, `${build.stdout}${build.stderr}`)
     const server = await serve("start", devPort + 1)

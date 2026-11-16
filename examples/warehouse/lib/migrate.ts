@@ -17,7 +17,10 @@ const MIGRATIONS = join(dirname(fileURLToPath(import.meta.url)), "..", "db", "mi
  */
 export async function migrate(log: (line: string) => void = () => undefined): Promise<string[]> {
   const db = await getDb()
-  const plan = await getMigrations(createAuth(db.pool, { validateSchema: false }).options)
+  const auth = createAuth(db.pool, { validateSchema: false })
+  // Its plugins' start-up work (reads of its own tables) finishes here, never after the caller closes the database.
+  await auth.$context
+  const plan = await getMigrations(auth.options)
   if (plan.toBeCreated.length || plan.toBeAdded.length || plan.toBeAddedIndexes.length) {
     await plan.runMigrations()
     log(`better-auth: ${[...plan.toBeCreated.map((t) => `+${t.table}`), ...plan.toBeAdded.map((t) => `~${t.table}`)].join(" ") || "indexes"}`)
