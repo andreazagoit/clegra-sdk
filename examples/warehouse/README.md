@@ -121,10 +121,12 @@ person then goes through these steps:
      DATABASE_URL='postgres://…' DEMO_PASSWORD='…' npm run db:seed
      ```
 
-2. Create a Vercel project with Root Directory `examples/warehouse` and framework
-   Next.js. Set these environment variables:
+2. Create a Vercel project with Root Directory `examples/warehouse`, framework Next.js and
+   Install Command `cd ../.. && npm ci` (the example is a workspace of this repository). Set these
+   environment variables:
    - `DATABASE_URL`
-   - `CLEGRA_PUBLIC_URL`: the production origin, e.g. `https://warehouse.example.com`
+   - `CLEGRA_PUBLIC_URL`: the production origin, e.g. `https://warehouse.example.com` (not sensitive: pages read it
+     at build time)
    - `BETTER_AUTH_SECRET` (`openssl rand -base64 32`)
    - `DEMO_PASSWORD` and `DEMO_SIGNIN=1`, for a demo
    - optionally `CLEGRA_ISSUERS`: workspace hosts (e.g. a Clegra node) whose tokens are

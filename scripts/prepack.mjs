@@ -26,6 +26,12 @@ const file = join(pkgDir, "package.json")
 const saved = join(pkgDir, ".package.repo.json")
 
 const publishing = process.env.npm_command === "publish"
+// npm also runs "prepack" when it installs this folder as a `file:` dependency outside the workspace (e.g. an example
+// installed on its own): nothing is built or swapped then, the folder is used as it is.
+if (!["pack", "publish"].includes(process.env.npm_command ?? "")) {
+  console.error(`clegra: prepack skipped (npm ${process.env.npm_command ?? "?"}: only npm pack and npm publish build and swap package.json)`)
+  process.exit(0)
+}
 const repo = JSON.parse(readFileSync(file, "utf8"))
 if (publishing && /-/.test(repo.version) && !process.env.npm_config_tag) {
   console.error(`clegra: ${repo.version} is a prerelease: publish it with a dist-tag, e.g. \`npm publish --tag next\` (never as "latest").`)
