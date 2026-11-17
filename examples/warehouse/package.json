@@ -26,7 +26,7 @@
     "better-auth": "1.7.7",
     "better-call": "1.4.0",
     "clegra": "*",
-    "next": "16.4.3",
+    "next": "16.4.6",
     "pg": "^8.23.1",
     "react": "19.3.0",
     "react-dom": "19.3.0",

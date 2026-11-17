@@ -29,7 +29,7 @@ function project(files: Record<string, string>, base = tmpdir()): string {
 }
 
 const read = (root: string, path: string) => readFileSync(join(root, path), "utf8")
-const pkg = (extra: Record<string, unknown> = {}) => JSON.stringify({ name: "acme-tasks", private: true, scripts: { dev: "next dev" }, dependencies: { next: "16.4.3", react: "19.2.0", clegra: "^0.1.0", zod: "^4.0.0" }, ...extra })
+const pkg = (extra: Record<string, unknown> = {}) => JSON.stringify({ name: "acme-tasks", private: true, scripts: { dev: "next dev" }, dependencies: { next: "16.4.6", react: "19.2.0", clegra: "^0.1.0", zod: "^4.0.0" }, ...extra })
 
 // What create-next-app writes (TypeScript, App Router, no src/), tsconfig with a comment and a trailing comma.
 const NEXT_TS = `import type { NextConfig } from "next";
@@ -71,7 +71,7 @@ describe("clegra init", () => {
     assert.equal(token, result.token)
     assert.match(token!, /^[A-Za-z0-9_-]{43}$/)
     const printed = formatInit(result, false)
-    assert.match(printed, /Next\.js 16\.4\.3, App Router in app\/, TypeScript, alias @\/\*, next\.config\.ts/)
+    assert.match(printed, /Next\.js 16\.4\.6, App Router in app\/, TypeScript, alias @\/\*, next\.config\.ts/)
     assert.match(printed, new RegExp(`npx clegra check http://localhost:3000 --token ${token}`))
   })
 

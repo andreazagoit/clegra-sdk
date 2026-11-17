@@ -15,7 +15,7 @@ npx clegra init          # --dry-run prints what it would do; --ui adds clegra/u
 ```
 
 ```text
-clegra init: Next.js 16.4.3, App Router in app/, TypeScript, alias @/*, next.config.ts
+clegra init: Next.js 16.4.6, App Router in app/, TypeScript, alias @/*, next.config.ts
 
   create  clegra.ts  (app "acme-tasks": sample tasks, one action, one page; TODOs for your data and sign-in)
   create  app/api/clegra/[...path]/route.ts  (imports { app } from "@/clegra")

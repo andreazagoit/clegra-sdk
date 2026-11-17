@@ -391,7 +391,7 @@
   "devDependencies": {
     "@electric-sql/pglite": "0.5.16",
     "@tailwindcss/postcss": "4.3.3",
-    "next": "16.4.3",
+    "next": "16.4.6",
     "postcss": "^8.5.32",
     "tailwindcss": "4.3.3"
   }
