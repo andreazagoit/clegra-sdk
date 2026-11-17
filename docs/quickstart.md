@@ -11,7 +11,7 @@ In an existing Next.js App Router app (`app/` or `src/app/`):
 
 ```sh
 npm i clegra zod         # before the first release: npm i ./clegra-0.1.0.tgz zod (the tarball of `npm pack`)
-npx clegra init          # --dry-run prints what it would do
+npx clegra init          # --dry-run prints what it would do; --ui adds clegra/ui (ui.md)
 ```
 
 ```text

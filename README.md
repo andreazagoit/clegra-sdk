@@ -8,7 +8,9 @@ and any MCP client, and a JSON manifest Clegra reads to draw the app natively in
 npm i clegra zod
 ```
 
-ESM JavaScript with its type declarations, Node 20+; `zod` 4 is a peer dependency, `next` (15+) an optional one.
+ESM JavaScript with its type declarations, Node 20+; `zod` 4 is a peer dependency, `next` (15+) an optional one, and
+so is every library `clegra/ui` draws with (React, Base UI, lucide, recharts, React Native's…): an app that only serves
+MCP installs none of them.
 Not on npm yet: [docs/developers/RELEASE.md](../../docs/developers/RELEASE.md) says how the tarball is made, checked and
 (after the owner's yes) published.
 
@@ -19,7 +21,8 @@ Not on npm yet: [docs/developers/RELEASE.md](../../docs/developers/RELEASE.md) s
 | `clegra/node` | `listen(app)`: the app on Node's own HTTP server |
 | `clegra/testing` | `testClient(app)`: JSON-RPC to `app.fetch` with dev tokens; `installationClient(app)` for schedules, later runs and lifecycle tools |
 | `clegra/spec` | `checkApp`, `formatReport`: the conformance checks |
-| CLI | `npx clegra init [dir] [--dry-run]`; `npx clegra check <url> [--token …]` (or `CLEGRA_TOKEN`) |
+| `clegra/ui/...` | Clegra's design library: components for React and React Native, the theme, `<ClegraProvider>` for an app's own view (below) |
+| CLI | `npx clegra init [dir] [--ui] [--dry-run]`; `npx clegra check <url> [--token …]` (or `CLEGRA_TOKEN`) |
 
 ## Next.js: `npx clegra init`
 
@@ -206,15 +209,46 @@ const host = await installationClient(app)   // clegra/testing
 await host.schedule("digest"); await host.runLater(); const { file } = await host.exportData()
 ```
 
+## `clegra/ui`
+
+Clegra's components (shadcn's on Base UI for the web; the same names and props for React Native, SwiftUI through
+Expo UI on iOS where it has the control), the theme (light and dark) and `<ClegraProvider>` (an MCP Apps view that
+takes the host's look). Full guide: [docs/developers/ui.md](../../docs/developers/ui.md).
+
+```sh
+npx clegra init --ui && npm install   # the web UI libraries into package.json, clegra/ui's stylesheet after Tailwind
+```
+
+```css
+/* app/globals.css (Tailwind 4); without Tailwind: import "clegra/ui/prebuilt.css" in the root layout */
+@import "tailwindcss";
+@import "clegra/ui/styles.css";
+```
+
+```tsx
+import { Button } from "clegra/ui/components/button"   // web, or native under the react-native condition
+import { ClegraProvider } from "clegra/ui/frame"
+import { colorsFor } from "clegra/ui/tokens"
+```
+
+Entries: `clegra/ui/components/*`, `clegra/ui/react/*` and `clegra/ui/react-native/*` (one platform explicitly),
+`clegra/ui/base-ui/*`, `clegra/ui/hooks/*`, `clegra/ui/primitives`, `clegra/ui/frame`, `clegra/ui/tokens`,
+`clegra/ui/native/{theme,overlay,icons,icon-context}`, `clegra/ui/metro` (`withClegraUI` for Expo's Metro), and
+`clegra/ui/{styles,theme,shadcn,prebuilt}.css`. The components that are Clegra's own chrome (sidebar, menu bars, the
+chat's pieces, toasts…) are not published.
+
+shadcn's components in `ui/components/` stay as shadcn made them (`components.json` here). `ui/` imports nothing
+but its declared peer dependencies: the build refuses any other import.
+
 ## Tests
 
 ```sh
-npm test            # core + clegra/next unit tests
+npm test            # core + clegra/next + clegra/ui unit tests
 npx tsx --test "spec/src/**/*.test.ts"   # clegra init (fixture projects in temp folders)
 npm run test:next   # test/fixture with next dev (port 3942), then next build + next start (3943); clegra check through the rewrites
-npm run typecheck
-npm run build       # dist/ (git-ignored): what the tarball ships; npm pack builds it itself
-npm run pack:check  # slow: npm pack, then a fresh Next.js app outside the repository with the tarball (docs/developers/RELEASE.md)
+npm run typecheck   # src, spec, and ui/ (ui/tsconfig.json)
+npm run build       # dist/ (git-ignored): what the tarball ships, dist/ui included (scripts/ui.mjs); npm pack builds it itself
+npm run pack:check  # slow: npm pack, a Node-only app (no React), a fresh Next.js app with clegra/ui (docs/developers/RELEASE.md)
 ```
 
 In this repository the package exports its TypeScript source: the examples, Clegra and the tests import it through

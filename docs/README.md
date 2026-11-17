@@ -21,6 +21,7 @@ export default defineApp({ name, title, version, locale, auth, permissions, sett
 | [quickstart.md](quickstart.md) | Next.js in 5 minutes (`npx clegra init`), a day to ship; standalone Node; tests |
 | [kinds.md](kinds.md) | Kinds: when they pay off, third parties' dotted kinds, the promotion rule, what Clegra does with them |
 | [auth.md](auth.md) | Your sign-in as the authorization server, your `auth.resolve`: better-auth, Clerk, Auth0, WorkOS |
+| [ui.md](ui.md) | `clegra/ui`: Clegra's components (React, React Native), theme and frame provider; `npx clegra init --ui`, Tailwind 4, tokens |
 | [ai-guide.md](ai-guide.md) ([llms.txt](llms.txt)) | The single-file reference for coding agents |
 | [examples/crm.md](examples/crm.md) | A CRM: Next.js, better-auth, Drizzle; code in [`examples/apps/crm`](../../examples/apps/crm) |
 | [examples/warehouse.md](examples/warehouse.md) | A warehouse: Next.js, better-auth, plain SQL; code in [`examples/apps/warehouse`](../../examples/apps/warehouse) |
@@ -29,6 +30,6 @@ export default defineApp({ name, title, version, locale, auth, permissions, sett
 | [RELEASE.md](RELEASE.md) | What the `clegra` tarball ships, the pack check, the publish guard and publish day |
 
 **Status.** One package, [`packages/clegra`](../../packages/clegra) (`clegra`, MIT, not published yet):
-`clegra`, `clegra/next`, `clegra/node`, `clegra/testing`, `clegra/spec` and the CLI
-(`npx clegra init`, `npx clegra check <url>`). Unit tests, a real Next.js run and the conformance checks.
+`clegra`, `clegra/next`, `clegra/node`, `clegra/testing`, `clegra/spec`, the design library `clegra/ui/...`
+(its UI libraries are optional peers) and the CLI (`npx clegra init [--ui]`, `npx clegra check <url>`). Unit tests, a real Next.js run and the conformance checks.
 From the repository root: `npm run clegra:test`, `npm run clegra:crm`, `npm run clegra:check -- <url>`.

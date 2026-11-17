@@ -9,6 +9,7 @@ import { checkApp } from "../conformance"
 import { formatInit, InitError, runInit } from "./index"
 import { wrapNextConfig } from "./next-config"
 import { appNameOf, parseJsonc } from "./project"
+import { UI_IMPORT, webUiPeers } from "./ui"
 
 // clegra init on minimal fixture projects, each written into its own temp folder.
 
@@ -218,5 +219,44 @@ describe("the generated clegra.ts", () => {
     const { app: prod } = (await import(join(root, "clegra-production.ts"))) as { app: { fetch: (r: Request) => Promise<Response> } }
     const refused = await prod.fetch(new Request("https://tasks.example.test/mcp", { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }) }))
     assert.equal(refused.status, 401)
+  })
+})
+
+describe("clegra init --ui", () => {
+  const files = (extra: Record<string, string> = {}) => ({ "package.json": pkg({ devDependencies: { tailwindcss: "^4", "@tailwindcss/postcss": "^4" } }), "tsconfig.json": TSCONFIG, "next.config.ts": NEXT_TS, "app/layout.tsx": LAYOUT, ".gitignore": ".env*\n", ...extra })
+
+  test("the web UI's libraries are clegra's optional peers, without React Native's, React's, Tailwind's or the server's", () => {
+    const peers = webUiPeers()
+    for (const name of ["@base-ui/react", "lucide-react", "class-variance-authority", "cn"]) assert.ok(peers[name], name)
+    for (const name of ["react", "react-dom", "react-native", "@expo/ui", "zod", "next", "tailwindcss"]) assert.equal(peers[name], undefined, name)
+  })
+
+  test("Tailwind 4 in globals.css: clegra/ui's stylesheet after it, the libraries in dependencies, npm install next", () => {
+    const root = project(files({ "app/globals.css": '@import "tailwindcss";\n\nbody { margin: 0 }\n' }))
+    const result = runInit({ cwd: root, ui: true })
+    assert.ok(result.steps.some((s) => s.verb === "edit" && s.path === "package.json"))
+    assert.ok(result.steps.some((s) => s.verb === "edit" && s.path === "app/globals.css"))
+    assert.equal(read(root, "app/globals.css"), `@import "tailwindcss";\n${UI_IMPORT}\n\nbody { margin: 0 }\n`)
+    const deps = JSON.parse(read(root, "package.json")).dependencies as Record<string, string>
+    for (const [name, range] of Object.entries(webUiPeers())) assert.equal(deps[name], range, name)
+    assert.equal(deps.react, "19.2.0", "what was there stays")
+    assert.ok(result.next.some((n) => n.startsWith("npm install")))
+    // Run again: nothing more to do.
+    const again = runInit({ cwd: root, ui: true })
+    assert.deepEqual(again.steps.filter((s) => ["package.json", "app/globals.css"].includes(s.path)).map((s) => s.verb), ["skip", "skip"])
+  })
+
+  test("no Tailwind import, or no stylesheet: by hand, with both ways; --dry-run writes nothing", () => {
+    const plain = project(files({ "app/globals.css": "body { margin: 0 }\n" }))
+    const before = read(plain, "package.json")
+    const dry = runInit({ cwd: plain, ui: true, dryRun: true })
+    assert.equal(read(plain, "package.json"), before)
+    const step = dry.steps.find((s) => s.path === "app/globals.css")
+    assert.equal(step?.verb, "by hand")
+    assert.match(step?.how ?? "", /clegra\/ui\/styles\.css/)
+    assert.match(step?.how ?? "", /clegra\/ui\/prebuilt\.css/)
+    const none = project(files())
+    assert.equal(runInit({ cwd: none, ui: true }).steps.find((s) => s.path === "app/globals.css")?.verb, "by hand")
+    assert.match(formatInit(dry, true), /by hand\s+app\/globals\.css/)
   })
 })
