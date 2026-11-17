@@ -1,9 +1,26 @@
 # Changelog
 
-Clegra apps 1.0 and the `clegra` package (not published yet). Newest first. Entries older than the rename below keep
-the names of their time (the `modelapp` package, docs/map): they are history.
+Clegra apps (spec 1.0 draft) and the `clegra` package. Newest first. Versions before 1.0 are prereleases on the npm
+dist-tag `next`. Entries older than the rename below keep the names of their time (the `modelapp` package,
+docs/map): they are history.
 
-## Unreleased (1.0 draft)
+## 0.1.0-next.0 (2026-11-17)
+
+The first version published to npm (`npm i clegra@next`).
+
+### The package in its own repository
+
+- The package is its repository's root (published from there with `npm publish --tag next`); the examples
+  (`examples/crm`, `examples/warehouse`, `examples/shipments`) are npm workspaces beside it, the docs in `docs/`.
+  The tarball ships `docs/spec.md` and `docs/quickstart.md` too. History kept.
+- `clegra/ui`'s palette lives in `ui/brand` (the same values as before).
+- No `"private"` and no approved-tarball step: a prerelease is refused without a dist-tag (npm and `prepack`).
+
+### The publisher (spec §2)
+
+- Manifest `publisher?: { name, url }` (`defineApp({ publisher })`): who publishes the app, a name and an https
+  address. A claim that grants nothing; a store or host may verify it by the address's domain. Well-formedness is a
+  manifest rule (`manifest.references`); the JSON Schema has it.
 
 ### Pages people use every day, work on a clock, and the app lifecycle (spec §4.1, §4.2, §5.2, §10–§13)
 

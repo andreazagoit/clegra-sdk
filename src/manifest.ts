@@ -156,6 +156,11 @@ export const manifestSchema = z.object({
   version: z.string(),
   description: labelMap.optional(),
   icons: z.array(z.object({ src: z.string(), mimeType: z.string().optional(), sizes: z.array(z.string()).optional() })).optional(),
+  publisher: z
+    .object({ name: z.string().min(1).max(LIMITS.publisherName), url: z.string().max(LIMITS.publisherUrl).describe("The publisher's web address: an absolute https URL") })
+    .strict()
+    .optional()
+    .describe("Who publishes the app: a claim that grants nothing; a store or host may verify it by the address's domain"),
   locale: z.string(),
   mcp: z.object({ url: z.string() }).describe("The MCP endpoint (Streamable HTTP), relative to the manifest"),
   auth: z

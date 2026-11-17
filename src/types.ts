@@ -78,6 +78,8 @@ export type LifecycleConfig = {
 export type ScheduleConfig = { action: ActionHandle; every: number; maxSeconds?: number }
 
 /** A notification type (`notifications`): people mute it per app; `default: false` keeps it off until they turn it on. */
+/** Who publishes an app (manifest `publisher`, spec §2): a claim that grants nothing; a store may verify it by the url's domain. */
+export type Publisher = { name: string; url: string }
 export type NotificationTypeConfig = { label: Label; description?: Label; default?: boolean; permission?: string }
 
 /** A navigation section (`nav`): its label and its pages, in order. */

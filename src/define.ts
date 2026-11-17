@@ -7,7 +7,7 @@ import type { EmbedOptions } from "./embed"
 import type { Label } from "./labels"
 import { AppServer, type PeopleResolver } from "./server"
 import type { IdempotencyStore } from "./store"
-import type { ActionHandle, ActionResult, Confirm, Context, EntityHandle, Exposure, FragmentInstance, KindConfig, LaterConfig, LifecycleConfig, ListResult, PageConfig, PermissionConfig, Query, SettingConfig, Target, TemplateData, ViewSource, Visibility } from "./types"
+import type { ActionHandle, ActionResult, Confirm, Context, EntityHandle, Exposure, FragmentInstance, KindConfig, LaterConfig, LifecycleConfig, ListResult, PageConfig, PermissionConfig, Publisher, Query, SettingConfig, Target, TemplateData, ViewSource, Visibility } from "./types"
 
 /**
  * defineApp: THE authoring API (spec §1). One typed object holds the whole
@@ -172,6 +172,11 @@ export type AppDefinition<E extends Schemas, A extends Schemas, F extends Schema
   version: string
   description?: Label
   icons?: Icon[]
+  /**
+   * Who publishes the app (spec §2): a name and the publisher's web address (https). A claim, granting nothing: a
+   * store or host may verify it against the address's domain and show it as verified.
+   */
+  publisher?: Publisher
   /** The locale of bare-string labels and of tool names and descriptions (default `en`). */
   locale?: string
   /** MCP `instructions` for models. */

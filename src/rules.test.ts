@@ -37,6 +37,19 @@ test("a valid definition with every new key holds", () => {
   assert.equal(app.manifest().schedules!.length, 2)
 })
 
+test("publisher: a name and an https address, in the manifest as declared; it grants nothing", () => {
+  const publisher = { name: "Example Software Ltd", url: "https://example.com" }
+  assert.deepEqual(make({ pages, publisher })().manifest().publisher, publisher)
+  assert.equal(make({ pages })().manifest().publisher, undefined)
+  assert.throws(make({ pages, publisher: { name: "Example", url: "http://example.com" } }), /publisher: url "http:\/\/example.com" is not an absolute https address/)
+  assert.throws(make({ pages, publisher: { name: "Example", url: "example.com" } }), /publisher: url "example.com" is not an absolute https address/)
+  assert.throws(make({ pages, publisher: { name: "Example", url: "https://me:pw@example.com" } }), /publisher: url carries credentials/)
+  assert.throws(make({ pages, publisher: { name: " Example", url: "https://example.com" } }), /publisher: the name is empty or has spaces around it/)
+  assert.throws(make({ pages, publisher: { name: "", url: "https://example.com" } }), /publisher: the name is empty/)
+  assert.throws(make({ pages, publisher: { name: "Ex\u0007ample", url: "https://example.com" } }), /publisher: the name has control characters/)
+  assert.throws(make({ pages, publisher: { name: "x".repeat(101), url: "https://example.com" } }), /publisher: the name is longer than 100 characters/)
+})
+
 test("nav: pages that exist, no record page, each once, no empty section", () => {
   assert.throws(make({ pages, nav: [{ pages: ["nope"] }] }), /nav section 1: "nope" is not a page of this app/)
   assert.throws(make({ pages, nav: [{ pages: ["task"] }] }), /nav section 1: "task" is a record page/)

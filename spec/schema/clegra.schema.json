@@ -59,6 +59,27 @@
         "additionalProperties": false
       }
     },
+    "publisher": {
+      "description": "Who publishes the app: a claim that grants nothing; a store or host may verify it by the address's domain",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "url": {
+          "type": "string",
+          "maxLength": 300,
+          "description": "The publisher's web address: an absolute https URL"
+        }
+      },
+      "required": [
+        "name",
+        "url"
+      ],
+      "additionalProperties": false
+    },
     "locale": {
       "type": "string"
     },

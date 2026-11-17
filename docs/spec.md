@@ -38,6 +38,7 @@ JSON Schema: [`spec/schema/clegra.schema.json`](../spec/schema/clegra.schema.jso
 |---|---|
 | `specVersion` | `"1.0"` |
 | `name`, `title`, `version`, `description?`, `icons?`, `locale` | Identity. `name` is the app id: `[a-z][a-z0-9-]{1,39}` |
+| `publisher?` | `{ name, url }`: who publishes the app. `name` is the publisher's own name (1–100 characters, no spaces around it, no control characters), `url` its web address, an absolute `https` URL without credentials (at most 300 characters). A claim: it grants nothing. A store or host may verify it against the domain of `url` and show the app's publisher as verified; an unverified publisher is never shown as verified |
 | `mcp` | `{ url }`: the MCP endpoint (Streamable HTTP), relative to the manifest (`/mcp`, or under the app's path, `/api/clegra/mcp`). The manifest and the OAuth metadata are always under `/.well-known/` at the root |
 | `auth` | `{ resource?, authorizationServers }` (§7). `resource` is the app's own public MCP address: the only token audience it accepts |
 | `view` | The generated `ui://` view that draws lists, records, dashboards, fragments |
@@ -64,8 +65,8 @@ action, page or fragment tool takes them. The schedule and notification type
 `clegra_later` are the SDK's (§4.2). Identifiers of schedules and notification
 types match `[a-z][a-z0-9_]{0,39}`.
 
-The rules a manifest meets beyond its JSON Schema (§4.1, §4.2, §5.2, §6 rule
-11, §11, §12) are one piece of code, `spec/src/rules.ts`: the
+The rules a manifest meets beyond its JSON Schema (the publisher above, §4.1,
+§4.2, §5.2, §6 rule 11, §11, §12) are one piece of code, `spec/src/rules.ts`: the
 SDK runs it when the app is defined (a wrong name fails at start, naming its
 place: `page "x": …`) and the conformance check `manifest.references` (§8)
 runs it from outside.
@@ -794,7 +795,7 @@ npx clegra check https://crm.example.com --token <a plain caller's bearer>
 |---|---|
 | `manifest.served` | `GET /.well-known/clegra.json` answers 200 with JSON |
 | `manifest.schema` | the manifest validates against the JSON Schema |
-| `manifest.references` | names refer to things the manifest declares; tool names are unique and valid, none reserved; navigation, page actions, badges, app-only items, targets, `later`, schedules and notification types meet their rules (§4.1, §4.2, §5.2, §6 rule 11, §11, §12) |
+| `manifest.references` | names refer to things the manifest declares; tool names are unique and valid, none reserved; the publisher is well-formed (§2); navigation, page actions, badges, app-only items, targets, `later`, schedules and notification types meet their rules (§4.1, §4.2, §5.2, §6 rule 11, §11, §12) |
 | `auth.mcp` | without a token the endpoint answers 401 and points to protected-resource metadata, whose `resource` is the address the app was reached at (or the manifest's `auth.resource`) |
 | `mcp.initialize` | `initialize` succeeds with no extension |
 | `mcp.tools` | tools match the manifest: names, `readOnlyHint`, `destructiveHint`; nothing hidden is listed |

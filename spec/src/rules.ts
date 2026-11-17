@@ -1,5 +1,5 @@
 /**
- * THE MANIFEST'S RULES BEYOND ITS SCHEMA, IN ONE PLACE: navigation, page actions and badges, app-only items, schedules,
+ * THE MANIFEST'S RULES BEYOND ITS SCHEMA, IN ONE PLACE: the publisher, navigation, page actions and badges, app-only items, schedules,
  * notification types, targets, later runs and the reserved tools. The SDK runs them at definition time (a wrong name
  * fails when the app starts) and the conformance checks run them from outside (`manifest.references`), so the two
  * never disagree. Each problem names its place: `page "x": …`. No dependencies.
@@ -20,6 +20,8 @@ export const LIMITS = {
   laterWindow: { min: 10, max: 10080, default: 60 },
   /** How often the SDK's own later schedule runs, in minutes. */
   laterEvery: 5,
+  publisherName: 100,
+  publisherUrl: 300,
 } as const
 
 /** The fields of an email a target may need (`mail.message`). */
@@ -35,6 +37,7 @@ type InputSchema = { properties?: Record<string, { type?: unknown; format?: unkn
 
 /** What the rules read of a manifest (a subset of its shape). */
 export type RulesManifest = {
+  publisher?: { name: string; url: string }
   kinds?: Record<string, KindDef>
   entities: { name: string; tools: { list: ToolRef; get: ToolRef }; visibility?: string }[]
   actions: {
@@ -103,6 +106,23 @@ function targetProblems(where: string, t: NonNullable<RulesManifest["actions"][n
   return p
 }
 
+/** The publisher's problems: a name (trimmed, no control characters) and an absolute https URL with a host. */
+export function publisherProblems(publisher: { name: string; url: string }): string[] {
+  const p: string[] = []
+  const name = publisher.name
+  if (name.trim() !== name || !name.length) p.push("publisher: the name is empty or has spaces around it")
+  if (/[\u0000-\u001f\u007f]/.test(name)) p.push("publisher: the name has control characters")
+  if (name.length > LIMITS.publisherName) p.push(`publisher: the name is longer than ${LIMITS.publisherName} characters`)
+  let url: URL | null = null
+  try {
+    url = new URL(publisher.url)
+  } catch {}
+  if (!url || url.protocol !== "https:" || !url.hostname) p.push(`publisher: url "${publisher.url}" is not an absolute https address`)
+  else if (url.username || url.password) p.push("publisher: url carries credentials")
+  if (publisher.url.length > LIMITS.publisherUrl) p.push(`publisher: url is longer than ${LIMITS.publisherUrl} characters`)
+  return p
+}
+
 /** Every rule of the list above that doesn't hold, each naming its place. Empty: they all hold. */
 export function manifestRuleProblems(m: RulesManifest): string[] {
   const p: string[] = []
@@ -114,6 +134,9 @@ export function manifestRuleProblems(m: RulesManifest): string[] {
   // Reserved tools: the installation-level caller's, never an app's own.
   const tools = [...m.entities.flatMap((e) => [e.tools.list.name, e.tools.get.name]), ...m.actions.map((a) => a.tool.name), ...m.pages.filter((x) => x.kind !== "record").map((x) => x.tool.name), ...m.fragments.filter((f) => !f.entity).map((f) => f.tool.name)]
   for (const t of tools) if ((INSTALLATION_TOOLS as readonly string[]).includes(t)) p.push(`tool "${t}" is reserved (the installation's own tools)`)
+
+  // The publisher: a claim, well-formed (spec §2).
+  if (m.publisher) p.push(...publisherProblems(m.publisher))
 
   // Navigation.
   const seen = new Set<string>()

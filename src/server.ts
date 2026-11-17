@@ -33,6 +33,7 @@ import type {
   NotificationTypeConfig,
   PageConfig,
   PermissionConfig,
+  Publisher,
   Query,
   ScheduleConfig,
   SettingConfig,
@@ -74,6 +75,11 @@ export type ServerOptions = {
   version: string
   description?: Label
   icons?: Icon[]
+  /**
+   * Who publishes the app (spec §2): a name and the publisher's web address (https). A claim, granting nothing: a
+   * store or host may verify it against the address's domain and show it as verified.
+   */
+  publisher?: Publisher
   /** The locale of bare-string labels (default `en`). */
   locale?: string
   auth?: AuthOptions
@@ -2101,6 +2107,7 @@ export class AppServer {
       version: this.options.version,
       ...(this.options.description ? { description: L(this.options.description) } : {}),
       ...(this.options.icons ? { icons: this.options.icons } : {}),
+      ...(this.options.publisher ? { publisher: { name: this.options.publisher.name, url: this.options.publisher.url } } : {}),
       locale: this.locale,
       mcp: { url: `${this.#path}/mcp` },
       // The server's own address is what its tokens are for (never a name an app could claim): a host installs the app from it or not at all.

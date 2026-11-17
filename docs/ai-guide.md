@@ -63,6 +63,7 @@ export default defineApp({
   version: "1.0.0",
   description: "…",                  // optional
   icons: [{ src: "https://…/icon.png", sizes: ["128x128"], mimeType: "image/png" }], // optional
+  publisher: { name: "Example Software Ltd", url: "https://example.com" }, // optional: a claim (https); a store may verify it by the domain
   locale: "en",                      // language of bare strings and of tool names/descriptions (default "en")
   instructions: "…",                 // optional: MCP instructions for models
   websiteUrl: "https://…",           // optional

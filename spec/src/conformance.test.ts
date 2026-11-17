@@ -98,4 +98,14 @@ describe("conformance: app-only items and the installation's tools", () => {
     assert.match(c.detail!, /nav section 1: "nowhere" is not a page of this app/)
     assert.match(c.detail!, /actions with later need the schedule "clegra_later"/)
   })
+
+  test("a publisher that is not well-formed fails manifest.references; one that is passes", async () => {
+    const bad = byId(await run(makeApp(), (m) => void (m.publisher = { name: "Example", url: "http://example.com/about" })), "manifest.references")
+    assert.equal(bad.ok, false)
+    assert.match(bad.detail!, /publisher: url "http:\/\/example.com\/about" is not an absolute https address/)
+    const extra = byId(await run(makeApp(), (m) => void (m.publisher = { name: "Example", url: "https://example.com", verified: true })), "manifest.schema")
+    assert.equal(extra.ok, false, "publisher has exactly name and url")
+    const good = byId(await run(makeApp(), (m) => void (m.publisher = { name: "Example Software Ltd", url: "https://example.com" })), "manifest.references")
+    assert.equal(good.ok, true, good.detail)
+  })
 })
