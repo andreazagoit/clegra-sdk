@@ -19,7 +19,7 @@ export default defineApp({ name, title, version, locale, auth, permissions, sett
 |---|---|
 | [spec.md](spec.md) | The specification (normative, short) |
 | [quickstart.md](quickstart.md) | Next.js in 5 minutes (`npx clegra init`), a day to ship; standalone Node; tests |
-| [kinds.md](kinds.md) | Kinds: when they pay off, third parties' dotted kinds, the promotion rule, what Clegra does with them |
+| [kinds.md](kinds.md) | Kinds: when they pay off, third parties' dotted kinds, the promotion rule |
 | [auth.md](auth.md) | Your sign-in as the authorization server, your `auth.resolve`: better-auth, Clerk, Auth0, WorkOS |
 | [ui.md](ui.md) | `clegra/ui`: Clegra's components (React, React Native), theme and frame provider; `npx clegra init --ui`, Tailwind 4, tokens |
 | [ai-guide.md](ai-guide.md) ([llms.txt](llms.txt)) | The single-file reference for coding agents |

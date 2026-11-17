@@ -66,16 +66,3 @@ Promotion is additive: within one `specVersion` kinds and properties are only ad
 promoted kind gets an unprefixed name in `kinds.json` for the next spec version; apps keep their dotted kind until
 they move, and hosts treat the two as different kinds until then (no aliases).
 
-## What Clegra does with kinds today
-
-- **Names**: an app's `name` is unique in a workspace; when it's taken the administrator gives it another at install,
-  and Clegra translates record URIs between the workspace name and the app's own on every call (spec §9.1). The name
-  can't change after install: other apps keep URIs that carry it.
-- **Fan-out**: every source of a kind is asked in parallel with the viewer's own token, 3 seconds each, one event per
-  source; every source is named with its state (`ok`, `timeout`, `error`, `no-access`, `not-linked`); the list is
-  partial unless all are ok; merged order only by a property every source sorts by.
-- **References**: resolved by the owning app for each viewer: a title, or `no-access`, `gone`, `unreachable`,
-  `unknown-app` — never a remembered title.
-- **«Also in»** on a record page: records of other apps with an equal key, side by side, worded as a shared key; a
-  person may state «same» / «not the same» (stored as two URIs, who and when, shown only when both resolve for the viewer).
-- **The workspace's own people** are a `person` source like any app.
