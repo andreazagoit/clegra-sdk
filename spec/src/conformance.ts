@@ -1,6 +1,6 @@
-import { readFileSync } from "node:fs"
-
 import { Ajv2020 } from "ajv/dist/2020.js"
+
+import schemaJson from "../schema/clegra.schema.json" with { type: "json" }
 
 import { entityKindProblems, keyOf, RECORD_URI, kindDefinitionProblems, kindNameProblem, kindOfRecord, kindSentence, kindsOf, normaliseKey, propertyOf, valueProblem, type EntityKind, type KindDef, type KindField } from "./kinds"
 import { EMBED_EXCHANGE_SEGMENT, EMBED_TICKET_SECONDS, EMBED_TICKET_TYPE, INSTALLATION_TOOLS, LATER_TOOL, MANIFEST_PATH, META_KEY, PROTOCOL_ID, URI_SCHEME } from "./protocol"
@@ -17,7 +17,8 @@ import { appOnlyTools, manifestRuleProblems, type RulesManifest } from "./rules"
 export { MANIFEST_PATH }
 export const MCP_APP_MIME_TYPE = "text/html;profile=mcp-app"
 
-export const manifestSchema = JSON.parse(readFileSync(new URL("../schema/clegra.schema.json", import.meta.url), "utf8")) as Record<string, unknown>
+// A JSON import, not a file read by path: bundlers (Next.js, Turbopack) then ship the schema with the module.
+export const manifestSchema = schemaJson as Record<string, unknown>
 
 export type Check = { id: string; title: string; ok: boolean; detail?: string; skipped?: boolean }
 /** `ok`: no check failed. `complete`: every check ran (false when the MCP checks were skipped for lack of a token). Conformant = both. */
