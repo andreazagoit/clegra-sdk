@@ -272,6 +272,7 @@
     "dist",
     "docs/spec.md",
     "docs/quickstart.md",
+    "!docs/README.md",
     "README.md",
     "LICENSE",
     "NOTICE.md",

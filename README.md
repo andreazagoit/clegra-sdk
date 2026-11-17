@@ -233,7 +233,7 @@ import { colorsFor } from "clegra/ui/tokens"
 
 Entries: `clegra/ui/components/*`, `clegra/ui/react/*` and `clegra/ui/react-native/*` (one platform explicitly),
 `clegra/ui/base-ui/*`, `clegra/ui/hooks/*`, `clegra/ui/primitives`, `clegra/ui/frame`, `clegra/ui/tokens`,
-`clegra/ui/native/{theme,overlay,icons,icon-context}`, `clegra/ui/metro` (`withClegraUI` for Expo's Metro), and
+`clegra/ui/native/{theme,overlay,icons,icon-context,expo-ui-controls}`, `clegra/ui/metro` (`withClegraUI` for Expo's Metro), and
 `clegra/ui/{styles,theme,shadcn,prebuilt}.css`. The components that are Clegra's own chrome (sidebar, menu bars, the
 chat's pieces, toasts…) are not published.
 

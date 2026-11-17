@@ -15,6 +15,8 @@ The first version published to npm (`npm i clegra@next`).
   The tarball ships `docs/spec.md` and `docs/quickstart.md` too. History kept.
 - `clegra/ui`'s palette lives in `ui/brand` (the same values as before).
 - No `"private"` and no approved-tarball step: a prerelease is refused without a dist-tag (npm and `prepack`).
+- `clegra/ui/native/expo-ui-controls` is an entry: `ExpoHost` (Expo UI's `Host` in the app's colour scheme) and the
+  layout helpers the native controls share.
 
 ### The publisher (spec §2)
 
