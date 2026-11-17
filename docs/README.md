@@ -29,6 +29,6 @@ export default defineApp({ name, title, version, locale, auth, permissions, sett
 | [CHANGELOG.md](../CHANGELOG.md) | What changed in 1.0 and the `@clegra/sdk` package |
 | [RELEASE.md](RELEASE.md) | What the `@clegra/sdk` tarball ships, the pack check, the publish guard and publish day |
 
-**Status.** One package, `@clegra/sdk` (MIT, this repository's root; `0.1.0-next.0`, published with the dist-tag `next`):
+**Status.** One package, `@clegra/sdk` (MIT, this repository's root; `0.1.0-next.1`, published with the dist-tag `next`):
 `@clegra/sdk`, `@clegra/sdk/next`, `@clegra/sdk/node`, `@clegra/sdk/testing`, `@clegra/sdk/spec` and the CLI (`npx @clegra/sdk init [--ui]`, `npx @clegra/sdk check <url>`). Unit tests, a real Next.js run and the conformance checks.
 From the repository root: `npm test`, `npm run test:all`, `npm run dev -w clegra-example-crm`, `npm run clegra:check -- <url>`.

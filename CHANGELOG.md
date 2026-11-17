@@ -4,6 +4,12 @@ Clegra apps (spec 1.0 draft) and the `@clegra/sdk` package. Newest first. Versio
 npm dist-tag `next`. Entries below «Two scoped packages» keep the names of their time (the unscoped `clegra` package
 and its `clegra/ui`, the `modelapp` package, docs/map): they are history.
 
+## 0.1.0-next.1 (2026-11-17)
+
+- `@clegra/sdk/spec` works inside a bundled Next.js server (Turbopack): the manifest's JSON Schema is a JSON import,
+  no longer a file read by a path relative to `import.meta.url` (which the bundler turned into an asset URL that
+  `readFileSync` refused, failing `next build` of any app importing the conformance checks).
+
 ## 0.1.0-next.0 (2026-11-17)
 
 The first version published to npm (`npm i @clegra/sdk@next zod`).
@@ -22,9 +28,6 @@ The first version published to npm (`npm i @clegra/sdk@next zod`).
 - `@clegra/sdk/spec/protocol` and `@clegra/sdk/spec/kinds`: the protocol's names and the kinds vocabulary (with
   the key normalisation) for workspace hosts, which until now reached them only by a path into the source. Neither
   imports a Node built-in.
-- `@clegra/sdk/spec` works inside a bundled Next.js server (Turbopack): the manifest's JSON Schema is a JSON import,
-  no longer a file read by a path relative to `import.meta.url` (which the bundler turned into an asset URL that
-  `readFileSync` refused, failing `next build` of any app importing the conformance checks).
 - `publishConfig.access: public`. The pack check also installs both tarballs in one fresh Next.js app
   (`init --ui`, build, `clegra check`).
 
