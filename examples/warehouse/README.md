@@ -130,7 +130,9 @@ person then goes through these steps:
    - optionally `CLEGRA_ISSUERS`: workspace hosts (e.g. a Clegra node) whose tokens are
      accepted, as `issuer|jwksUri`, comma-separated. Each installation gets its own copy of the
      demo data
-3. Deploy, then run the token script and `clegra check` against the public URL.
+3. Deploy (Vercel builds from the repository: the example is an npm workspace and uses `clegra` from the
+   repository root), or build here and upload: `examples/deploy.sh warehouse` with `VERCEL_ORG_ID` and
+   `VERCEL_WAREHOUSE_PROJECT_ID` set. Then run the token script and `clegra check` against the public URL.
 
 Nothing is written to disk at runtime: sessions, OAuth clients, signing keys, rate limits and
 the SDK's idempotency store (`clegra_store`, also the used embed tickets) all live in Postgres. `/embed/*` pages may be
