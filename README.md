@@ -21,6 +21,7 @@ says how the tarball is made, checked and published.
 | `@clegra/sdk/node` | `listen(app)`: the app on Node's own HTTP server |
 | `@clegra/sdk/testing` | `testClient(app)`: JSON-RPC to `app.fetch` with dev tokens; `installationClient(app)` for schedules, later runs and lifecycle tools |
 | `@clegra/sdk/spec` | `checkApp`, `formatReport`: the conformance checks |
+| `@clegra/sdk/spec/protocol`, `@clegra/sdk/spec/kinds` | For workspace hosts: the protocol's names (manifest path, URI scheme, `_meta` key, token claim, reserved tools, embed exchange) and the kinds vocabulary with its key normalisation (`KINDS`, `keyOf`, `normaliseKey`, `kindOfRecord`, …). No Node built-ins: safe in a browser bundle |
 | CLI | `npx @clegra/sdk init [dir] [--ui] [--dry-run]`; `npx @clegra/sdk check <url> [--token …]` (or `CLEGRA_TOKEN`) |
 
 ## Next.js: `npx @clegra/sdk init`

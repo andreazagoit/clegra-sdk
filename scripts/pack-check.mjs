@@ -12,7 +12,7 @@
 //    `npx @clegra/sdk init`; `next dev` + `npx @clegra/sdk check --token <the local bearer>`, then `next build` +
 //    `next start` + `npx @clegra/sdk check` without a token (the local bearer is refused in production). A fresh app
 //    fails exactly one check, `auth.mcp` (no authorization server yet: the quickstart).
-// 4. A plain Node ESM script importing @clegra/sdk, /node, /testing, /spec, /next (and the JSON exports), running an
+// 4. A plain Node ESM script importing @clegra/sdk, /node, /testing, /spec, /spec/protocol, /spec/kinds, /next (and the JSON exports), running an
 //    app through testClient.
 // 5. tsc on TypeScript files importing every entry, with `moduleResolution` bundler and node16.
 // 6. BOTH packages: a fresh Next.js app with Tailwind 4, the @clegra/sdk tarball and the @clegra/ui one (--ui, default
@@ -280,6 +280,8 @@ writeFileSync(
 import { listen } from "@clegra/sdk/node"
 import { testClient } from "@clegra/sdk/testing"
 import { checkApp, formatReport } from "@clegra/sdk/spec"
+import { MANIFEST_PATH, URI_SCHEME } from "@clegra/sdk/spec/protocol"
+import { KINDS as SPEC_KINDS, normaliseKey } from "@clegra/sdk/spec/kinds"
 import { withClegra, toNextHandlers } from "@clegra/sdk/next"
 import { createRequire } from "node:module"
 import { z } from "zod"
@@ -293,7 +295,7 @@ const app = defineApp({
 })
 const client = await testClient(app)
 const tools = await client.listTools()
-const out = { spec: SPEC_VERSION, kinds: Object.keys(KINDS).length > 0, store: typeof MemoryStore, listen: typeof listen, checkApp: typeof checkApp, formatReport: typeof formatReport, next: typeof withClegra + typeof toNextHandlers, schema: typeof schema.$schema, kindsJson: typeof kinds, tools: tools.map((t) => t.name).sort() }
+const out = { spec: SPEC_VERSION, kinds: Object.keys(KINDS).length > 0, store: typeof MemoryStore, listen: typeof listen, checkApp: typeof checkApp, formatReport: typeof formatReport, next: typeof withClegra + typeof toNextHandlers, schema: typeof schema.$schema, kindsJson: typeof kinds, host: MANIFEST_PATH === "/.well-known/clegra.json" && URI_SCHEME === "clegra" && SPEC_KINDS === KINDS && typeof normaliseKey === "function", tools: tools.map((t) => t.name).sort() }
 console.log(JSON.stringify(out))
 `,
 )
@@ -302,7 +304,7 @@ let esmOut = null
 try {
   esmOut = JSON.parse(esm.stdout.trim().split("\n").pop())
 } catch {}
-expect(esm.status === 0 && esmOut?.tools?.includes("note_list") && esmOut.checkApp === "function" && esmOut.listen === "function" && esmOut.schema === "string", `plain Node ESM imports every entry and runs an app${esm.status !== 0 || !esmOut ? `:\n${esm.stdout}${esm.stderr}` : ""}`)
+expect(esm.status === 0 && esmOut?.tools?.includes("note_list") && esmOut.checkApp === "function" && esmOut.listen === "function" && esmOut.schema === "string" && esmOut.host === true, `plain Node ESM imports every entry and runs an app${esm.status !== 0 || !esmOut ? `:\n${esm.stdout}${esm.stderr}` : ""}`)
 
 // ------------------------------------------------------------ 5. TypeScript consumers
 // next.ts: every entry, as an app's code imports them (skipLibCheck on, as in every Next app: Next's own .d.ts
@@ -312,10 +314,13 @@ const core = `import { defineApp, type App, type ResolvedCaller, type Manifest }
 import { listen } from "@clegra/sdk/node"
 import { testClient } from "@clegra/sdk/testing"
 import { checkApp, type Report } from "@clegra/sdk/spec"
+import { MANIFEST_PATH } from "@clegra/sdk/spec/protocol"
+import { keyOf, type Normalisation } from "@clegra/sdk/spec/kinds"
 import { z } from "zod"
 export const app: App = defineApp({ name: "probe", title: "Probe", version: "1.0.0", auth: { resolve: async (): Promise<ResolvedCaller | null> => null }, entities: {} })
 export const manifest: Manifest = app.manifest()
-export const fns = [listen, testClient, checkApp] as const
+export const fns = [listen, testClient, checkApp, keyOf] as const
+export const host: { path: string; how: Normalisation } = { path: MANIFEST_PATH, how: "exact" }
 export type CheckReport = Report
 export const s = z.string()
 `

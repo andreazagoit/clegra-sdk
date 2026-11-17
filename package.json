@@ -29,6 +29,8 @@
     "./node": "./src/node.ts",
     "./testing": "./src/testing.ts",
     "./spec": "./spec/src/conformance.ts",
+    "./spec/protocol": "./spec/src/protocol.ts",
+    "./spec/kinds": "./spec/src/kinds.ts",
     "./clegra.schema.json": "./spec/schema/clegra.schema.json",
     "./kinds.json": "./spec/kinds.json",
     "./package.json": "./package.json"

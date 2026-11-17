@@ -15,6 +15,7 @@ The package is this repository's root. Versions before 1.0 are prereleases on th
   repository's package.json back: npm re-reads package.json after packing and uploads that as the version's
   metadata, so it must still be the published one at that moment. `dist/` is git-ignored.
 - Entries: `@clegra/sdk`, `@clegra/sdk/next`, `@clegra/sdk/node`, `@clegra/sdk/testing`, `@clegra/sdk/spec`,
+  `@clegra/sdk/spec/protocol`, `@clegra/sdk/spec/kinds`,
   `@clegra/sdk/clegra.schema.json`, `@clegra/sdk/kinds.json`, `@clegra/sdk/package.json`; the CLI `clegra`
   (`npx @clegra/sdk check`, `npx @clegra/sdk init [--ui]`).
 - Dependencies: `@modelcontextprotocol/server`, `ajv`, `jose`. Peers: `zod` 4 and `next` 15+ (optional: only

@@ -19,6 +19,9 @@ The first version published to npm (`npm i @clegra/sdk@next zod`).
   with every component public. `@clegra/sdk` has no UI entry and no UI peer dependency (peers: `zod`, optional
   `next`); the generated MCP Apps view is plain HTML. `init --ui` adds `@clegra/ui` (`^0.1.0-next.0`) and its web
   libraries to the app and `@import "@clegra/ui/styles.css"` after Tailwind.
+- `@clegra/sdk/spec/protocol` and `@clegra/sdk/spec/kinds`: the protocol's names and the kinds vocabulary (with
+  the key normalisation) for workspace hosts, which until now reached them only by a path into the source. Neither
+  imports a Node built-in.
 - `publishConfig.access: public`. The pack check also installs both tarballs in one fresh Next.js app
   (`init --ui`, build, `clegra check`).
 
