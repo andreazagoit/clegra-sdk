@@ -1,6 +1,6 @@
 # The reference app: a CRM
 
-> Non-normative. Runnable code: [`examples/apps/crm`](../../../examples/apps/crm). Invented data.
+> Non-normative. Runnable code: [`examples/crm`](../../examples/crm). Invented data.
 
 A small sales team's CRM — **companies**, **contacts**, **deals**, **calls** — built the way a developer
 already builds a web app: Next.js (App Router), its own sign-in (better-auth: email + password,
@@ -77,7 +77,7 @@ Both are just values of `org_id`; `tenants` records which kind each one is.
 ## Run it
 
 ```sh
-cd examples/apps/crm
+cd examples/crm
 npm run setup     # .env.local with generated secrets (if missing), migrations, demo data
 npm run dev       # http://localhost:3920 — «Enter as Alice Morgan (sales manager)» on /sign-in
 npm test          # lib + Clegra app tests on in-memory PGlite

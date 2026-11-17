@@ -4,7 +4,7 @@ import { z } from "zod"
 import { CourierError, PICKUP_STATUSES, SHIPMENT_STATUSES, createCourier, type Courier, type Pickup } from "./courier"
 
 /**
- * SHIPMENTS AS A CLEGRA APP (docs/developers/spec.md): a courier's shipments
+ * SHIPMENTS AS A CLEGRA APP (docs/spec.md): a courier's shipments
  * and pickups, as one defineApp object, which the SDK turns into the manifest
  * for workspace hosts (a Clegra node) and a plain MCP server for ChatGPT,
  * Claude and any MCP client.

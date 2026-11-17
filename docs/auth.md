@@ -53,14 +53,14 @@ Each recipe says how far it was verified. None of them is a package: copy the co
 
 | Recipe | Verified |
 |---|---|
-| [better-auth](#a-better-auth) | Tested in this repo's examples (better-auth 1.7.7, `examples/apps/crm/clegra/auth.ts`) |
+| [better-auth](#a-better-auth) | Tested in this repo's examples (better-auth 1.7.7, `examples/crm/clegra/auth.ts`) |
 | [Clerk](#b-clerk) | From Clerk's docs on 2026-11-15, not run here |
 | [Auth0](#c-auth0) | From Auth0's docs on 2026-11-15, not run here |
 | [WorkOS AuthKit](#d-workos-authkit) | From WorkOS's docs on 2026-11-15, not run here |
 
 ### (a) better-auth
 
-*Tested in this repo's examples:* the CRM (`examples/apps/crm/lib/auth-options.ts`, `clegra/auth.ts`) passes
+*Tested in this repo's examples:* the CRM (`examples/crm/lib/auth-options.ts`, `clegra/auth.ts`) passes
 `clegra check` with a token from the real OAuth flow.
 
 better-auth 1.7.7 has no built-in MCP plugin. Use `@better-auth/mcp` (authorization server), `jwt` (signed access

@@ -8,9 +8,9 @@ invented data **in memory** (`MemoryStore` for writes, `src/courier.ts` for the
 data): a restart starts again from the seed. So it has no database, no
 migrations, no re-key script and no Docker image; a real courier app would
 keep the same definition and put `SqlStore` and its own tables behind it, as
-`apps/erp` does.
+the CRM and warehouse examples do.
 
-It is also the **in-process fixture of the host's tests** (below).
+It is also an **in-process fixture for a workspace host's tests** (below).
 
 | File | What it is |
 |---|---|
@@ -108,8 +108,8 @@ npm run typecheck
 
 ## The fixture for host tests
 
-`src/fixture.ts` (also importable as `clegra-example-shipments/fixture`, once
-the workspace is in the lock):
+`src/fixture.ts` (also importable as `clegra-example-shipments/fixture` inside
+this repository's workspace):
 
 | Export | What it is |
 |---|---|
@@ -137,42 +137,3 @@ const host = await installationClient(app, { installation: "test", permissions: 
 const run = await host.schedule("delivery_check", SHIPMENTS_SETTINGS) // _meta.clegra.notifications: one «delivered»
 ```
 
-### Host tests still on the old fixture (to switch)
-
-The format-3 example (`examples/plugin-spedizioni`) and fixture
-(`spedizioniManifest`, `startReferenceApp` in `packages/plugin-spec`) are still
-imported here; a later phase points them at this fixture and removes the old
-ones:
-
-| File | Uses |
-|---|---|
-| `apps/node/tests/app-setup.test.ts` | `manifest` from `examples/plugin-spedizioni/src/manifest` (with format-3 `settings`/`setup` added) |
-| `apps/client/e2e/plugins.spec.ts` | `manifest` and `startSpedizioniServer` / `SpedizioniServer` from `examples/plugin-spedizioni/src/{manifest,server}` (a format-3 server on a port, node keys) |
-| `apps/node/lib/store/store-fixtures.ts` | `spedizioniManifest` from `@brain/modules/plugin-check`, as a `HostApp`; used by `apps/node/lib/store/install-rules.test.ts` and `apps/node/tests/store-catalog.test.ts` |
-| `apps/node/tests/kernel.test.ts`, `apps/node/tests/kernel-lifecycle.test.ts` | `startReferenceApp` / `RunningReferenceApp` from `packages/plugin-spec/src/testing` (the format-3 reference server built on `spedizioniManifest`) |
-| `apps/core/tests/store-publishing.test.ts` | `startReferenceApp` and `spedizioniManifest` from `@brain/modules/plugin-check` |
-| `apps/core/scripts/store-example.ts` | `spedizioniManifest` and `startReferenceApp` from `@brain/modules/plugin-check` (a script, not a test) |
-| `packages/modules/store-publishing.test.ts` | `spedizioniManifest` from `../plugin-spec/src/reference-app` |
-| `packages/modules/plugin-check.ts` | re-exports `spedizioniManifest` (and `startReferenceApp`) for the above |
-
-Other mentions of the old example, not tests: the root `README.md` (examples
-table), `docker-compose.test.yml` (a comment on port 4319), `docs/APP-CONTRACT.md`,
-`docs/PACKAGES.md`, `docs/PLUGINS.md`, `docs/PUBLISHING.md`, `docs/RETIREMENT.md`
-(E5), `scripts/packages/{audit-tree,scope}.mjs`, `scripts/sdk-repo/{README.md,package.json}`,
-`scripts/sync-sdk.sh`; `CHANGELOG.md` and `docs/archive/ROADMAP.md` are history.
-
-## What the old example had and Clegra apps have not
-
-| Old (`examples/plugin-spedizioni`) | Here |
-|---|---|
-| `spedizioni_list` with a `stato` filter | `shipment_list` (derived), `status` a filter field |
-| `spedizioni_find` (search), `spedizioni_resolve` | Derived `search` / `fetch` and `clegra_resolve` |
-| `spedizioni_book_pickup`, `confirmation: always` | `book_pickup`, `confirm: "always"` (plus `cancel_pickup`, new) |
-| Fragment types `shipment`, `pickup` with roles | Entities with field roles; the card is the record's |
-| The `share` permission (snapshot of a shipment) | **Dropped** (snapshots of app records are gone, decision B9) |
-| Notifications `delivered`, `late` pushed through `/host/v1` | Typed notifications from the `delivery_check` schedule, to `{ permission }` |
-| Event `spedizioni.delivered` emitted to automations | **Dropped** (events are gone, B12): an automation reads `shipment_list` with `status: "delivered"` (and `deliveredOn` on the record) instead |
-| Subscription to `person.removed` | **Dropped** (B12); it only recorded the id and changed nothing visible |
-| `data` declaration (region, sub-processors, retention), `runtime`, `pricing`, `publisher` | **Not in the manifest**: the store listing carries them (B10) |
-| `/clegra/v1/install`, health, export and delete endpoints with a receipt | Host-only install; health is the MCP handshake; `clegra_export` and `clegra_delete` (no signed receipt) |
-| `CLEGRA_NODE_KEYS` (pinned node keys) | `CLEGRA_ISSUERS` + `SHIPMENTS_PUBLIC_URL` (issuer keys, audience-bound tokens) |

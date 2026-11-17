@@ -1,7 +1,7 @@
 # Clegra apps
 
 > Draft 1.0 (2026-11-14). Clegra apps are Clegra's developer platform: **apps that Clegra draws natively and that are also plain MCP servers**, built with the package `clegra`.
-> The names they carry on the wire (`clegra`: the manifest path, the URI scheme, the `_meta` key, the token claim, the OAuth scope) are defined in one file, [`packages/clegra/spec/src/protocol.ts`](../../packages/clegra/spec/src/protocol.ts).
+> The names they carry on the wire (`clegra`: the manifest path, the URI scheme, the `_meta` key, the token claim, the OAuth scope) are defined in one file, [`spec/src/protocol.ts`](../spec/src/protocol.ts).
 
 You describe an app once, as **one typed object**: entities, actions, pages,
 fragments, agents, permissions, settings. From it you get
@@ -23,13 +23,13 @@ export default defineApp({ name, title, version, locale, auth, permissions, sett
 | [auth.md](auth.md) | Your sign-in as the authorization server, your `auth.resolve`: better-auth, Clerk, Auth0, WorkOS |
 | [ui.md](ui.md) | `clegra/ui`: Clegra's components (React, React Native), theme and frame provider; `npx clegra init --ui`, Tailwind 4, tokens |
 | [ai-guide.md](ai-guide.md) ([llms.txt](llms.txt)) | The single-file reference for coding agents |
-| [examples/crm.md](examples/crm.md) | A CRM: Next.js, better-auth, Drizzle; code in [`examples/apps/crm`](../../examples/apps/crm) |
-| [examples/warehouse.md](examples/warehouse.md) | A warehouse: Next.js, better-auth, plain SQL; code in [`examples/apps/warehouse`](../../examples/apps/warehouse) |
-| [`packages/clegra/spec`](../../packages/clegra/spec) | The manifest's JSON Schema and the conformance checks, independent of the SDK |
-| [CHANGELOG.md](CHANGELOG.md) | What changed in 1.0 and the `clegra` package |
+| [examples/crm.md](examples/crm.md) | A CRM: Next.js, better-auth, Drizzle; code in [`examples/crm`](../examples/crm) |
+| [examples/warehouse.md](examples/warehouse.md) | A warehouse: Next.js, better-auth, plain SQL; code in [`examples/warehouse`](../examples/warehouse) |
+| [`spec`](../spec) | The manifest's JSON Schema and the conformance checks, independent of the SDK |
+| [CHANGELOG.md](../CHANGELOG.md) | What changed in 1.0 and the `clegra` package |
 | [RELEASE.md](RELEASE.md) | What the `clegra` tarball ships, the pack check, the publish guard and publish day |
 
-**Status.** One package, [`packages/clegra`](../../packages/clegra) (`clegra`, MIT, not published yet):
+**Status.** One package, `clegra` (MIT, this repository's root; `0.1.0-next.0`, published with the dist-tag `next`):
 `clegra`, `clegra/next`, `clegra/node`, `clegra/testing`, `clegra/spec`, the design library `clegra/ui/...`
 (its UI libraries are optional peers) and the CLI (`npx clegra init [--ui]`, `npx clegra check <url>`). Unit tests, a real Next.js run and the conformance checks.
-From the repository root: `npm run clegra:test`, `npm run clegra:crm`, `npm run clegra:check -- <url>`.
+From the repository root: `npm test`, `npm run test:all`, `npm run dev -w clegra-example-crm`, `npm run clegra:check -- <url>`.

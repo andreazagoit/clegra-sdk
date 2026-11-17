@@ -9,8 +9,8 @@ const here = dirname(fileURLToPath(import.meta.url))
 const nextConfig: NextConfig = {
   // PGlite (local development database only) ships WebAssembly and data files: loaded by Node as is, never bundled.
   serverExternalPackages: ["@electric-sql/pglite"],
-  // The monorepo root, where node_modules is.
-  turbopack: { root: join(here, "../../..") },
+  // The repository root, where node_modules is (and clegra itself).
+  turbopack: { root: join(here, "../..") },
   // No generated AGENTS.md in the project.
   agentRules: false,
   // No page may be framed, except the embedded ones (/embed/*: their frame-ancestors come from proxy.ts), so sign-in

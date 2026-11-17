@@ -2,7 +2,7 @@
 
 The package Clegra apps are built with. MIT. You write one typed object, `defineApp({ entities, actions, pages,
 fragments, agents, … })`. It becomes a plain, conformant MCP server (tools, MCP Apps views, OAuth) for ChatGPT, Claude
-and any MCP client, and a JSON manifest Clegra reads to draw the app natively in its workspace. Spec: [docs/developers/spec.md](../../docs/developers/spec.md).
+and any MCP client, and a JSON manifest Clegra reads to draw the app natively in its workspace. Spec: [docs/spec.md](docs/spec.md).
 
 ```sh
 npm i clegra zod
@@ -11,8 +11,8 @@ npm i clegra zod
 ESM JavaScript with its type declarations, Node 20+; `zod` 4 is a peer dependency, `next` (15+) an optional one, and
 so is every library `clegra/ui` draws with (React, Base UI, lucide, recharts, React Native's…): an app that only serves
 MCP installs none of them.
-Not on npm yet: [docs/developers/RELEASE.md](../../docs/developers/RELEASE.md) says how the tarball is made, checked and
-(after the owner's yes) published.
+Versions before 1.0 are prereleases on the dist-tag `next` (`npm i clegra@next zod`); [docs/RELEASE.md](docs/RELEASE.md)
+says how the tarball is made, checked and published.
 
 | Entry | What |
 | --- | --- |
@@ -30,7 +30,7 @@ In an existing App Router app, `npx clegra init` writes the three files below an
 random local bearer in `.env.local` (`CLEGRA_LOCAL_TOKEN`), which the generated `resolve` accepts only when
 `NODE_ENV` isn't `production`. It never overwrites a file, prints what it can't edit safely, and `--dry-run` writes
 nothing. Then `npm run dev` and `npx clegra check http://localhost:3000 --token <CLEGRA_LOCAL_TOKEN>`.
-See [docs/developers/quickstart.md](../../docs/developers/quickstart.md).
+See [docs/quickstart.md](docs/quickstart.md).
 
 ## Next.js: three files
 
@@ -123,7 +123,7 @@ The app verifies its own access tokens: those its sign-in (better-auth, Clerk, A
 - `auth.authorizationServers` names your authorization server in the protected-resource metadata.
 - `auth.serve(request)` can answer its RFC 8414 metadata at the root.
 
-Recipes for better-auth, Clerk, Auth0 and WorkOS: [docs/developers/auth.md](../../docs/developers/auth.md).
+Recipes for better-auth, Clerk, Auth0 and WorkOS: [docs/auth.md](docs/auth.md).
 
 Dev sign-in (`auth.dev`) answers loopback callers only. A Next route handler can't know the caller's address:
 `x-forwarded-for` is whatever the client sent. So `toNextHandlers` refuses an app with `auth.dev`. Locally,
@@ -213,7 +213,7 @@ await host.schedule("digest"); await host.runLater(); const { file } = await hos
 
 Clegra's components (shadcn's on Base UI for the web; the same names and props for React Native, SwiftUI through
 Expo UI on iOS where it has the control), the theme (light and dark) and `<ClegraProvider>` (an MCP Apps view that
-takes the host's look). Full guide: [docs/developers/ui.md](../../docs/developers/ui.md).
+takes the host's look). Full guide: [docs/ui.md](docs/ui.md).
 
 ```sh
 npx clegra init --ui && npm install   # the web UI libraries into package.json, clegra/ui's stylesheet after Tailwind
@@ -240,17 +240,30 @@ chat's pieces, toasts…) are not published.
 shadcn's components in `ui/components/` stay as shadcn made them (`components.json` here). `ui/` imports nothing
 but its declared peer dependencies: the build refuses any other import.
 
-## Tests
+## This repository
+
+The package is the repository's root, so it is published from here (`npm publish --tag next`, [docs/RELEASE.md](docs/RELEASE.md)).
+
+| Path | What | In the tarball |
+| --- | --- | --- |
+| `src/` | `clegra`, `clegra/next`, `clegra/node`, `clegra/testing` | built, as `dist/src` |
+| `spec/` | `clegra/spec` (conformance checks), the CLI, `clegra init`, the manifest's JSON Schema, `kinds.json` | built, as `dist/spec` |
+| `ui/` | `clegra/ui`: components (React, React Native), theme (`ui/brand`: the palette), frame provider, Metro | built, as `dist/ui` |
+| `docs/` | The specification, quickstart, guides, release steps | `docs/spec.md` and `docs/quickstart.md` only |
+| `examples/` | `crm` and `warehouse` (Next.js), `shipments` (Node): npm workspaces of this repository using `clegra` as `file:../..` (its TypeScript source, no build step); `examples/deploy.sh` deploys a Next.js example to Vercel | no |
+| `test/` | The real Next.js test (`test/fixture`) | no |
+| `scripts/` | The build, `prepack`/`postpack`, the pack check, the hygiene check, the JSON Schema writer | no |
 
 ```sh
-npm test            # core + clegra/next + clegra/ui unit tests
-npx tsx --test "spec/src/**/*.test.ts"   # clegra init (fixture projects in temp folders)
-npm run test:next   # test/fixture with next dev (port 3942), then next build + next start (3943); clegra check through the rewrites
-npm run typecheck   # src, spec, and ui/ (ui/tsconfig.json)
+npm ci              # the package's tooling and the examples' dependencies (one lockfile)
+npm run typecheck   # src, spec, scripts, and ui/ (ui/tsconfig.json); typecheck:all adds the examples
+npm test            # core, clegra/next, clegra/ui, clegra init (fixture projects in temp folders), the conformance checks
+npm run test:examples   # the three examples' tests (the Next.js ones on an embedded Postgres, PGlite)
+npm run test:next   # test/fixture with next dev (port 3942), then next build + next start (3943); clegra check through the rewrites; the embedded page in Chromium (Playwright)
+npm run hygiene     # nothing private in any tracked file (scripts/hygiene.mjs)
 npm run build       # dist/ (git-ignored): what the tarball ships, dist/ui included (scripts/ui.mjs); npm pack builds it itself
-npm run pack:check  # slow: npm pack, a Node-only app (no React), a fresh Next.js app with clegra/ui (docs/developers/RELEASE.md)
+npm run pack:check  # slow: npm pack, the publish guard, a Node-only app (no React), a fresh Next.js app with clegra/ui
 ```
 
-In this repository the package exports its TypeScript source: the examples, Clegra and the tests import it through
-the workspace with no build step. `npm pack` builds `dist/` and packs a package.json whose exports point there
-(scripts/prepack.mjs; scripts/postpack.mjs puts the repository's back).
+In the repository the package exports its TypeScript source. `npm pack` and `npm publish` build `dist/` and swap in a
+package.json whose exports point there (scripts/prepack.mjs); scripts/postpack.mjs puts the repository's back.

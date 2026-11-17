@@ -1,6 +1,6 @@
 # A second app: a warehouse
 
-> Non-normative. Runnable code: [`examples/apps/warehouse`](../../../examples/apps/warehouse) (its README
+> Non-normative. Runnable code: [`examples/warehouse`](../../examples/warehouse) (its README
 > has the setup and the demo people). Invented data. The example is still changing, so the code is the reference
 > where the two differ.
 

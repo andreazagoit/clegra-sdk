@@ -20,7 +20,7 @@ import { chromium } from "playwright"
 
 const here = dirname(fileURLToPath(import.meta.url))
 const fixture = join(here, "fixture")
-const root = join(here, "..", "..", "..")
+const root = join(here, "..")
 const cli = join(here, "..", "spec", "src", "cli.ts")
 const nextBin = join(root, "node_modules", "next", "dist", "bin", "next")
 const token = randomBytes(24).toString("base64url")
@@ -166,7 +166,7 @@ async function embedInBrowser(base: string, port: number) {
   try {
     const page = await context.newPage()
     await page.goto(host.url)
-    const embedded = page.frameLocator("#v").frameLocator("iframe[name=developers-page]").locator("[data-caller]")
+    const embedded = page.frameLocator("#v").frameLocator("iframe[name=clegra-page]").locator("[data-caller]")
     await embedded.waitFor({ timeout: 30_000 })
     assert.equal(await embedded.textContent(), "Test person · org-a · notes.view", "the frame of another site is signed in by the ticket")
     // The browser's cookie store (every partition: Playwright reports each cookie's partition key).
@@ -180,7 +180,7 @@ async function embedInBrowser(base: string, port: number) {
     assert.equal(session.domain, "127.0.0.1", "a host-only cookie (no Domain)")
     assert.equal(session.partitionKey, "http://localhost", "the cookie is kept under the host's top-level site only")
     // The address bar of the frame holds no ticket: it is the page.
-    const frameUrl = page.frames().find((f) => f.name() === "developers-page")?.url()
+    const frameUrl = page.frames().find((f) => f.name() === "clegra-page")?.url()
     assert.equal(frameUrl, `${base}/embed/board`)
 
     // The session opened top-level, in the same browser: another partition, and not a frame: signed out.

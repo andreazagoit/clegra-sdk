@@ -32,7 +32,7 @@ clients see of each one is in §6.1.
 
 Served at `GET /.well-known/clegra.json` (no authentication) and as one
 MCP resource, `clegra://<name>` (`application/json`); the two MUST be identical.
-JSON Schema: [`packages/clegra/spec/schema/clegra.schema.json`](../../packages/clegra/spec/schema/clegra.schema.json).
+JSON Schema: [`spec/schema/clegra.schema.json`](../spec/schema/clegra.schema.json).
 
 | Key | Content |
 |---|---|
@@ -65,7 +65,7 @@ action, page or fragment tool takes them. The schedule and notification type
 types match `[a-z][a-z0-9_]{0,39}`.
 
 The rules a manifest meets beyond its JSON Schema (§4.1, §4.2, §5.2, §6 rule
-11, §11, §12) are one piece of code, `packages/clegra/spec/src/rules.ts`: the
+11, §11, §12) are one piece of code, `spec/src/rules.ts`: the
 SDK runs it when the app is defined (a wrong name fails at start, naming its
 place: `page "x": …`) and the conformance check `manifest.references` (§8)
 runs it from outside.
@@ -120,7 +120,7 @@ bare id, with `refs` beside it.
 
 A **kind** names what an entity is, the same in every app. Kinds without a
 dot are defined by this specification and published, with their properties,
-as [`packages/clegra/spec/kinds.json`](../../packages/clegra/spec/kinds.json).
+as [`spec/kinds.json`](../spec/kinds.json).
 Property names are schema.org's, verbatim (JSCalendar's where schema.org has
 none: `due`, `uid`):
 
@@ -783,7 +783,7 @@ differ by 30 seconds. Opaque tokens are not accepted in this mode.
 
 ## 8. Conformance
 
-[`packages/clegra/spec`](../../packages/clegra/spec) checks any app from outside,
+[`spec`](../spec) checks any app from outside,
 over HTTP, whatever it is built with:
 
 ```sh

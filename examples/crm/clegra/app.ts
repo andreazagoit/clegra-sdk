@@ -1,4 +1,4 @@
-// The CRM as a Clegra app (docs/developers/examples/crm.md): one defineApp object over
+// The CRM as a Clegra app (docs/examples/crm.md): one defineApp object over
 // the functions the CRM already has (lib/crm.ts). Hosts and MCP clients get
 // the same rules as the pages: the tenant from the verified caller, the field
 // permissions applied by the SDK, the changes through the same functions.

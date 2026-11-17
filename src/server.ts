@@ -42,7 +42,7 @@ import type {
 import { MCP_APP_MIME_TYPE, urlPageHtml, viewHtml } from "./view"
 
 /**
- * THE CLEGRA APP SERVER, v1 (docs/developers/spec.md): an MCP server
+ * THE CLEGRA APP SERVER, v1 (docs/spec.md): an MCP server
  * (official SDK, Streamable HTTP, stateless) whose declarations — entities,
  * actions, pages, fragments, agents, permissions, settings — become plain MCP
  * tools and MCP Apps views for any host, and a manifest hosts read to mount

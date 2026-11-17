@@ -1,9 +1,10 @@
 // THE PACK CHECK: the package as a stranger gets it from npm, outside this repository. Slow (one npm install, a
 // Next.js dev run and a production build), so not in `npm test`:
 //   npm run pack:check -- [--dir <empty folder outside the repo>] [--port 3946] [--keep]
-// 1. `npm pack` (prepack builds dist/): the tarball's files, its package.json (private kept, every export and the
-//    bin built), every relative import in dist resolving inside the tarball, the hygiene check of the public
-//    packages, and the publish guard (an unapproved tarball is refused as private; `npm publish` is refused here).
+// 1. `npm pack` (prepack builds dist/): the tarball's files, its package.json (every export and the bin built, no
+//    devDependencies, workspaces or overrides, only the "postpublish" script), every relative import in dist resolving
+//    inside the tarball, the hygiene check (scripts/hygiene.mjs), and the publish guard (dry runs: a prerelease
+//    without a dist-tag is refused, `--tag next` passes; nothing is uploaded), the repository's package.json back.
 //    clegra/ui: dist/ui's files, the reserved components closed and absent, the repository-only entries absent.
 // 2. A Node-only app (no React anywhere): the tarball and zod installed, no React, React DOM or UI library in its
 //    tree (clegra/ui's libraries are optional peers), `clegra` and `clegra/node` imported and run.
@@ -27,7 +28,7 @@ import { fileURLToPath } from "node:url"
 import { parseArgs } from "node:util"
 
 const pkgDir = resolve(dirname(fileURLToPath(import.meta.url)), "..")
-const repoRoot = resolve(pkgDir, "../..")
+const repoRoot = pkgDir
 const { values } = parseArgs({ options: { dir: { type: "string" }, port: { type: "string", default: "3946" }, keep: { type: "boolean", default: false } } })
 const port = Number(values.port)
 if (!Number.isInteger(port) || port < 1024) throw new Error(`pack-check: --port ${values.port} is not a port`)
@@ -64,9 +65,12 @@ const tarball = join(work, packed.filename)
 const files = new Set(packed.files.map((f) => f.path))
 console.log(`     ${packed.filename}: ${packed.entryCount} files, ${(packed.size / 1024).toFixed(1)} kB packed, ${(packed.unpackedSize / 1024).toFixed(1)} kB unpacked`)
 const manifest = JSON.parse(execFileSync("tar", ["-xzOf", tarball, "package/package.json"], { encoding: "utf8" }))
-expect(manifest.private === true, "tarball package.json keeps \"private\": true (not an approved release)")
-expect(!manifest.scripts && !manifest.devDependencies, "tarball package.json has no scripts or devDependencies")
-for (const f of ["README.md", "LICENSE", "CHANGELOG.md", "package.json", "dist/spec/schema/clegra.schema.json", "dist/spec/kinds.json"]) expect(files.has(f), `tarball has ${f}`)
+const repoManifest = JSON.parse(readFileSync(join(pkgDir, "package.json"), "utf8"))
+expect(!("private" in manifest) && manifest.version === repoManifest.version && /-/.test(manifest.version), `tarball package.json: publishable, the repository's version ${repoManifest.version} (a prerelease)`)
+expect(JSON.stringify(manifest.scripts) === JSON.stringify({ postpublish: repoManifest.scripts.postpublish }) && !manifest.devDependencies && !manifest.workspaces && !manifest.overrides, "tarball package.json: no devDependencies, workspaces or overrides; of the scripts only postpublish")
+expect(repoManifest.exports["."] === "./src/index.ts" && !existsSync(join(pkgDir, ".package.repo.json")), "after npm pack the repository's package.json is back (exports the TypeScript source)")
+for (const f of ["README.md", "LICENSE", "NOTICE.md", "CHANGELOG.md", "package.json", "docs/spec.md", "docs/quickstart.md", "dist/spec/schema/clegra.schema.json", "dist/spec/kinds.json"]) expect(files.has(f), `tarball has ${f}`)
+expect(![...files].some((f) => /^docs\//.test(f) && !["docs/spec.md", "docs/quickstart.md"].includes(f)) && ![...files].some((f) => /^examples\//.test(f)), "tarball has docs/spec.md and docs/quickstart.md only of the docs, and no example")
 expect(![...files].some((f) => /\.ts$/.test(f) && !f.endsWith(".d.ts")), "tarball has no TypeScript source")
 expect(![...files].some((f) => /\.test\.|^test\/|^scripts\//.test(f)), "tarball has no tests or scripts")
 const leaves = (e) => (e === null ? [] : typeof e === "string" ? [e] : Object.values(e).flatMap(leaves))
@@ -103,17 +107,16 @@ for (const f of [...files].filter((f) => /\.(js|d\.ts)$/.test(f))) {
 }
 expect(unresolved.length === 0, `every relative import in dist resolves inside the tarball${unresolved.length ? `: ${unresolved.slice(0, 5).join(", ")}` : ""}`)
 expect(existsSync(dist), "dist/ was built")
-const { checkTarball } = await import(join(repoRoot, "scripts/packages/hygiene.mjs"))
+const { checkTarball } = await import("./hygiene.mjs")
 const findings = checkTarball(tarball)
 expect(findings.length === 0, `hygiene check (nothing internal ships)${findings.length ? `:\n       ${findings.join("\n       ")}` : ""}`)
-// The guard. A registry on a closed local port with a dummy token: nothing can be uploaded anywhere.
-const registry = `http://127.0.0.1:${port + 2}/`
-const fake = run(npm, ["publish", tarball, "--registry", registry, `--//127.0.0.1:${port + 2}/:_authToken=not-a-token`, "--force"], { cwd: work })
-expect(fake.status !== 0 && /EPRIVATE/.test(fake.stdout + fake.stderr), `npm publish of an unapproved tarball is refused (EPRIVATE)${/EPRIVATE/.test(fake.stdout + fake.stderr) ? "" : `: ${tail(fake)}`}`)
-const refused = run(process.execPath, [join(pkgDir, "scripts/prepack.mjs")], { cwd: pkgDir, env: { npm_command: "publish", npm_config_dry_run: "" } })
-expect(refused.status === 1 && /not published/.test(refused.stderr), "npm publish from the package folder is refused by prepack")
-const dry = run(npm, ["publish", "--dry-run", tarball], { cwd: work })
-expect(dry.status === 0 && /\(dry-run\)/.test(dry.stdout + dry.stderr), `npm publish --dry-run of the tarball runs (uploads nothing)${dry.status === 0 ? "" : `: ${tail(dry)}`}`)
+// The guard, on dry runs only (nothing is uploaded): a prerelease without a dist-tag is refused (by prepack, before
+// any build; npm too), with --tag next the whole publish runs; package.json is the repository's after each.
+const untagged = run(npm, ["publish", "--dry-run"], { cwd: pkgDir })
+expect(untagged.status !== 0 && /prerelease/.test(untagged.stdout + untagged.stderr), `npm publish --dry-run without --tag is refused (a prerelease)${untagged.status !== 0 ? "" : `: ${tail(untagged)}`}`)
+const dry = run(npm, ["publish", "--dry-run", "--tag", "next"], { cwd: pkgDir })
+expect(dry.status === 0 && /with tag next/.test(dry.stdout + dry.stderr) && /\(dry-run\)/.test(dry.stdout + dry.stderr), `npm publish --dry-run --tag next runs (uploads nothing)${dry.status === 0 ? "" : `: ${tail(dry)}`}`)
+expect(JSON.parse(readFileSync(join(pkgDir, "package.json"), "utf8")).exports["."] === "./src/index.ts" && !existsSync(join(pkgDir, ".package.repo.json")), "after the dry-run publishes the repository's package.json is back")
 
 /** The repository's installed version of a package (read by path: not every package exports its package.json). */
 const version = (name) => JSON.parse(readFileSync(join(repoRoot, "node_modules", ...name.split("/"), "package.json"), "utf8")).version

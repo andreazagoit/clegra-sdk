@@ -106,7 +106,7 @@ person then goes through these steps:
 - **The conformance check**, from the repository root:
 
   ```sh
-  CLEGRA_TOKEN=$(cd examples/apps/warehouse && CLEGRA_OAUTH_EMAIL=ada.fernley@aurora.example npm run --silent token -- http://localhost:3930) \
+  CLEGRA_TOKEN=$(cd examples/warehouse && CLEGRA_OAUTH_EMAIL=ada.fernley@aurora.example npm run --silent token -- http://localhost:3930) \
     npm run clegra:check -- http://localhost:3930
   ```
 
@@ -121,7 +121,7 @@ person then goes through these steps:
      DATABASE_URL='postgres://…' DEMO_PASSWORD='…' npm run db:seed
      ```
 
-2. Create a Vercel project with Root Directory `examples/apps/warehouse` and framework
+2. Create a Vercel project with Root Directory `examples/warehouse` and framework
    Next.js. Set these environment variables:
    - `DATABASE_URL`
    - `CLEGRA_PUBLIC_URL`: the production origin, e.g. `https://warehouse.example.com`

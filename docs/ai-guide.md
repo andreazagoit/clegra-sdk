@@ -231,7 +231,7 @@ customer: { kind: { by: "type", map: { company: "organization", private: "person
   image`; organization `legalName email† telephone† url address vatID taxID`; event `startDate`(required) `endDate
   location attendee† organizer uid`; task `due startDate completed assignee`; document `url encodingFormat author
   contentSize`; product `sku gtin brand price`; order `orderNumber orderDate customer totalPrice`. † many: an array
-  field, or several fields. Any entity may mark `url`, `dateCreated`, `dateModified`. Full list: `packages/clegra/spec/kinds.json`.
+  field, or several fields. Any entity may mark `url`, `dateCreated`, `dateModified`. Full list: `spec/kinds.json`.
 - Types: dates are RFC 3339 strings; `price`/`totalPrice` need `currency` on the field; `vatID` is `GB123456789`
   (prefix, no spaces); `gtin` 8/12/13/14 digits; `address` a string or a PostalAddress object.
 - **Keys** (`email`, `vatID`, `gtin`, `uid`) are exact filters. Your `list` gets the value already normalised
@@ -409,5 +409,5 @@ await host.call("clegra_delete")
 ```
 
 `npx clegra check <url> --token <bearer>` must end with `Conformant.`
-Complete, tested apps to copy from: the CRM ([`examples/apps/crm/clegra/app.ts`](../../examples/apps/crm/clegra/app.ts), Drizzle) and the
-warehouse ([`examples/apps/warehouse/lib/clegra.ts`](../../examples/apps/warehouse/lib/clegra.ts), plain SQL).
+Complete, tested apps to copy from: the CRM ([`examples/crm/clegra/app.ts`](../examples/crm/clegra/app.ts), Drizzle) and the
+warehouse ([`examples/warehouse/lib/clegra.ts`](../examples/warehouse/lib/clegra.ts), plain SQL).

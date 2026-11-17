@@ -1,4 +1,4 @@
-// The warehouse as a Clegra app (docs/developers/spec.md): one defineApp object that becomes a manifest for workspace
+// The warehouse as a Clegra app (docs/spec.md): one defineApp object that becomes a manifest for workspace
 // hosts and a plain MCP server for ChatGPT, Claude and any MCP client. It adds nothing to the app's data
 // layer: every handler calls the functions the pages already use (lib/warehouse.ts), with the tenant the
 // SDK took from the verified caller (`ctx.installation`: an organization id, or `<installation>@<issuer>` for a

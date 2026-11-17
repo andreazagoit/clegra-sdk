@@ -4,7 +4,7 @@ This is a small sales team's CRM (companies, contacts, deals, calls). It has its
 organizations) and its own database (Drizzle on Postgres, or an embedded PGlite locally). The file
 `clegra/app.ts` turns it into a Clegra app: an MCP server that ChatGPT, Claude, MCP Inspector or Clegra can connect
 to. It uses the same functions the pages use (`lib/crm.ts`). better-auth is also the OAuth server those clients sign
-in through. All data is invented. Walkthrough: [docs/developers/examples/crm.md](../../../docs/developers/examples/crm.md).
+in through. All data is invented. Walkthrough: [docs/examples/crm.md](../../docs/examples/crm.md).
 
 In a workspace host it shows navigation sections («Sales», «Customers»), «New deal» and «New contact» as the deals'
 and contacts' page actions (prefilled from the page's filter), and a badge with the open deals (`open_deals`, an
@@ -42,7 +42,7 @@ organization.
 
   ```sh
   T=$(CLEGRA_OAUTH_EMAIL=alice@orbit.example CLEGRA_OAUTH_PASSWORD=… npm run --silent token -- http://localhost:3920)
-  (cd ../../.. && npm run clegra:check -- http://localhost:3920 --token "$T")   # → Conformant.
+  (cd ../.. && npm run clegra:check -- http://localhost:3920 --token "$T")   # → Conformant.
   ```
 
 | Command | What it does |
