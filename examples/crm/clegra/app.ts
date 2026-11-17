@@ -2,7 +2,7 @@
 // the functions the CRM already has (lib/crm.ts). Hosts and MCP clients get
 // the same rules as the pages: the tenant from the verified caller, the field
 // permissions applied by the SDK, the changes through the same functions.
-import { AppError, defineApp, ref, SqlStore, type App, type AuthOptions, type Context, type IdempotencyStore } from "clegra"
+import { AppError, defineApp, ref, SqlStore, type App, type AuthOptions, type Context, type IdempotencyStore } from "@clegra/sdk"
 import { z } from "zod"
 
 import {

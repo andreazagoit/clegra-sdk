@@ -1,6 +1,6 @@
 import "server-only"
 
-import type { App } from "clegra"
+import type { App } from "@clegra/sdk"
 
 import { getAuth } from "./auth"
 import { createWarehouseApp } from "./clegra"

@@ -1,5 +1,5 @@
 import type { Metadata } from "next"
-import { getEmbedCaller } from "clegra/next"
+import { getEmbedCaller } from "@clegra/sdk/next"
 
 import { warehouseApp } from "@/lib/app"
 import { sql } from "@/lib/db"

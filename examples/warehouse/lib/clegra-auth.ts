@@ -1,6 +1,6 @@
 import { oauthProviderAuthServerMetadata, oauthProviderOpenIdConfigMetadata } from "@better-auth/oauth-provider"
 import { createLocalJWKSet, decodeProtectedHeader, errors, jwtVerify, type JWK } from "jose"
-import { AuthError, type AuthOptions, type Issuer, type ResolvedCaller } from "clegra"
+import { AuthError, type AuthOptions, type Issuer, type ResolvedCaller } from "@clegra/sdk"
 
 import { CLEGRA_SCOPE, type Auth } from "./auth"
 import { sql } from "./db"

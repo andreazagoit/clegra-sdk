@@ -3,7 +3,7 @@
 // layer: every handler calls the functions the pages already use (lib/warehouse.ts), with the tenant the
 // SDK took from the verified caller (`ctx.installation`: an organization id, or `<installation>@<issuer>` for a
 // workspace host, lib/tenants.ts).
-import { AppError, defineApp, ref, SqlStore, type AuthOptions, type Context, type IdempotencyStore } from "clegra"
+import { AppError, defineApp, ref, SqlStore, type AuthOptions, type Context, type IdempotencyStore } from "@clegra/sdk"
 import { z } from "zod"
 
 import { sql } from "./db"

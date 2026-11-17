@@ -1,4 +1,4 @@
-import { getEmbedCaller } from "clegra/next"
+import { getEmbedCaller } from "@clegra/sdk/next"
 
 import { app } from "../../../clegra"
 

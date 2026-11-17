@@ -9,7 +9,7 @@ import { checkApp } from "../conformance"
 import { formatInit, InitError, runInit } from "./index"
 import { wrapNextConfig } from "./next-config"
 import { appNameOf, parseJsonc } from "./project"
-import { UI_IMPORT, webUiPeers } from "./ui"
+import { UI_IMPORT, UI_RANGE, uiDependencies } from "./ui"
 
 // clegra init on minimal fixture projects, each written into its own temp folder.
 
@@ -29,7 +29,7 @@ function project(files: Record<string, string>, base = tmpdir()): string {
 }
 
 const read = (root: string, path: string) => readFileSync(join(root, path), "utf8")
-const pkg = (extra: Record<string, unknown> = {}) => JSON.stringify({ name: "acme-tasks", private: true, scripts: { dev: "next dev" }, dependencies: { next: "16.4.6", react: "19.2.0", clegra: "^0.1.0", zod: "^4.0.0" }, ...extra })
+const pkg = (extra: Record<string, unknown> = {}) => JSON.stringify({ name: "acme-tasks", private: true, scripts: { dev: "next dev" }, dependencies: { next: "16.4.6", react: "19.2.0", "@clegra/sdk": "^0.1.0", zod: "^4.0.0" }, ...extra })
 
 // What create-next-app writes (TypeScript, App Router, no src/), tsconfig with a comment and a trailing comma.
 const NEXT_TS = `import type { NextConfig } from "next";
@@ -60,7 +60,7 @@ describe("clegra init", () => {
     assert.match(read(root, "app/api/clegra/[...path]/route.ts"), /export const \{ GET, POST, DELETE, OPTIONS \} = toNextHandlers\(app\)/)
     assert.equal(
       read(root, "next.config.ts"),
-      NEXT_TS.replace('from "next";\n', 'from "next";\nimport { withClegra } from "clegra/next";\n').replace("export default nextConfig;", "export default withClegra(nextConfig);"),
+      NEXT_TS.replace('from "next";\n', 'from "next";\nimport { withClegra } from "@clegra/sdk/next";\n').replace("export default nextConfig;", "export default withClegra(nextConfig);"),
     )
     const app = read(root, "clegra.ts")
     assert.match(app, /name: "acme-tasks"/)
@@ -72,7 +72,7 @@ describe("clegra init", () => {
     assert.match(token!, /^[A-Za-z0-9_-]{43}$/)
     const printed = formatInit(result, false)
     assert.match(printed, /Next\.js 16\.4\.6, App Router in app\/, TypeScript, alias @\/\*, next\.config\.ts/)
-    assert.match(printed, new RegExp(`npx clegra check http://localhost:3000 --token ${token}`))
+    assert.match(printed, new RegExp(`npx @clegra/sdk check http://localhost:3000 --token ${token}`))
   })
 
   test("next.config.mjs and src/app with an alias to src/: clegra.ts goes to src/", () => {
@@ -88,7 +88,7 @@ describe("clegra init", () => {
     assert.deepEqual(result.steps.map((s) => `${s.verb} ${s.path}`), ["create src/clegra.ts", "create src/app/api/clegra/[...path]/route.ts", "edit next.config.mjs", "create .env.local"])
     assert.match(read(root, "src/app/api/clegra/[...path]/route.ts"), /from "~\/clegra"/)
     // No import to follow: the import goes first; the file's own quotes and semicolons are kept.
-    assert.equal(read(root, "next.config.mjs"), `import { withClegra } from 'clegra/next';\n${mjs.replace("export default nextConfig;", "export default withClegra(nextConfig);")}`)
+    assert.equal(read(root, "next.config.mjs"), `import { withClegra } from '@clegra/sdk/next';\n${mjs.replace("export default nextConfig;", "export default withClegra(nextConfig);")}`)
     assert.match(formatInit(result, false), /http:\/\/localhost:4100\/mcp/)
   })
 
@@ -135,14 +135,14 @@ describe("clegra init", () => {
     const root = project({ "package.json": pkg({ dependencies: { next: "^16.0.0" } }), "next.config.js": cjs, "app/page.jsx": "", "proxy.js": "export function proxy() {}\n" })
     const result = runInit({ cwd: root })
     assert.deepEqual(result.steps.map((s) => `${s.verb} ${s.path}`), ["create clegra.js", "create app/api/clegra/[...path]/route.js", "edit next.config.js", "create .env.local"])
-    assert.equal(read(root, "next.config.js"), `const { withClegra } = require("clegra/next")\n${cjs.replace("module.exports = nextConfig", "module.exports = withClegra(nextConfig)")}`)
+    assert.equal(read(root, "next.config.js"), `const { withClegra } = require("@clegra/sdk/next")\n${cjs.replace("module.exports = nextConfig", "module.exports = withClegra(nextConfig)")}`)
     assert.doesNotMatch(read(root, "clegra.js"), /: string|type Task|ResolvedCaller/)
     assert.match(read(root, "app/api/clegra/[...path]/route.js"), /from "\.\.\/\.\.\/\.\.\/\.\.\/clegra"/)
     assert.equal(result.warnings.length, 3)
     assert.match(result.warnings.join("\n"), /basePath/)
     assert.match(result.warnings.join("\n"), /\.gitignore/)
     assert.match(result.warnings.join("\n"), /proxy\.js runs before every route/)
-    assert.match(result.next[0]!, /^npm i clegra zod$/)
+    assert.match(result.next[0]!, /^npm i @clegra\/sdk zod$/)
   })
 
   test("--dry-run writes nothing", () => {
@@ -168,7 +168,7 @@ describe("clegra init", () => {
     assert.equal(wrapNextConfig("export default function config() {\n  return {}\n}\n").kind, "manual")
     assert.equal(wrapNextConfig("const a = {}\nexport default a\nexport default a\n").kind, "manual")
     const fn = wrapNextConfig("// @ts-check\nexport default (phase) => ({ reactStrictMode: phase !== 'x' })\n")
-    assert.deepEqual(fn, { kind: "edited", text: "// @ts-check\nimport { withClegra } from 'clegra/next'\nexport default withClegra((phase) => ({ reactStrictMode: phase !== 'x' }))\n" })
+    assert.deepEqual(fn, { kind: "edited", text: "// @ts-check\nimport { withClegra } from '@clegra/sdk/next'\nexport default withClegra((phase) => ({ reactStrictMode: phase !== 'x' }))\n" })
     assert.equal(appNameOf("@acme/Billing_Portal"), "billing-portal")
     assert.equal(appNameOf("1"), "my-app")
     assert.deepEqual(parseJsonc('{ "a": "http://x//y", /* c */ "b": [1,], }'), { a: "http://x//y", b: [1] })
@@ -176,7 +176,7 @@ describe("clegra init", () => {
 })
 
 describe("the generated clegra.ts", () => {
-  // Written inside this package so that `clegra` and `zod` resolve; removed afterwards.
+  // Written inside this package so that `@clegra/sdk` and `zod` resolve; removed afterwards.
   const here = dirname(fileURLToPath(import.meta.url))
   // Writable here (Next's types make NODE_ENV read-only).
   const env = process.env as Record<string, string | undefined>
@@ -225,20 +225,21 @@ describe("the generated clegra.ts", () => {
 describe("clegra init --ui", () => {
   const files = (extra: Record<string, string> = {}) => ({ "package.json": pkg({ devDependencies: { tailwindcss: "^4", "@tailwindcss/postcss": "^4" } }), "tsconfig.json": TSCONFIG, "next.config.ts": NEXT_TS, "app/layout.tsx": LAYOUT, ".gitignore": ".env*\n", ...extra })
 
-  test("the web UI's libraries are clegra's optional peers, without React Native's, React's, Tailwind's or the server's", () => {
-    const peers = webUiPeers()
-    for (const name of ["@base-ui/react", "lucide-react", "class-variance-authority", "cn"]) assert.ok(peers[name], name)
-    for (const name of ["react", "react-dom", "react-native", "@expo/ui", "zod", "next", "tailwindcss"]) assert.equal(peers[name], undefined, name)
+  test("--ui adds @clegra/ui and its web libraries, without React Native's, React's, Tailwind's or the server's", () => {
+    const deps = uiDependencies()
+    assert.equal(deps["@clegra/ui"], UI_RANGE)
+    for (const name of ["@base-ui/react", "lucide-react", "class-variance-authority", "cn"]) assert.ok(deps[name], name)
+    for (const name of ["react", "react-dom", "react-native", "@expo/ui", "zod", "next", "tailwindcss", "@clegra/sdk"]) assert.equal(deps[name], undefined, name)
   })
 
-  test("Tailwind 4 in globals.css: clegra/ui's stylesheet after it, the libraries in dependencies, npm install next", () => {
+  test("Tailwind 4 in globals.css: @clegra/ui's stylesheet after it, the libraries in dependencies, npm install next", () => {
     const root = project(files({ "app/globals.css": '@import "tailwindcss";\n\nbody { margin: 0 }\n' }))
     const result = runInit({ cwd: root, ui: true })
     assert.ok(result.steps.some((s) => s.verb === "edit" && s.path === "package.json"))
     assert.ok(result.steps.some((s) => s.verb === "edit" && s.path === "app/globals.css"))
     assert.equal(read(root, "app/globals.css"), `@import "tailwindcss";\n${UI_IMPORT}\n\nbody { margin: 0 }\n`)
     const deps = JSON.parse(read(root, "package.json")).dependencies as Record<string, string>
-    for (const [name, range] of Object.entries(webUiPeers())) assert.equal(deps[name], range, name)
+    for (const [name, range] of Object.entries(uiDependencies())) assert.equal(deps[name], range, name)
     assert.equal(deps.react, "19.2.0", "what was there stays")
     assert.ok(result.next.some((n) => n.startsWith("npm install")))
     // Run again: nothing more to do.
@@ -253,8 +254,8 @@ describe("clegra init --ui", () => {
     assert.equal(read(plain, "package.json"), before)
     const step = dry.steps.find((s) => s.path === "app/globals.css")
     assert.equal(step?.verb, "by hand")
-    assert.match(step?.how ?? "", /clegra\/ui\/styles\.css/)
-    assert.match(step?.how ?? "", /clegra\/ui\/prebuilt\.css/)
+    assert.match(step?.how ?? "", /@clegra\/ui\/styles\.css/)
+    assert.match(step?.how ?? "", /@clegra\/ui\/prebuilt\.css/)
     const none = project(files())
     assert.equal(runInit({ cwd: none, ui: true }).steps.find((s) => s.path === "app/globals.css")?.verb, "by hand")
     assert.match(formatInit(dry, true), /by hand\s+app\/globals\.css/)

@@ -5,9 +5,9 @@ import { test } from "node:test"
 
 import "./setup"
 
-import { embedProxy } from "clegra/next"
-import { installationClient, testClient } from "clegra/testing"
-import { checkApp, formatReport } from "clegra/spec"
+import { embedProxy } from "@clegra/sdk/next"
+import { installationClient, testClient } from "@clegra/sdk/testing"
+import { checkApp, formatReport } from "@clegra/sdk/spec"
 import { and, eq } from "drizzle-orm"
 
 import { deals } from "../db/schema"

@@ -3,7 +3,7 @@
 > Version 1.0, draft (2026-11-16). Normative; MUST, SHOULD and MAY as in RFC 2119.
 > Clegra apps are Clegra's own developer platform: apps that Clegra draws natively
 > in its workspace and that are, at the same time, plain MCP servers that ChatGPT,
-> Claude and any MCP client use as they are. The package `clegra` builds them; this
+> Claude and any MCP client use as they are. The package `@clegra/sdk` builds them; this
 > page is the contract they meet. The wire name is `clegra` (manifest path, URI
 > scheme, `_meta` key, token claim, OAuth scope, resolve tool).
 > Anything not on this page is not part of 1.0.
@@ -786,7 +786,7 @@ differ by 30 seconds. Opaque tokens are not accepted in this mode.
 over HTTP, whatever it is built with:
 
 ```sh
-npx clegra check https://crm.example.com --token <a plain caller's bearer>
+npx @clegra/sdk check https://crm.example.com --token <a plain caller's bearer>
 ```
 
 | Check | Passes when |

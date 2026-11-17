@@ -9,7 +9,7 @@ import type { Row, Sql } from "./db"
 export type FilterValue = string | number | boolean
 export type ListFilter = FilterValue | { in: FilterValue[] } | { gte?: FilterValue; lte?: FilterValue }
 
-/** The shape of a list request (the same as a clegra `Query`, so the pages and the app handlers both use it). */
+/** The shape of a list request (the same as an @clegra/sdk `Query`, so the pages and the app handlers both use it). */
 export type ListQuery = {
   filters?: Record<string, ListFilter>
   text?: string

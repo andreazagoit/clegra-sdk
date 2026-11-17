@@ -2,7 +2,7 @@
 
 > For coding agents. This one file is enough to write a correct app.
 > A Clegra app is an app that Clegra draws natively and that is also a plain MCP server for ChatGPT, Claude and any
-> MCP client. One package, `clegra`; normative text in [spec.md](spec.md).
+> MCP client. One package, `@clegra/sdk` (and, for an app's own UI, `@clegra/ui`); normative text in [spec.md](spec.md).
 
 ## The model
 
@@ -17,28 +17,28 @@ handlers run. There is no other authoring API.
 
 | Import | What |
 |---|---|
-| `clegra` | `defineApp`, `AppError`, `AuthError`, `ref`, `SqlStore`, `MemoryStore`, types. `app.fetch(request)` runs anywhere |
-| `clegra/next` | `toNextHandlers(app)` (the route), `withClegra(config)` (next.config) |
-| `clegra/node` | `listen(app, { port })`: Node's own HTTP server |
-| `clegra/testing` | `testClient(app, …)`; `installationClient(app, …)` (schedules, later runs, lifecycle) |
-| `clegra/spec` | `checkApp`, `formatReport`: the conformance checks |
-| CLI | `npx clegra init` (makes a Next.js app a Clegra app), `npx clegra check <url> --token <bearer>` |
+| `@clegra/sdk` | `defineApp`, `AppError`, `AuthError`, `ref`, `SqlStore`, `MemoryStore`, types. `app.fetch(request)` runs anywhere |
+| `@clegra/sdk/next` | `toNextHandlers(app)` (the route), `withClegra(config)` (next.config) |
+| `@clegra/sdk/node` | `listen(app, { port })`: Node's own HTTP server |
+| `@clegra/sdk/testing` | `testClient(app, …)`; `installationClient(app, …)` (schedules, later runs, lifecycle) |
+| `@clegra/sdk/spec` | `checkApp`, `formatReport`: the conformance checks |
+| CLI | `npx @clegra/sdk init` (makes a Next.js app a Clegra app), `npx @clegra/sdk check <url> --token <bearer>` |
 
 ## In a Next.js app (App Router)
 
-`npx clegra init` writes these; by hand they are:
+`npx @clegra/sdk init` writes these; by hand they are:
 
 ```ts
 // clegra.ts (or src/clegra.ts): export the app by name
 export const app = defineApp({ … })
 
 // app/api/clegra/[...path]/route.ts
-import { toNextHandlers } from "clegra/next"
+import { toNextHandlers } from "@clegra/sdk/next"
 import { app } from "@/clegra"
 export const { GET, POST, DELETE, OPTIONS } = toNextHandlers(app)
 
 // next.config.ts: rewrites /mcp, /.well-known/clegra.json and the OAuth metadata paths to that route
-import { withClegra } from "clegra/next"
+import { withClegra } from "@clegra/sdk/next"
 export default withClegra(nextConfig)
 ```
 
@@ -54,7 +54,7 @@ export default withClegra(nextConfig)
 ## The whole shape
 
 ```ts
-import { AppError, defineApp, ref } from "clegra"
+import { AppError, defineApp, ref } from "@clegra/sdk"
 import { z } from "zod"
 
 export default defineApp({
@@ -203,7 +203,7 @@ else null), `cancelLater(id)`, `t(label)`, `notify({ type?, title, body?, uri?, 
 
 What `defineApp` returns: `manifest()`, `fetch(request)` (Fetch API handler),
 `start()`, `devToken()`, `devConfirmation()`, `uri()`, `runLater(tenant, { settings?, locale? })`. On Node alone:
-`listen(app, { port, host })` from `clegra/node`.
+`listen(app, { port, host })` from `@clegra/sdk/node`.
 
 ## Kinds: the same kind of thing across apps (optional)
 
@@ -396,12 +396,12 @@ change).
 ## Check your work
 
 ```ts
-import { testClient } from "clegra/testing"
+import { testClient } from "@clegra/sdk/testing"
 const c = await testClient(app, { permissions: ["deals.edit"] })      // or "all"; host: "workspace"; person; installation; locale
 await c.listTools(); await c.call("deal_list", {}); await c.readResource("ui://crm/view")
 await (await testClient(app, { host: "workspace", permissions: "all" })).confirmed("deal_mark_won", { id: "d1" })
 
-import { installationClient } from "clegra/testing"
+import { installationClient } from "@clegra/sdk/testing"
 const host = await installationClient(app, { permissions: ["tasks.view"] })   // the installation: no person
 await host.schedule("digest")                    // the schedule's tool, with _meta.clegra.schedule
 await host.runLater()                            // clegra_later: the due later runs
@@ -409,6 +409,6 @@ const { file } = await host.exportData()         // clegra_export, the file read
 await host.call("clegra_delete")
 ```
 
-`npx clegra check <url> --token <bearer>` must end with `Conformant.`
+`npx @clegra/sdk check <url> --token <bearer>` must end with `Conformant.`
 Complete, tested apps to copy from: the CRM ([`examples/crm/clegra/app.ts`](../examples/crm/clegra/app.ts), Drizzle) and the
 warehouse ([`examples/warehouse/lib/clegra.ts`](../examples/warehouse/lib/clegra.ts), plain SQL).

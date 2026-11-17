@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Depends on `@clegra/sdk` (the package's scoped name); imports `@clegra/sdk`, `@clegra/sdk/node`,
+  `@clegra/sdk/testing`.
+
 ## 1.0.0 (2026-11-17)
 
 - First version as a Clegra app (`clegra`): a courier's shipments and pickups on a Node server (`clegra/node`),

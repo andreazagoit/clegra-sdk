@@ -1,4 +1,4 @@
-import { AppError, defineApp, MemoryStore, type AuthOptions, type Context, type IdempotencyStore } from "clegra"
+import { AppError, defineApp, MemoryStore, type AuthOptions, type Context, type IdempotencyStore } from "@clegra/sdk"
 import { z } from "zod"
 
 import { CourierError, PICKUP_STATUSES, SHIPMENT_STATUSES, createCourier, type Courier, type Pickup } from "./courier"

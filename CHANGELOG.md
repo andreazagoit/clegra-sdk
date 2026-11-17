@@ -1,12 +1,26 @@
 # Changelog
 
-Clegra apps (spec 1.0 draft) and the `clegra` package. Newest first. Versions before 1.0 are prereleases on the npm
-dist-tag `next`. Entries older than the rename below keep the names of their time (the `modelapp` package,
-docs/map): they are history.
+Clegra apps (spec 1.0 draft) and the `@clegra/sdk` package. Newest first. Versions before 1.0 are prereleases on the
+npm dist-tag `next`. Entries below «Two scoped packages» keep the names of their time (the unscoped `clegra` package
+and its `clegra/ui`, the `modelapp` package, docs/map): they are history.
 
 ## 0.1.0-next.0 (2026-11-17)
 
-The first version published to npm (`npm i clegra@next`).
+The first version published to npm (`npm i @clegra/sdk@next zod`).
+
+### Two scoped packages: `@clegra/sdk` and `@clegra/ui`
+
+- npm refused the unscoped name, so the package is `@clegra/sdk` in the npm organisation `clegra`. Imports:
+  `@clegra/sdk`, `@clegra/sdk/next`, `@clegra/sdk/node`, `@clegra/sdk/testing`, `@clegra/sdk/spec`,
+  `@clegra/sdk/clegra.schema.json`, `@clegra/sdk/kinds.json`. The CLI is `npx @clegra/sdk init|check`; its bin is
+  still `clegra`. Wire names do not change (`clegra://`, `/.well-known/clegra.json`, `_meta.clegra`, `clegra_*`
+  tools, `CLEGRA_*` variables, `clegra.schema.json`, the cookies).
+- The design library left this package: it is `@clegra/ui`, its own package and repository (history kept there),
+  with every component public. `@clegra/sdk` has no UI entry and no UI peer dependency (peers: `zod`, optional
+  `next`); the generated MCP Apps view is plain HTML. `init --ui` adds `@clegra/ui` (`^0.1.0-next.0`) and its web
+  libraries to the app and `@import "@clegra/ui/styles.css"` after Tailwind.
+- `publishConfig.access: public`. The pack check also installs both tarballs in one fresh Next.js app
+  (`init --ui`, build, `clegra check`).
 
 ### The package in its own repository
 

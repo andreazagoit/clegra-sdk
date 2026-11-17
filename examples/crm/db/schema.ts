@@ -106,7 +106,7 @@ export const people = pgTable(
   (t) => [primaryKey({ columns: [t.orgId, t.id] })],
 )
 
-/** The Clegra app server's idempotency store: the table of `SqlStore.schema()` (clegra). */
+/** The Clegra app server's idempotency store: the table of `SqlStore.schema()` (@clegra/sdk). */
 export const clegraStore = pgTable(
   "clegra_store",
   {
@@ -121,7 +121,7 @@ export const clegraStore = pgTable(
 
 /**
  * Its later runs and, for the lifecycle's delete, what it clears per tenant: the second table of `SqlStore.schema()`
- * (clegra), column for column.
+ * (@clegra/sdk), column for column.
  */
 export const clegraStoreLater = pgTable(
   "clegra_store_later",

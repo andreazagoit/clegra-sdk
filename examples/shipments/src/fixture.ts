@@ -1,4 +1,4 @@
-import { MemoryStore, type Manifest } from "clegra"
+import { MemoryStore, type Manifest } from "@clegra/sdk"
 
 import { defineShipmentsApp, PERMISSIONS, type ShipmentsApp } from "./app"
 import { createCourier, type Courier } from "./courier"
@@ -7,7 +7,7 @@ import { createCourier, type Courier } from "./courier"
  * THE IN-PROCESS FIXTURE FOR HOST TESTS: the Shipments app, signed in by the
  * SDK's dev authority, with its data and its write store in memory. A host
  * test calls it through `app.fetch` (no port, no network), with tokens from
- * `app.devToken()` or the clients of `clegra/testing`; `courier.report()`
+ * `app.devToken()` or the clients of `@clegra/sdk/testing`; `courier.report()`
  * plays the courier (a delivery, a delay) for the delivery check.
  *
  * Stable for host tests: the people, the installation, the seeded data

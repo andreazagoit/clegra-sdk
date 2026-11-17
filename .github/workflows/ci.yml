@@ -27,4 +27,6 @@ jobs:
       - run: npm test
       - run: npm run test:examples
       - run: npm run test:next
+      # The pack check also installs @clegra/ui beside this package: the published one, into vendor/.
+      - run: npm pack @clegra/ui@next --pack-destination vendor
       - run: npm run pack:check -- --dir "$RUNNER_TEMP/clegra-pack-check"

@@ -1,4 +1,4 @@
-import { AuthError, defineApp } from "clegra"
+import { AuthError, defineApp } from "@clegra/sdk"
 import { z } from "zod"
 
 // A tiny Clegra app for the real-Next test. Its "own tokens" are one random bearer the test passes in the environment

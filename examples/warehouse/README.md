@@ -1,7 +1,7 @@
 # Warehouse — a reference Clegra app
 
 A small warehouse app: products, stock movements and customer orders of a shop. It is an
-ordinary Next.js App Router app with its own users, made a Clegra app with the `clegra` package, so
+ordinary Next.js App Router app with its own users, made a Clegra app with the `@clegra/sdk` package, so
 Clegra, ChatGPT, Claude or any MCP client can connect to it. All companies, people and data are invented.
 
 ## Run it locally
@@ -42,7 +42,7 @@ The same rules apply in the pages and over MCP.
 - **Data: plain SQL, on purpose.** There is no ORM: one `sql(text, params)` and one
   `transaction(fn)` (`lib/db.ts`) run over a `pg` Pool or PGlite. The schema is `.sql` files in
   `db/migrations`. better-auth's tables come from its own migration plan, in the same database
-  (`npm run db:migrate`). The other reference app (the CRM) uses Drizzle; the `clegra` package doesn't care.
+  (`npm run db:migrate`). The other reference app (the CRM) uses Drizzle; the `@clegra/sdk` package doesn't care.
 - **The app's functions** (`lib/warehouse.ts`), such as `listProducts`, `registerMovement` and
   `confirmOrder`, are always scoped by the tenant: an organization, or a workspace host's
   installation. The pages and server actions call them.
@@ -132,7 +132,7 @@ person then goes through these steps:
    - optionally `CLEGRA_ISSUERS`: workspace hosts (e.g. a Clegra node) whose tokens are
      accepted, as `issuer|jwksUri`, comma-separated. Each installation gets its own copy of the
      demo data
-3. Deploy (Vercel builds from the repository: the example is an npm workspace and uses `clegra` from the
+3. Deploy (Vercel builds from the repository: the example is an npm workspace and uses `@clegra/sdk` from the
    repository root), or build here and upload: `examples/deploy.sh warehouse` with `VERCEL_ORG_ID` and
    `VERCEL_WAREHOUSE_PROJECT_ID` set. Then run the token script and `clegra check` against the public URL.
 

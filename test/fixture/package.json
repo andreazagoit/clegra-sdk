@@ -2,5 +2,5 @@
   "name": "clegra-next-fixture",
   "private": true,
   "type": "module",
-  "description": "A minimal Next.js App Router app for clegra/next's real-Next test (test/next.test.ts). Not a workspace."
+  "description": "A minimal Next.js App Router app for @clegra/sdk/next's real-Next test (test/next.test.ts). Not a workspace."
 }

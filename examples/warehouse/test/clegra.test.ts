@@ -7,10 +7,10 @@ import { readFileSync } from "node:fs"
 import { after, before, describe, test } from "node:test"
 
 import { decodeJwt, decodeProtectedHeader, generateKeyPair, SignJWT } from "jose"
-import { generateSigningKey, signAccessToken, SqlStore, type Person } from "clegra"
-import { embedProxy, toNextHandlers } from "clegra/next"
-import { checkApp, formatReport } from "clegra/spec"
-import { installationClient, testClient } from "clegra/testing"
+import { generateSigningKey, signAccessToken, SqlStore, type Person } from "@clegra/sdk"
+import { embedProxy, toNextHandlers } from "@clegra/sdk/next"
+import { checkApp, formatReport } from "@clegra/sdk/spec"
+import { installationClient, testClient } from "@clegra/sdk/testing"
 
 process.env.PGLITE_DIR = "memory://"
 process.env.BETTER_AUTH_SECRET = randomBytes(32).toString("base64url")

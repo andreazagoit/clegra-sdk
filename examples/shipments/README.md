@@ -1,9 +1,9 @@
 # Shipments: an example Clegra app
 
-A courier's shipments and pickups as a Clegra app (`clegra`): one `defineApp`
+A courier's shipments and pickups as a Clegra app (`@clegra/sdk`): one `defineApp`
 object that the SDK serves as a manifest for workspace hosts (a Clegra node)
 and as a plain MCP server for ChatGPT, Claude and any MCP client. It runs on
-Node's own HTTP server (`clegra/node`), has no UI of its own, and keeps its
+Node's own HTTP server (`@clegra/sdk/node`), has no UI of its own, and keeps its
 invented data **in memory** (`MemoryStore` for writes, `src/courier.ts` for the
 data): a restart starts again from the seed. So it has no database, no
 migrations, no re-key script and no Docker image; a real courier app would
@@ -86,11 +86,11 @@ other's data, even with the same installation id.
 
 ## Run it
 
-From this folder, in the repository (the `clegra` package is a workspace):
+From this folder, in the repository (`@clegra/sdk` is the repository's root, a workspace):
 
 ```sh
 npm run dev      # 127.0.0.1:4319, signed in by the SDK's dev authority; prints a token and the check command
-npx clegra check http://127.0.0.1:4319 --token <the printed token>   # Conformant.
+npx @clegra/sdk check http://127.0.0.1:4319 --token <the printed token>   # Conformant.
 
 SHIPMENTS_PUBLIC_URL=https://shipments.example.com CLEGRA_ISSUERS=https://node.example.com npm start
 ```
@@ -113,7 +113,7 @@ this repository's workspace):
 
 | Export | What it is |
 |---|---|
-| `createShipmentsApp({ courier?, installation? })` | The app in-process, for `app.fetch(request, { remoteAddress: "127.0.0.1" })`: dev authority (`app.devToken()`, `app.devConfirmation()`, the clients of `clegra/testing`), `MemoryStore`, data in memory |
+| `createShipmentsApp({ courier?, installation? })` | The app in-process, for `app.fetch(request, { remoteAddress: "127.0.0.1" })`: dev authority (`app.devToken()`, `app.devConfirmation()`, the clients of `@clegra/sdk/testing`), `MemoryStore`, data in memory |
 | `shipmentsManifest` | The manifest (`Manifest`, plain JSON) exactly as served at `/.well-known/clegra.json` by a server at `SHIPMENTS_URL` (`https://shipments.example.com`, MCP at `/mcp`) trusting `https://node.example.com`. The dev app's manifest differs only in `auth` |
 | `SHIPMENTS_PEOPLE` | `ada` (all permissions, «Ada Rossi»), `bruno` (`shipments.view`, «Bruno Verdi») |
 | `SHIPMENTS_INSTALLATION` | `"test"`, the dev tokens' default installation |
@@ -128,7 +128,7 @@ These change only with a new version of this example (CHANGELOG.md).
 
 ```ts
 import { createCourier, createShipmentsApp, devTenant, SHIPMENTS_SETTINGS } from "clegra-example-shipments/fixture"
-import { installationClient } from "clegra/testing"
+import { installationClient } from "@clegra/sdk/testing"
 
 const courier = createCourier()
 const app = createShipmentsApp({ courier })

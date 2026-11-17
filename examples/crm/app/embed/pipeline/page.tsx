@@ -1,4 +1,4 @@
-import { getEmbedCaller } from "clegra/next"
+import { getEmbedCaller } from "@clegra/sdk/next"
 
 import { boardDeals, companyNames, isWorkspaceInstallation, provisionWorkspace, STAGES } from "@/lib/crm"
 import { formatDate, formatMoney, STAGE_LABELS } from "@/lib/format"

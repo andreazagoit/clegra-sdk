@@ -1,6 +1,6 @@
 // The CRM's public address: ONE variable, CLEGRA_PUBLIC_URL (an origin, e.g. https://crm.example.com).
 // better-auth runs under it (issuer <origin>/api/auth), the MCP server is <origin>/mcp, and the clegra
-// route (clegra/next) reads the same variable. Read on use, never at import (a build has no secrets).
+// route (@clegra/sdk/next) reads the same variable. Read on use, never at import (a build has no secrets).
 
 const LOCAL_ORIGIN = "http://localhost:3920"
 const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]"])

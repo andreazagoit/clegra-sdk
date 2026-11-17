@@ -1,4 +1,4 @@
-import { toNextHandlers } from "clegra/next"
+import { toNextHandlers } from "@clegra/sdk/next"
 
 import { app } from "../../../../clegra"
 

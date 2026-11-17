@@ -14,8 +14,8 @@ const { password, users } = await import("./setup")
 import { and, eq } from "drizzle-orm"
 import { verifyOAuthQueryParams } from "@better-auth/oauth-provider"
 import { decodeJwt, decodeProtectedHeader, generateKeyPair, SignJWT } from "jose"
-import { embedProxy, toNextHandlers } from "clegra/next"
-import { checkApp, formatReport } from "clegra/spec"
+import { embedProxy, toNextHandlers } from "@clegra/sdk/next"
+import { checkApp, formatReport } from "@clegra/sdk/spec"
 
 import { deals, member, user } from "../db/schema"
 import { auth } from "../lib/auth"

@@ -17,7 +17,7 @@ import type { IdempotencyStore } from "./store"
  * page. The page reads the caller from that cookie (`session`). Every embed response says who may frame it:
  * `Content-Security-Policy: frame-ancestors` with the hosts the app declares, never `X-Frame-Options`.
  *
- * Framework-neutral: `exchange(request)` returns a standard Response; `clegra/next` wires it into proxy.ts.
+ * Framework-neutral: `exchange(request)` returns a standard Response; `@clegra/sdk/next` wires it into proxy.ts.
  */
 
 export type EmbedOptions = {

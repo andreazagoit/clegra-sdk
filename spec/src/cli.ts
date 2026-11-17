@@ -3,7 +3,7 @@ import { checkApp, formatReport } from "./conformance"
 import { initMain } from "./init/index"
 
 // clegra check <url> [--token <bearer>]   (or CLEGRA_TOKEN in the environment)
-// clegra init [dir] [--ui] [--dry-run]    (the clegra package added to an existing Next.js App Router app; --ui: clegra/ui too)
+// clegra init [dir] [--ui] [--dry-run]    (@clegra/sdk added to an existing Next.js App Router app; --ui: @clegra/ui too)
 const USAGE = "usage: clegra check <url> [--token <bearer>]\n       clegra init [dir] [--ui] [--dry-run]"
 const [command, ...args] = process.argv.slice(2)
 

@@ -4,17 +4,13 @@
 //   - relative imports get their ".js": the sources import "./define" for the bundlers and tsx; Node's ESM loader
 //     and `moduleResolution: node16` need the extension (in the .js and in the .d.ts);
 //   - the JSON assets (the manifest's JSON Schema, kinds.json) are copied next to the code that reads them;
-//   - the CLI gets a node shebang and the executable bit;
-//   - ui/ (clegra/ui) is built into dist/ui by scripts/ui.mjs (ESM + .d.ts, the stylesheets, prebuilt.css), and
-//     every bare import there must be a declared (peer) dependency.
+//   - the CLI gets a node shebang and the executable bit.
 // Run: npm run build (also the first step of `npm pack`, scripts/prepack.mjs). dist/ is git-ignored.
 import { execFileSync } from "node:child_process"
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { createRequire } from "node:module"
 import { dirname, join, relative, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
-
-import { buildUi, undeclaredImports } from "./ui.mjs"
 
 const pkg = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const dist = join(pkg, "dist")
@@ -27,7 +23,6 @@ export const CLI = "dist/spec/src/cli.js"
 rmSync(dist, { recursive: true, force: true })
 const tsc = createRequire(join(pkg, "package.json")).resolve("typescript/bin/tsc")
 execFileSync(process.execPath, [tsc, "-p", join(pkg, "tsconfig.build.json")], { stdio: ["ignore", 2, 2] })
-await buildUi(dist)
 
 const walk = (d) => readdirSync(d).flatMap((f) => (statSync(join(d, f)).isDirectory() ? walk(join(d, f)) : [join(d, f)]))
 // `from "./x"`, `import("./x")`, `import "./x"` and `export … from "./x"`, in .js and .d.ts.
@@ -44,9 +39,6 @@ for (const file of walk(dist)) {
   })
   if (fixed !== text) writeFileSync(file, fixed)
 }
-
-const undeclared = undeclaredImports(dist, JSON.parse(readFileSync(join(pkg, "package.json"), "utf8")))
-if (undeclared.length) throw new Error(`build: dist/ui imports what package.json does not declare:\n  ${undeclared.join("\n  ")}`)
 
 for (const asset of ASSETS) {
   mkdirSync(dirname(join(dist, asset)), { recursive: true })

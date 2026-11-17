@@ -1,6 +1,6 @@
 # Clegra apps
 
-> Clegra's developer platform: apps that are also MCP servers. One typed object — `defineApp({ entities, actions, pages, fragments, agents, … })` from the package `clegra` — becomes a plain, conformant MCP server with tools, annotations, MCP Apps views and OAuth (for ChatGPT, Claude and any MCP client) and a JSON manifest Clegra reads to draw the app natively in its workspace. No MCP extension required.
+> Clegra's developer platform: apps that are also MCP servers. One typed object — `defineApp({ entities, actions, pages, fragments, agents, … })` from the package `@clegra/sdk` — becomes a plain, conformant MCP server with tools, annotations, MCP Apps views and OAuth (for ChatGPT, Claude and any MCP client) and a JSON manifest Clegra reads to draw the app natively in its workspace. No MCP extension required.
 
 ## Start here
 
@@ -9,8 +9,8 @@
 ## More
 
 - [Specification](spec.md): the manifest, kinds and cross-app references, the generated MCP server, enforcement, conformance, the workspace host across apps (normative, short)
-- [Quickstart](quickstart.md): Next.js in 5 minutes (`npx clegra init`), a day to ship; standalone Node; tests
-- [UI](ui.md): `clegra/ui`, Clegra's components for React and React Native, the theme and `<ClegraProvider>` for an app's own view; `npx clegra init --ui`, Tailwind 4 setup, tokens
+- [Quickstart](quickstart.md): Next.js in 5 minutes (`npx @clegra/sdk init`), a day to ship; standalone Node; tests
+- UI: `@clegra/ui`, a separate package (its own repository and guide): Clegra's components for React and React Native, the theme and `<ClegraProvider>` for an app's own view; `npx @clegra/sdk init --ui` adds it with Tailwind 4
 - [Auth](auth.md): your sign-in as the authorization server, your `auth.resolve`; recipes for better-auth, Clerk, Auth0, WorkOS
 - [CRM example](examples/crm.md): Next.js, better-auth, Drizzle; code in `examples/crm/clegra/app.ts`
 - [Warehouse example](examples/warehouse.md): Next.js, better-auth, plain SQL; code in `examples/warehouse/lib/clegra.ts`

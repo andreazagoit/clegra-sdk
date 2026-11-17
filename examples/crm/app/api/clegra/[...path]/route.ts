@@ -1,6 +1,6 @@
 // The Clegra app server (MCP at /mcp, its manifest and OAuth metadata under /.well-known/), rewritten here by
 // withClegra in next.config.ts.
-import { toNextHandlers, type NextHandlers } from "clegra/next"
+import { toNextHandlers, type NextHandlers } from "@clegra/sdk/next"
 
 import { publicOrigin } from "@/lib/site"
 import { crmApp } from "@/clegra"

@@ -4,7 +4,7 @@
 > authorization server». This page shows how to meet them with the sign-in you already have.
 
 An MCP client (Claude, ChatGPT, the MCP Inspector) connects to `https://app.example.com/mcp` as an OAuth client.
-Each person signs in once with your app's own sign-in and gets an access token for your MCP server. The `clegra`
+Each person signs in once with your app's own sign-in and gets an access token for your MCP server. The `@clegra/sdk`
 package answers the `401`, serves the protected-resource metadata (RFC 9728) and enforces everything after that point. Your
 code does one thing: it says whether a token is good and who it belongs to.
 
@@ -114,7 +114,7 @@ The `resolve` (about 40 lines). Each check closes one specific hole:
 // clegra-auth.ts
 import { oauthProviderAuthServerMetadata, oauthProviderOpenIdConfigMetadata } from "@better-auth/oauth-provider"
 import { createLocalJWKSet, decodeProtectedHeader, errors, jwtVerify, type JWK } from "jose"
-import { AuthError, type AuthOptions, type CallerResolver } from "clegra"
+import { AuthError, type AuthOptions, type CallerResolver } from "@clegra/sdk"
 import { auth, issuer, resource } from "@/lib/auth"
 
 let keys: { set: ReturnType<typeof createLocalJWKSet>; at: number } | null = null
@@ -214,7 +214,7 @@ opens a public endpoint that anyone can use to create clients.
 ```ts
 // `clerk`: the Clerk backend client (@clerk/backend), and verifyClerkToken (@clerk/mcp-tools), set up and imported
 // exactly as in Clerk's MCP guide for Next.js.
-import { AuthError, type AuthOptions } from "clegra"
+import { AuthError, type AuthOptions } from "@clegra/sdk"
 
 export const appAuth: AuthOptions = {
   resource,
@@ -265,7 +265,7 @@ issuer in `authorizationServers` and leaving `serve` out.
 
 ```ts
 import { ApiClient } from "@auth0/auth0-api-js"
-import { AuthError, type AuthOptions } from "clegra"
+import { AuthError, type AuthOptions } from "@clegra/sdk"
 
 const api = new ApiClient({ domain: process.env.AUTH0_DOMAIN!, audience: resource })   // checks iss, aud, exp, nbf
 
@@ -309,7 +309,7 @@ so name your app's permissions the same (`deals.view`) or map between them. Not 
 
 ```ts
 import { createRemoteJWKSet, jwtVerify } from "jose"
-import { AuthError, type AuthOptions } from "clegra"
+import { AuthError, type AuthOptions } from "@clegra/sdk"
 
 const AUTHKIT = process.env.WORKOS_AUTHKIT_DOMAIN!                    // https://<your-authkit-domain>
 const jwks = createRemoteJWKSet(new URL(`${AUTHKIT}/oauth2/jwks`))   // jose caches and refetches on an unknown kid
@@ -351,7 +351,7 @@ permissions). The frame posts it to `/embed/_ticket` and gets a partitioned cook
 
 ## Locally, before any of this
 
-`npx clegra init` writes a `resolve` that also accepts one bearer from `.env.local` (`CLEGRA_LOCAL_TOKEN`). It is
+`npx @clegra/sdk init` writes a `resolve` that also accepts one bearer from `.env.local` (`CLEGRA_LOCAL_TOKEN`). It is
 refused whenever `NODE_ENV` is `production`, which `next build`, `next start` and every deployment set. Use it to see
 the app in the Inspector on day one, and keep it as you plug in one of the recipes above. The
 [quickstart](quickstart.md) has the details.

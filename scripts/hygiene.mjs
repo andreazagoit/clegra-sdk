@@ -46,6 +46,22 @@ export const FORBIDDEN = [
 ]
 
 /**
+ * The package names before the split into @clegra/sdk and @clegra/ui (npm refused the unscoped «clegra»): no import,
+ * dependency or command may use them. The wire names stay (`clegra://`, `_meta.clegra`, the bin `clegra`, CLEGRA_*).
+ * The changelogs (HISTORY) are exempt: their older entries keep the names of their time.
+ */
+export const OLD_NAMES = [
+  /(?<![@\w/.-])clegra\/(ui|next|node|testing|spec)\b/,
+  /\b(from|import|require\()\s*\(?\s*["']clegra["']/,
+  /["']clegra["']\s*:\s*["'](file:|\^|~|\*|\d|latest|next)/,
+  /\bnp[mx]\s+(i|install|add)?\s*clegra(@|\s|$)/,
+  /\bnpx\s+clegra\b/,
+]
+
+/** Files whose older entries are history (checked against FORBIDDEN, not OLD_NAMES). */
+const HISTORY = /(^|\/)CHANGELOG\.md$/
+
+/**
  * What may appear although a FORBIDDEN pattern matches it: the licence's owner (NOTICE.md) and the invented secrets
  * of the tests. Only these exact strings are taken out of a line before it is checked.
  */
@@ -55,6 +71,9 @@ export const ALLOWED = [
   'CLEGRA_OAUTH_PASSWORD: "not-the-password"',
   'secret: "a-test-secret-for-embedded-pages-0123456789"',
   'secret: "a-different-secret-for-another-app-0123456789"',
+  // A wire name (the key under the MCP Apps host context's _meta that Clegra's look rides in), not a package path.
+  '_meta["clegra/ui"]',
+  'CLEGRA_UI_META_KEY = "clegra/ui"',
 ]
 
 /** This file names the patterns it looks for: it is not checked against them. */
@@ -72,7 +91,7 @@ function checkFiles(base, names) {
       .split("\n")
       .forEach((raw, i) => {
         const line = ALLOWED.reduce((l, allowed) => l.split(allowed).join(""), raw)
-        for (const pattern of FORBIDDEN) {
+        for (const pattern of HISTORY.test(name) ? FORBIDDEN : [...FORBIDDEN, ...OLD_NAMES]) {
           const m = pattern.exec(line)
           if (m) findings.push(`${name}:${i + 1}: ${pattern} «${line.slice(Math.max(0, m.index - 30), m.index + m[0].length + 30).trim()}»`)
         }

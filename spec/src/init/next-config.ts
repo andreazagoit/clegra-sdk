@@ -27,8 +27,8 @@ function balanced(expression: string): boolean {
 
 function manualHow(cjs: boolean): string {
   return cjs
-    ? 'const { withClegra } = require("clegra/next")\n…\nmodule.exports = withClegra(<your config>)'
-    : 'import { withClegra } from "clegra/next"\n…\nexport default withClegra(<your config>)'
+    ? 'const { withClegra } = require("@clegra/sdk/next")\n…\nmodule.exports = withClegra(<your config>)'
+    : 'import { withClegra } from "@clegra/sdk/next"\n…\nexport default withClegra(<your config>)'
 }
 
 export function wrapNextConfig(text: string): ConfigEdit {
@@ -51,7 +51,7 @@ export function wrapNextConfig(text: string): ConfigEdit {
   const semi = /;\s*$/.test(line) || lines.some((l) => /^import\s.*;\s*$/.test(l)) ? ";" : ""
   const q = (text.match(/'/g)?.length ?? 0) > (text.match(/"/g)?.length ?? 0) ? "'" : '"'
   lines[at] = `${m[1]}withClegra(${expression})${m[3] || semi}`
-  const statement = isCjs ? `const { withClegra } = require(${q}clegra/next${q})${semi}` : `import { withClegra } from ${q}clegra/next${q}${semi}`
+  const statement = isCjs ? `const { withClegra } = require(${q}@clegra/sdk/next${q})${semi}` : `import { withClegra } from ${q}@clegra/sdk/next${q}${semi}`
   // After the last import (or require) line; without one, after the leading comment lines (`// @ts-check` stays first).
   const importLine = isCjs ? /^(const|let|var)\s.*=\s*require\(['"][^'"]+['"]\)/ : /^(import\s.*|\}\s*)from\s+['"][^'"]+['"]|^import\s+['"][^'"]+['"]/
   let insertAt = -1

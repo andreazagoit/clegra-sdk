@@ -1,7 +1,7 @@
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 
-import { withClegra } from "clegra/next"
+import { withClegra } from "@clegra/sdk/next"
 import type { NextConfig } from "next"
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -9,7 +9,7 @@ const here = dirname(fileURLToPath(import.meta.url))
 const nextConfig: NextConfig = {
   // PGlite (local development database only) ships WebAssembly and data files: loaded by Node as is, never bundled.
   serverExternalPackages: ["@electric-sql/pglite"],
-  // The repository root, where node_modules is (and clegra itself).
+  // The repository root, where node_modules is (and @clegra/sdk itself).
   turbopack: { root: join(here, "../..") },
   // No generated AGENTS.md in the project.
   agentRules: false,

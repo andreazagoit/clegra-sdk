@@ -102,7 +102,7 @@ export type ServerOptions = {
 }
 
 /**
- * The app's embedded pages (spec §5.1), for the route in front of them (`clegra/next`'s `embedProxy`, or any
+ * The app's embedded pages (spec §5.1), for the route in front of them (`@clegra/sdk/next`'s `embedProxy`, or any
  * server): the ticket exchange, the headers of every embed response, and the caller of a page from its cookie.
  */
 export type AppEmbed = {
@@ -2231,7 +2231,7 @@ export class AppServer {
   }
 
   /**
-   * Readiness for serving (`listen` in `clegra/node`, a framework adapter): the manifest is built and
+   * Readiness for serving (`listen` in `@clegra/sdk/node`, a framework adapter): the manifest is built and
    * checked, the dev authority started. Returns the dev sign-in code when dev sign-in is on.
    */
   async start(): Promise<{ devCode: string | null }> {
@@ -2263,7 +2263,7 @@ export class AppServer {
     const problem = this.#productionProblem()
     if (problem) return json({ error: "misconfigured", error_description: problem }, 500)
     const base = this.#path
-    // The embed ticket exchange (spec §5.1), for a server that hands every request here (clegra/node); Next's proxy
+    // The embed ticket exchange (spec §5.1), for a server that hands every request here (@clegra/sdk/node); Next's proxy
     // answers it before the route (embedProxy).
     if (this.#embed && url.pathname === this.#embed.exchangePath) return this.embed!.exchange(request)
     const devHere = Boolean(this.#dev) && isLoopback(info.remoteAddress)

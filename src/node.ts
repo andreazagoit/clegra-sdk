@@ -6,9 +6,9 @@ import { isLoopback } from "./auth"
 import type { App } from "./define"
 
 /**
- * `clegra/node`: an app on Node's own HTTP server, for a standalone
+ * `@clegra/sdk/node`: an app on Node's own HTTP server, for a standalone
  * app or local tools. A web app serves `app.fetch` from its framework instead
- * (`clegra/next`); the core itself never opens a socket.
+ * (`@clegra/sdk/next`); the core itself never opens a socket.
  */
 export async function listen(app: App, options: { port?: number; host?: string; log?: boolean } = {}): Promise<{ url: string; close: () => Promise<void> }> {
   const port = options.port ?? 3000

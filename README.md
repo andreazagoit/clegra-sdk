@@ -1,49 +1,48 @@
-# clegra
+# @clegra/sdk
 
 The package Clegra apps are built with. MIT. You write one typed object, `defineApp({ entities, actions, pages,
 fragments, agents, … })`. It becomes a plain, conformant MCP server (tools, MCP Apps views, OAuth) for ChatGPT, Claude
 and any MCP client, and a JSON manifest Clegra reads to draw the app natively in its workspace. Spec: [docs/spec.md](docs/spec.md).
 
 ```sh
-npm i clegra zod
+npm i @clegra/sdk zod
 ```
 
-ESM JavaScript with its type declarations, Node 20+; `zod` 4 is a peer dependency, `next` (15+) an optional one, and
-so is every library `clegra/ui` draws with (React, Base UI, lucide, recharts, React Native's…): an app that only serves
-MCP installs none of them.
-Versions before 1.0 are prereleases on the dist-tag `next` (`npm i clegra@next zod`); [docs/RELEASE.md](docs/RELEASE.md)
+ESM JavaScript with its type declarations, Node 20+; `zod` 4 is a peer dependency and `next` (15+) an optional one: an
+app that only serves MCP installs no React and no UI library. Clegra's design system is the separate package
+`@clegra/ui` (below); this one does not depend on it.
+Versions before 1.0 are prereleases on the dist-tag `next` (`npm i @clegra/sdk@next zod`); [docs/RELEASE.md](docs/RELEASE.md)
 says how the tarball is made, checked and published.
 
 | Entry | What |
 | --- | --- |
-| `clegra` | `defineApp`, `AuthError`, `SqlStore`, `MemoryStore`, types. Framework-agnostic (`app.fetch(request)`) |
-| `clegra/next` | `toNextHandlers`, `withClegra`, `clegraRewrites`; `embedProxy`, `getEmbedCaller` for embedded pages (`next` is an optional peer dependency) |
-| `clegra/node` | `listen(app)`: the app on Node's own HTTP server |
-| `clegra/testing` | `testClient(app)`: JSON-RPC to `app.fetch` with dev tokens; `installationClient(app)` for schedules, later runs and lifecycle tools |
-| `clegra/spec` | `checkApp`, `formatReport`: the conformance checks |
-| `clegra/ui/...` | Clegra's design library: components for React and React Native, the theme, `<ClegraProvider>` for an app's own view (below) |
-| CLI | `npx clegra init [dir] [--ui] [--dry-run]`; `npx clegra check <url> [--token …]` (or `CLEGRA_TOKEN`) |
+| `@clegra/sdk` | `defineApp`, `AuthError`, `SqlStore`, `MemoryStore`, types. Framework-agnostic (`app.fetch(request)`) |
+| `@clegra/sdk/next` | `toNextHandlers`, `withClegra`, `clegraRewrites`; `embedProxy`, `getEmbedCaller` for embedded pages (`next` is an optional peer dependency) |
+| `@clegra/sdk/node` | `listen(app)`: the app on Node's own HTTP server |
+| `@clegra/sdk/testing` | `testClient(app)`: JSON-RPC to `app.fetch` with dev tokens; `installationClient(app)` for schedules, later runs and lifecycle tools |
+| `@clegra/sdk/spec` | `checkApp`, `formatReport`: the conformance checks |
+| CLI | `npx @clegra/sdk init [dir] [--ui] [--dry-run]`; `npx @clegra/sdk check <url> [--token …]` (or `CLEGRA_TOKEN`) |
 
-## Next.js: `npx clegra init`
+## Next.js: `npx @clegra/sdk init`
 
-In an existing App Router app, `npx clegra init` writes the three files below and wraps next.config. It also puts a
+In an existing App Router app, `npx @clegra/sdk init` writes the three files below and wraps next.config. It also puts a
 random local bearer in `.env.local` (`CLEGRA_LOCAL_TOKEN`), which the generated `resolve` accepts only when
 `NODE_ENV` isn't `production`. It never overwrites a file, prints what it can't edit safely, and `--dry-run` writes
-nothing. Then `npm run dev` and `npx clegra check http://localhost:3000 --token <CLEGRA_LOCAL_TOKEN>`.
+nothing. Then `npm run dev` and `npx @clegra/sdk check http://localhost:3000 --token <CLEGRA_LOCAL_TOKEN>`.
 See [docs/quickstart.md](docs/quickstart.md).
 
 ## Next.js: three files
 
 ```ts
 // next.config.ts
-import { withClegra } from "clegra/next"
+import { withClegra } from "@clegra/sdk/next"
 
 export default withClegra({ /* your config: your rewrites, in any shape, are kept */ })
 ```
 
 ```ts
 // app/api/clegra/[...path]/route.ts
-import { toNextHandlers } from "clegra/next"
+import { toNextHandlers } from "@clegra/sdk/next"
 import { app } from "@/clegra"
 
 export const { GET, POST, DELETE, OPTIONS } = toNextHandlers(app)
@@ -51,7 +50,7 @@ export const { GET, POST, DELETE, OPTIONS } = toNextHandlers(app)
 
 ```ts
 // clegra.ts
-import { defineApp } from "clegra"
+import { defineApp } from "@clegra/sdk"
 
 export const app = defineApp({
   name: "crm",
@@ -102,7 +101,7 @@ const caller = await getEmbedCaller(app, "board") // null: no ticket, expired, o
 ```
 
 `app.embed.exchange(request)` and `app.embed.caller(page, request)` are the same, framework-neutral; `app.fetch`
-answers `POST <path>/_ticket` too (`clegra/node`).
+answers `POST <path>/_ticket` too (`@clegra/sdk/node`).
 
 ## Public URL behind proxies and on Vercel
 
@@ -127,7 +126,7 @@ Recipes for better-auth, Clerk, Auth0 and WorkOS: [docs/auth.md](docs/auth.md).
 
 Dev sign-in (`auth.dev`) answers loopback callers only. A Next route handler can't know the caller's address:
 `x-forwarded-for` is whatever the client sent. So `toNextHandlers` refuses an app with `auth.dev`. Locally,
-use init's bearer (`CLEGRA_LOCAL_TOKEN`) or your own sign-in, or run the app with `listen` from `clegra/node`.
+use init's bearer (`CLEGRA_LOCAL_TOKEN`) or your own sign-in, or run the app with `listen` from `@clegra/sdk/node`.
 
 ## Kinds and references across apps
 
@@ -205,40 +204,30 @@ These become the app-only tools `clegra_installation`, `clegra_export` (one embe
 also removes the tenant's later runs.
 
 ```ts
-const host = await installationClient(app)   // clegra/testing
+const host = await installationClient(app)   // @clegra/sdk/testing
 await host.schedule("digest"); await host.runLater(); const { file } = await host.exportData()
 ```
 
-## `clegra/ui`
+## Your own UI: `@clegra/ui`
 
-Clegra's components (shadcn's on Base UI for the web; the same names and props for React Native, SwiftUI through
-Expo UI on iOS where it has the control), the theme (light and dark) and `<ClegraProvider>` (an MCP Apps view that
-takes the host's look). Full guide: [docs/ui.md](docs/ui.md).
+An app's own pages and views can use Clegra's design system, the package `@clegra/ui` (its own repository, version
+and guide): components for React and React Native, the theme (light and dark), tokens and `<ClegraProvider>` (an
+MCP Apps view that takes the host's look). The view `@clegra/sdk` generates is plain HTML and needs none of it.
 
 ```sh
-npx clegra init --ui && npm install   # the web UI libraries into package.json, clegra/ui's stylesheet after Tailwind
+npx @clegra/sdk init --ui && npm install   # @clegra/ui and its web libraries into package.json, its stylesheet after Tailwind
 ```
 
 ```css
-/* app/globals.css (Tailwind 4); without Tailwind: import "clegra/ui/prebuilt.css" in the root layout */
+/* app/globals.css (Tailwind 4); without Tailwind: import "@clegra/ui/prebuilt.css" in the root layout */
 @import "tailwindcss";
-@import "clegra/ui/styles.css";
+@import "@clegra/ui/styles.css";
 ```
 
 ```tsx
-import { Button } from "clegra/ui/components/button"   // web, or native under the react-native condition
-import { ClegraProvider } from "clegra/ui/frame"
-import { colorsFor } from "clegra/ui/tokens"
+import { Button } from "@clegra/ui/components/button"
+import { ClegraProvider } from "@clegra/ui/frame"
 ```
-
-Entries: `clegra/ui/components/*`, `clegra/ui/react/*` and `clegra/ui/react-native/*` (one platform explicitly),
-`clegra/ui/base-ui/*`, `clegra/ui/hooks/*`, `clegra/ui/primitives`, `clegra/ui/frame`, `clegra/ui/tokens`,
-`clegra/ui/native/{theme,overlay,icons,icon-context,expo-ui-controls}`, `clegra/ui/metro` (`withClegraUI` for Expo's Metro), and
-`clegra/ui/{styles,theme,shadcn,prebuilt}.css`. The components that are Clegra's own chrome (sidebar, menu bars, the
-chat's pieces, toasts…) are not published.
-
-shadcn's components in `ui/components/` stay as shadcn made them (`components.json` here). `ui/` imports nothing
-but its declared peer dependencies: the build refuses any other import.
 
 ## This repository
 
@@ -246,23 +235,23 @@ The package is the repository's root, so it is published from here (`npm publish
 
 | Path | What | In the tarball |
 | --- | --- | --- |
-| `src/` | `clegra`, `clegra/next`, `clegra/node`, `clegra/testing` | built, as `dist/src` |
-| `spec/` | `clegra/spec` (conformance checks), the CLI, `clegra init`, the manifest's JSON Schema, `kinds.json` | built, as `dist/spec` |
-| `ui/` | `clegra/ui`: components (React, React Native), theme (`ui/brand`: the palette), frame provider, Metro | built, as `dist/ui` |
+| `src/` | `@clegra/sdk`, `@clegra/sdk/next`, `@clegra/sdk/node`, `@clegra/sdk/testing` | built, as `dist/src` |
+| `spec/` | `@clegra/sdk/spec` (conformance checks), the CLI (`clegra`: `init`, `check`), the manifest's JSON Schema, `kinds.json` | built, as `dist/spec` |
 | `docs/` | The specification, quickstart, guides, release steps | `docs/spec.md` and `docs/quickstart.md` only |
-| `examples/` | `crm` and `warehouse` (Next.js), `shipments` (Node): npm workspaces of this repository using `clegra` as `file:../..` (its TypeScript source, no build step); `examples/deploy.sh` deploys a Next.js example to Vercel | no |
+| `examples/` | `crm` and `warehouse` (Next.js), `shipments` (Node): npm workspaces of this repository using `@clegra/sdk` as `file:../..` (its TypeScript source, no build step); `examples/deploy.sh` deploys a Next.js example to Vercel | no |
 | `test/` | The real Next.js test (`test/fixture`) | no |
 | `scripts/` | The build, `prepack`/`postpack`, the pack check, the hygiene check, the JSON Schema writer | no |
+| `vendor/` | (git-ignored) the `@clegra/ui` tarball the pack check installs beside this package | no |
 
 ```sh
 npm ci              # the package's tooling and the examples' dependencies (one lockfile)
-npm run typecheck   # src, spec, scripts, and ui/ (ui/tsconfig.json); typecheck:all adds the examples
-npm test            # core, clegra/next, clegra/ui, clegra init (fixture projects in temp folders), the conformance checks
+npm run typecheck   # src, spec, scripts; typecheck:all adds the examples
+npm test            # core, @clegra/sdk/next, clegra init (fixture projects in temp folders), the conformance checks
 npm run test:examples   # the three examples' tests (the Next.js ones on an embedded Postgres, PGlite)
 npm run test:next   # test/fixture with next dev (port 3942), then next build + next start (3943); clegra check through the rewrites; the embedded page in Chromium (Playwright)
 npm run hygiene     # nothing private in any tracked file (scripts/hygiene.mjs)
-npm run build       # dist/ (git-ignored): what the tarball ships, dist/ui included (scripts/ui.mjs); npm pack builds it itself
-npm run pack:check  # slow: npm pack, the publish guard, a Node-only app (no React), a fresh Next.js app with clegra/ui
+npm run build       # dist/ (git-ignored): what the tarball ships; npm pack builds it itself
+npm run pack:check  # slow: npm pack, the publish guard, a Node-only app (no React), a fresh Next.js app, and one with @clegra/ui too (vendor/)
 ```
 
 In the repository the package exports its TypeScript source. `npm pack` and `npm publish` build `dist/` and swap in a

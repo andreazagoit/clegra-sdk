@@ -2,7 +2,7 @@
 // authorization server, lib/auth-options.ts), and workspace hosts such as a Clegra node (CLEGRA_ISSUERS).
 import { oauthProviderAuthServerMetadata, oauthProviderOpenIdConfigMetadata } from "@better-auth/oauth-provider"
 import { createLocalJWKSet, decodeProtectedHeader, errors, jwtVerify, type JWK } from "jose"
-import { AuthError, type AuthOptions, type CallerResolver, type Issuer } from "clegra"
+import { AuthError, type AuthOptions, type CallerResolver, type Issuer } from "@clegra/sdk"
 
 import { auth, membership } from "@/lib/auth"
 import { CLEGRA_SCOPE, ORG_CLAIM } from "@/lib/auth-options"

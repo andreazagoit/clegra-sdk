@@ -1,4 +1,4 @@
-import { listen } from "clegra/node"
+import { listen } from "@clegra/sdk/node"
 
 import { defineShipmentsApp } from "./app"
 import { shipmentsAuth } from "./auth"
@@ -22,7 +22,7 @@ async function main() {
     const app = createShipmentsApp()
     const running = await listen(app, { port, host: "127.0.0.1" })
     const token = await app.devToken({ person: "ada", permissions: "all", installation: SHIPMENTS_INSTALLATION })
-    console.log(`Shipments (dev) on ${running.url}. A token for Ada, while this process runs:\n  npx clegra check ${running.url} --token ${token}`)
+    console.log(`Shipments (dev) on ${running.url}. A token for Ada, while this process runs:\n  npx @clegra/sdk check ${running.url} --token ${token}`)
     stopOn(running.close)
     return
   }

@@ -2,9 +2,9 @@ import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { describe, it } from "node:test"
 
-import { META_KEY } from "clegra"
-import { checkApp, formatReport } from "clegra/spec"
-import { installationClient, testClient } from "clegra/testing"
+import { META_KEY } from "@clegra/sdk"
+import { checkApp, formatReport } from "@clegra/sdk/spec"
+import { installationClient, testClient } from "@clegra/sdk/testing"
 
 import { shipmentsAuth } from "../src/auth"
 import { createCourier, createShipmentsApp, devTenant, PERMISSIONS, SHIPMENTS_PEOPLE, SHIPMENTS_SETTINGS, SHIPMENTS_URL, shipmentsManifest } from "../src/fixture"

@@ -14,7 +14,7 @@ import * as schema from "@/db/schema"
 export type Db = PgDatabase<PgQueryResultHKT, typeof schema>
 export type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0]
 
-/** One SQL statement with `$1…` parameters: for code that takes plain SQL (the clegra store). */
+/** One SQL statement with `$1…` parameters: for code that takes plain SQL (@clegra/sdk's store). */
 export type RawQuery = (text: string, params: unknown[]) => Promise<Record<string, unknown>[]>
 
 export type Database = { kind: "postgres" | "pglite"; db: Db; query: RawQuery; close(): Promise<void> }

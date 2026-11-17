@@ -1,4 +1,4 @@
-import { embedProxy } from "clegra/next"
+import { embedProxy } from "@clegra/sdk/next"
 
 import { warehouseApp } from "@/lib/app"
 

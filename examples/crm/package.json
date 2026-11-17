@@ -29,7 +29,7 @@
     "better-call": "1.4.0",
     "drizzle-orm": "^0.45.4",
     "jose": "^6.2.13",
-    "clegra": "file:../..",
+    "@clegra/sdk": "file:../..",
     "next": "16.4.6",
     "postgres": "^3.4.9",
     "react": "19.3.0",

@@ -8,9 +8,9 @@ import { envLines, LOCAL_TOKEN_ENV, clegraFile, nextConfigFile, routeFile } from
 import { initUi } from "./ui"
 
 /**
- * `clegra init`: the clegra package added to an existing Next.js App Router app. It writes `clegra.ts`, the route
+ * `clegra init`: @clegra/sdk added to an existing Next.js App Router app. It writes `clegra.ts`, the route
  * `app/api/clegra/[...path]/route.ts`, wraps next.config with `withClegra`, and puts a local bearer in
- * `.env.local`. With `ui`, also clegra/ui: its web libraries in package.json, its stylesheet after Tailwind (ui.ts).
+ * `.env.local`. With `ui`, also @clegra/ui: its web libraries in package.json, its stylesheet after Tailwind (ui.ts).
  * It never overwrites a file: what exists is left as it is, and what it can't do safely it prints for you to do by
  * hand. `dryRun` prints the same and writes nothing.
  */
@@ -87,7 +87,7 @@ export function runInit(options: InitOptions): InitResult {
   }
   if (!project.envIgnored) warnings.push(".gitignore does not keep .env.local out of git: add `.env*.local` to it")
 
-  // 5. clegra/ui (--ui).
+  // 5. @clegra/ui (--ui).
   let installUi = false
   if (options.ui) {
     const ui = initUi(project, write)
@@ -96,16 +96,16 @@ export function runInit(options: InitOptions): InitResult {
     installUi = ui.install
   }
 
-  if (project.oldZod) warnings.push(`zod ${project.oldZod} is installed: clegra needs zod 4 (npm i zod@4)`)
+  if (project.oldZod) warnings.push(`zod ${project.oldZod} is installed: @clegra/sdk needs zod 4 (npm i zod@4)`)
   if (project.proxy) warnings.push(`${project.proxy} runs before every route: let /mcp, /.well-known/* and /api/clegra/* through without a session (MCP clients send a bearer token, never your cookies)`)
 
   const base = `http://localhost:${project.port}`
   const shown = write ? token : "<generated on a real run>"
   const next = [
     ...(project.missing.length ? [`npm i ${project.missing.join(" ")}`] : []),
-    ...(installUi ? ["npm install   (clegra/ui's libraries, added to package.json)"] : []),
+    ...(installUi ? ["npm install   (@clegra/ui's libraries, added to package.json)"] : []),
     `npm run dev   (then ${base}/.well-known/clegra.json is the manifest, ${base}/mcp the MCP server)`,
-    `npx clegra check ${base} --token ${shown}`,
+    `npx @clegra/sdk check ${base} --token ${shown}`,
     `MCP Inspector: npx @modelcontextprotocol/inspector, Streamable HTTP, ${base}/mcp, header Authorization: Bearer ${shown}`,
     `A day to ship: your data in get/list/run, your sign-in in auth.resolve and authorizationServers, CLEGRA_PUBLIC_URL in production (the TODOs in ${existingApp ?? appFile}; docs: quickstart.md and auth.md)`,
   ]

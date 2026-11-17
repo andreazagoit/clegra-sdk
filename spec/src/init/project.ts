@@ -30,7 +30,7 @@ export type Project = {
   appTitle: string
   /** Dependencies the generated files import that package.json lacks. */
   missing: string[]
-  /** The installed zod's major version when it is not 4 (clegra needs zod 4), else null. */
+  /** The installed zod's major version when it is not 4 (@clegra/sdk needs zod 4), else null. */
   oldZod: string | null
   /** The port `next dev` uses (from the dev script's -p/--port), default 3000. */
   port: number
@@ -113,7 +113,7 @@ export function detectProject(root: string): Project {
   const pkg = readJson(join(root, "package.json"))
   if (!pkg) throw new InitError(`no package.json in ${root}: run clegra init in the folder of an existing Next.js app`)
   const deps = { ...((pkg.dependencies ?? {}) as Record<string, string>), ...((pkg.devDependencies ?? {}) as Record<string, string>) }
-  if (!deps.next) throw new InitError(`${join(root, "package.json")} has no "next" dependency: clegra init adds the clegra package to an existing Next.js app (for another server, see listen() in clegra/node)`)
+  if (!deps.next) throw new InitError(`${join(root, "package.json")} has no "next" dependency: clegra init adds @clegra/sdk to an existing Next.js app (for another server, see listen() in @clegra/sdk/node)`)
   const installed = readJson(join(root, "node_modules", "next", "package.json"))
   const nextVersion = typeof installed?.version === "string" ? installed.version : deps.next
   const appDir = existsSync(join(root, "app")) ? "app" : existsSync(join(root, "src", "app")) ? "src/app" : null
@@ -123,7 +123,7 @@ export function detectProject(root: string): Project {
   const clegraDir = appDir === "src/app" ? join(root, "src") : root
   const alias = aliasFor(root, clegraDir, readJson(join(root, ts ? "tsconfig.json" : "jsconfig.json"), true))
   const appName = appNameOf(pkg.name)
-  const missing = ["clegra", "zod"].filter((d) => !deps[d])
+  const missing = ["@clegra/sdk", "zod"].filter((d) => !deps[d])
   const zod = readJson(join(root, "node_modules", "zod", "package.json"))
   const zodMajor = typeof zod?.version === "string" ? zod.version.split(".")[0]! : null
   const proxy = ["proxy", "middleware"].flatMap((n) => ["ts", "js", "mjs"].flatMap((e) => [`${n}.${e}`, `src/${n}.${e}`])).find((f) => existsSync(join(root, f))) ?? null

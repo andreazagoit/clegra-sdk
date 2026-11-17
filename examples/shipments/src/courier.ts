@@ -1,4 +1,4 @@
-import type { Filter, ListResult, Query } from "clegra"
+import type { Filter, ListResult, Query } from "@clegra/sdk"
 
 /**
  * THE COURIER'S DATA, IN MEMORY: invented shipments and pickups, one set per

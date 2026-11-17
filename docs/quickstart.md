@@ -1,8 +1,8 @@
 # Quickstart
 
 > A Clegra app is an app that Clegra draws natively and that is also a plain MCP server for ChatGPT, Claude and any
-> MCP client. One package, `clegra` (ESM JavaScript with its
-> types, Node 20+; not on npm yet: until it is, install its tarball, see [RELEASE.md](RELEASE.md)). For a Next.js app that already has data and a sign-in: **five
+> MCP client. One package, `@clegra/sdk` (ESM JavaScript with its
+> types, Node 20+; `npm i @clegra/sdk@next zod`). Its design library is the separate package `@clegra/ui` (optional). For a Next.js app that already has data and a sign-in: **five
 > minutes to see it, a day to ship it.**
 
 ## Next.js in 5 minutes
@@ -10,8 +10,8 @@
 In an existing Next.js App Router app (`app/` or `src/app/`):
 
 ```sh
-npm i clegra zod         # before the first release: npm i ./clegra-0.1.0.tgz zod (the tarball of `npm pack`)
-npx clegra init          # --dry-run prints what it would do; --ui adds clegra/ui (ui.md)
+npm i @clegra/sdk zod         # before the first release: npm i ./clegra-0.1.0.tgz zod (the tarball of `npm pack`)
+npx @clegra/sdk init          # --dry-run prints what it would do; --ui adds @clegra/ui, Clegra's design system
 ```
 
 ```text
@@ -24,7 +24,7 @@ clegra init: Next.js 16.4.6, App Router in app/, TypeScript, alias @/*, next.con
 
 Next:
   1. npm run dev   (then http://localhost:3000/.well-known/clegra.json is the manifest, http://localhost:3000/mcp the MCP server)
-  2. npx clegra check http://localhost:3000 --token <the token>
+  2. npx @clegra/sdk check http://localhost:3000 --token <the token>
   3. MCP Inspector: npx @modelcontextprotocol/inspector, Streamable HTTP, http://localhost:3000/mcp, header Authorization: Bearer <the token>
   4. A day to ship: …
 ```
@@ -42,13 +42,13 @@ What it writes:
 
 init never overwrites a file. Running it twice only prints `skip`s. It warns about what would get in the way: a
 `proxy.ts` (or `middleware.ts`) that would block `/mcp`, `basePath` or `trailingSlash: true` (which `withClegra`
-refuses), a `.gitignore` that doesn't cover `.env.local`, and missing `clegra`/`zod`.
+refuses), a `.gitignore` that doesn't cover `.env.local`, and missing `@clegra/sdk`/`zod`.
 
 Then:
 
 ```sh
 npm run dev
-npx clegra check http://localhost:3000 --token <CLEGRA_LOCAL_TOKEN>
+npx @clegra/sdk check http://localhost:3000 --token <CLEGRA_LOCAL_TOKEN>
 ```
 
 - **The MCP Inspector**: `npx @modelcontextprotocol/inspector`, transport Streamable HTTP, URL
@@ -86,7 +86,7 @@ Work through the TODOs in `clegra.ts`:
    tables (`clegra_store`, `clegra_store_later`) for a migration, `CREATE … IF NOT EXISTS`: run it as a migration,
    never at startup, and again in a new migration when you upgrade.
 5. **`clegra check` in CI.** Get a token for a test user through the real OAuth flow, then run
-   `CLEGRA_TOKEN=… npx clegra check https://preview.example.com`. The exit code is 0 when conformant, 1 when a
+   `CLEGRA_TOKEN=… npx @clegra/sdk check https://preview.example.com`. The exit code is 0 when conformant, 1 when a
    check failed, and 3 when there was no token (only the public checks ran).
 6. **Connect Claude and ChatGPT.** They need https: your deployment, or `cloudflared tunnel --url
    http://localhost:3000` locally. Note that a tunnel's host is not `CLEGRA_PUBLIC_URL`, and your authorization
@@ -113,7 +113,7 @@ the caller's address:
 
 ```ts
 // app.ts
-import { AppError, defineApp } from "clegra"
+import { AppError, defineApp } from "@clegra/sdk"
 import { z } from "zod"
 
 type Note = { id: string; title: string; status: "open" | "done" }
@@ -189,7 +189,7 @@ export default defineApp({
 
 ```ts
 // main.ts
-import { listen } from "clegra/node"
+import { listen } from "@clegra/sdk/node"
 import app from "./app"
 await listen(app, { port: 3920 })   // MCP at /mcp, manifest at /.well-known/clegra.json
 ```
@@ -276,7 +276,7 @@ lifecycle: {
 ## Test it
 
 ```ts
-import { installationClient, testClient } from "clegra/testing"
+import { installationClient, testClient } from "@clegra/sdk/testing"
 import app from "./app"
 
 const plain = await testClient(app, { permissions: "all" })           // as ChatGPT would call
@@ -294,7 +294,7 @@ await installation.call("clegra_delete")
 
 `testClient` signs with dev tokens, so it needs `auth: { dev: true }` on the app it tests. Alternatively, pass
 `token` with a bearer your own `resolve` accepts, which is how the Next examples test their real auth. Then run the conformance checks ([spec §8](spec.md#8-conformance)):
-`npx clegra check <url> --token <bearer>`.
+`npx @clegra/sdk check <url> --token <bearer>`.
 
 ## Your data layer
 

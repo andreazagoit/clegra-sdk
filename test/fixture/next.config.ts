@@ -1,4 +1,4 @@
-import { withClegra } from "clegra/next"
+import { withClegra } from "@clegra/sdk/next"
 
 // The app's own rewrites in the array shape: withClegra keeps them (afterFiles) behind its own (beforeFiles).
 export default withClegra({

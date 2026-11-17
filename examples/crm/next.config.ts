@@ -1,10 +1,10 @@
 import path from "node:path"
 
-import { withClegra } from "clegra/next"
+import { withClegra } from "@clegra/sdk/next"
 import type { NextConfig } from "next"
 
 const nextConfig: NextConfig = {
-  // The example is a workspace of this repository: its dependencies (and clegra, the repository root) are installed at the root.
+  // The example is a workspace of this repository: its dependencies (and @clegra/sdk, the repository root) are installed at the root.
   turbopack: { root: path.join(import.meta.dirname, "../..") },
   // The embedded Postgres (local runs only) loads its WebAssembly and data files at run time: never bundled.
   serverExternalPackages: ["@electric-sql/pglite"],

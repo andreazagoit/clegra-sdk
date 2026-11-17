@@ -1,4 +1,4 @@
-import type { AuthOptions, Issuer } from "clegra"
+import type { AuthOptions, Issuer } from "@clegra/sdk"
 
 /**
  * WHO MAY CALL: the workspace hosts (Clegra nodes) of the companies that

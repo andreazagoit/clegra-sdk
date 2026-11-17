@@ -12,10 +12,10 @@ export function clegraFile(input: { name: string; title: string; ts: boolean }):
   const T = (typed: string, plain: string) => (ts ? typed : plain)
   return `// Your app as a Clegra app (Clegra apps): one defineApp object that becomes a manifest for workspace hosts
 // and a plain MCP server for ChatGPT, Claude and any MCP client. Served by app/api/clegra/[...path]/route${ts ? ".ts" : ".js"};
-// next.config's withClegra puts it at /mcp and /.well-known/clegra.json. Written by \`npx clegra init\`.
+// next.config's withClegra puts it at /mcp and /.well-known/clegra.json. Written by \`npx @clegra/sdk init\`.
 import { timingSafeEqual } from "node:crypto"
 
-import { AppError, defineApp${T(", type ResolvedCaller", "")} } from "clegra"
+import { AppError, defineApp${T(", type ResolvedCaller", "")} } from "@clegra/sdk"
 import { z } from "zod"
 
 // ------------------------------------------------------------------ data
@@ -70,7 +70,7 @@ export const app = defineApp({
       // TODO(your sign-in): verify your sign-in's access token (signature, expiry, and aud === _info.resource, this
       // server's MCP address) and say who is calling, from your own users and roles:
       //   return { installation: user.organizationId, person: { id: user.id, name: user.name }, permissions: ["tasks.edit"] }
-      // Recipes for better-auth, Clerk, Auth0 and WorkOS: auth.md in the clegra docs. null refuses the token (401).
+      // Recipes for better-auth, Clerk, Auth0 and WorkOS: auth.md in the @clegra/sdk docs. null refuses the token (401).
       return null
     },
   },
@@ -133,7 +133,7 @@ export const app = defineApp({
 
 /** `app/api/clegra/[...path]/route.ts`: the one route that serves MCP, the manifest and the OAuth metadata. */
 export function routeFile(input: { importPath: string }): string {
-  return `import { toNextHandlers } from "clegra/next"
+  return `import { toNextHandlers } from "@clegra/sdk/next"
 
 import { app } from ${JSON.stringify(input.importPath)}
 
@@ -146,13 +146,13 @@ export const { GET, POST, DELETE, OPTIONS } = toNextHandlers(app)
 export function nextConfigFile(ts: boolean): string {
   return ts
     ? `import type { NextConfig } from "next"
-import { withClegra } from "clegra/next"
+import { withClegra } from "@clegra/sdk/next"
 
 const nextConfig: NextConfig = {}
 
 export default withClegra(nextConfig)
 `
-    : `import { withClegra } from "clegra/next"
+    : `import { withClegra } from "@clegra/sdk/next"
 
 /** @type {import("next").NextConfig} */
 const nextConfig = {}
