@@ -62,11 +62,13 @@ export const OLD_NAMES = [
 const HISTORY = /(^|\/)CHANGELOG\.md$/
 
 /**
- * What may appear although a FORBIDDEN pattern matches it: the licence's owner (NOTICE.md) and the invented secrets
+ * What may appear although a FORBIDDEN pattern matches it: the licence's owner (NOTICE.md), the package's public repository and the invented secrets
  * of the tests. Only these exact strings are taken out of a line before it is checked.
  */
 export const ALLOWED = [
   "Andrea Zago, ditta individuale",
+  // The public GitHub repository of this package (package.json repository, homepage, bugs; README links).
+  "github.com/andreazagoit/clegra-sdk",
   'const SECRET = "an-embed-secret-for-the-tests-only-0123456789"',
   'CLEGRA_OAUTH_PASSWORD: "not-the-password"',
   'secret: "a-test-secret-for-embedded-pages-0123456789"',

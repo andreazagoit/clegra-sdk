@@ -4,6 +4,11 @@ Clegra apps (spec 1.0 draft) and the `@clegra/sdk` package. Newest first. Versio
 npm dist-tag `next`. Entries below «Two scoped packages» keep the names of their time (the unscoped `clegra` package
 and its `clegra/ui`, the `modelapp` package, docs/map): they are history.
 
+## Unreleased
+
+- package.json names the public repository (`repository`, `homepage`, `bugs`: github.com/andreazagoit/clegra-sdk), so
+  npm links to it and the README's relative links resolve there.
+
 ## 0.1.0-next.1 (2026-11-17)
 
 - `@clegra/sdk/spec` works inside a bundled Next.js server (Turbopack): the manifest's JSON Schema is a JSON import,
