@@ -1,6 +1,10 @@
 {
   "name": "@clegra/sdk",
   "version": "0.1.0-next.2",
+  "clegra": {
+    "kind": "public",
+    "owner": "sdk"
+  },
   "type": "module",
   "description": "Clegra apps: one typed object — defineApp({ entities, actions, pages, fragments, agents, … }) — becomes a JSON manifest for workspace hosts and a plain, conformant MCP server (tools, annotations, MCP Apps views, OAuth) for ChatGPT, Claude and any MCP client. Next.js and Node adapters, test client, conformance checks, CLI.",
   "license": "MIT",
@@ -67,7 +71,6 @@
     "test:next": "tsx --test test/next.test.ts",
     "test:examples": "npm test --workspaces --if-present",
     "test:all": "npm test && npm run test:examples && npm run test:next",
-    "hygiene": "node scripts/hygiene.mjs --tree",
     "pack:check": "tsx scripts/pack-check.mjs",
     "schema": "tsx scripts/schema.ts",
     "clegra:check": "tsx spec/src/cli.ts check",

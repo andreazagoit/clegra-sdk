@@ -66,6 +66,7 @@ const published = { ...repo, main: exports["."].default, types: exports["."].typ
 delete published.devDependencies
 delete published.workspaces
 delete published.overrides
+delete published.clegra
 
 copyFileSync(file, saved)
 writeFileSync(file, `${JSON.stringify(published, null, 2)}\n`)

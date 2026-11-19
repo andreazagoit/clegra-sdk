@@ -1,3 +1,5 @@
+> **Read-only mirror.** This repository is published from where @clegra/sdk is developed; pull requests are not merged here. Issues are welcome.
+
 # @clegra/sdk
 
 The package Clegra apps are built with. MIT. You write one typed object, `defineApp({ entities, actions, pages,
@@ -241,7 +243,7 @@ The package is the repository's root, so it is published from here (`npm publish
 | `docs/` | The specification, quickstart, guides, release steps | `docs/spec.md` and `docs/quickstart.md` only |
 | `examples/` | `crm` and `warehouse` (Next.js), `shipments` (Node): npm workspaces of this repository using `@clegra/sdk` as `file:../..` (its TypeScript source, no build step), run locally | no |
 | `test/` | The real Next.js test (`test/fixture`) | no |
-| `scripts/` | The build, `prepack`/`postpack`, the pack check, the hygiene check, the JSON Schema writer | no |
+| `scripts/` | The build, `prepack`/`postpack`, the pack check, the JSON Schema writer | no |
 | `vendor/` | (git-ignored) the `@clegra/ui` tarball the pack check installs beside this package | no |
 
 ```sh
@@ -250,7 +252,6 @@ npm run typecheck   # src, spec, scripts; typecheck:all adds the examples
 npm test            # core, @clegra/sdk/next, clegra init (fixture projects in temp folders), the conformance checks
 npm run test:examples   # the three examples' tests (the Next.js ones on an embedded Postgres, PGlite)
 npm run test:next   # test/fixture with next dev (port 3942), then next build + next start (3943); clegra check through the rewrites; the embedded page in Chromium (Playwright)
-npm run hygiene     # nothing private in any tracked file (scripts/hygiene.mjs)
 npm run build       # dist/ (git-ignored): what the tarball ships; npm pack builds it itself
 npm run pack:check  # slow: npm pack, the publish guard, a Node-only app (no React), a fresh Next.js app, and one with @clegra/ui too (vendor/)
 ```

@@ -3,7 +3,8 @@
 //   npm run pack:check -- [--dir <empty folder outside the repo>] [--port 3946] [--ui <@clegra/ui tarball>] [--keep]
 // 1. `npm pack` (prepack builds dist/): the tarball's files, its package.json (@clegra/sdk, publishConfig public, every
 //    export and the bin built, no devDependencies, workspaces or overrides, only the "postpublish" script, no UI entry
-//    or UI peer), every relative import in dist resolving inside the tarball, the hygiene check (scripts/hygiene.mjs),
+//    or UI peer), every relative import in dist resolving inside the tarball, the hygiene check (the private one of the repository
+//    this package is developed in, when present),
 //    and the publish guard (dry runs: a prerelease without a dist-tag is refused, `--tag next` passes; nothing is
 //    uploaded), the repository's package.json back.
 // 2. A Node-only app (no React anywhere): the tarball and zod installed, no React or React DOM in its tree,
@@ -119,9 +120,14 @@ for (const f of [...files].filter((f) => /\.(js|d\.ts)$/.test(f))) {
 }
 expect(unresolved.length === 0, `every relative import in dist resolves inside the tarball${unresolved.length ? `: ${unresolved.slice(0, 5).join(", ")}` : ""}`)
 expect(existsSync(dist), "dist/ was built")
-const { checkTarball } = await import("./hygiene.mjs")
-const findings = checkTarball(tarball)
-expect(findings.length === 0, `hygiene check (nothing internal ships)${findings.length ? `:\n       ${findings.join("\n       ")}` : ""}`)
+// The hygiene list names what must never ship, so it is private: it lives in the repository this package is developed
+// in, not in the package (and not in its public mirror, where this step is skipped).
+const hygiene = resolve(pkgDir, "../../scripts/repo/hygiene.mjs")
+if (existsSync(hygiene)) {
+  const { checkTarball } = await import(hygiene)
+  const findings = checkTarball("sdk", tarball)
+  expect(findings.length === 0, `hygiene check (nothing internal ships)${findings.length ? `:\n       ${findings.join("\n       ")}` : ""}`)
+} else console.log("  (hygiene check skipped: the private list is not in this checkout)")
 // The guard, on dry runs only (nothing is uploaded): a prerelease without a dist-tag is refused (by prepack, before
 // any build; npm too), with --tag next the whole publish runs; package.json is the repository's after each.
 const untagged = run(npm, ["publish", "--dry-run"], { cwd: pkgDir })

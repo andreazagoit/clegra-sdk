@@ -49,8 +49,8 @@ npm run pack:check -- --dir "$(mktemp -d /tmp/clegra-pack.XXXX)" --port 3946
 Slow (four `npm install`s, `next dev`, two `next build`s), so not in `npm test`. It packs the tarball and checks its
 files and package.json (`@clegra/sdk`, public, the bin `clegra`, every export target in the tarball, `types` before
 `default`, no UI entry, peers `zod` and optional `next` only), that every relative import in `dist` resolves inside
-the tarball, the hygiene check (`scripts/hygiene.mjs`: no private or customer name, private repository path, secret
-or pre-split package name), and the guard (a dry-run publish without a tag is refused; with `--tag next` it passes,
+the tarball, the hygiene check where it is available (no private name, private path, secret or pre-split package
+name), and the guard (a dry-run publish without a tag is refused; with `--tag next` it passes,
 public access; nothing leaves the machine). Then:
 
 1. a Node-only app (the tarball and zod): no React, Next or UI library in its tree; `@clegra/sdk` and
@@ -77,7 +77,7 @@ are left out of package.json until it exists).
 
 ```sh
 npm ci
-npm run typecheck && npm test && npm run hygiene
+npm run typecheck && npm test
 npm run pack:check -- --dir "$(mktemp -d /tmp/clegra-pack.XXXX)"
 npm whoami                       # a member of the npm organisation `clegra`
 npm publish --dry-run --tag next # read the file list once more
