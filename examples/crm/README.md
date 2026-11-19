@@ -64,7 +64,3 @@ organization.
 | `CLEGRA_ISSUERS` | Workspace hosts (e.g. a Clegra node) whose tokens are accepted, as `issuer\|jwksUri`, comma-separated. Each installation gets its own copy of the demo data |
 
 A missing variable is an error, never a silent fallback.
-
-## Public demo
-
-https://modelapp-crm-demo.vercel.app (MCP at `/mcp`). Invented data. The sign-in page has "Enter as …" buttons, so no password is needed.

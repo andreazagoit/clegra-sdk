@@ -239,7 +239,7 @@ The package is the repository's root, so it is published from here (`npm publish
 | `src/` | `@clegra/sdk`, `@clegra/sdk/next`, `@clegra/sdk/node`, `@clegra/sdk/testing` | built, as `dist/src` |
 | `spec/` | `@clegra/sdk/spec` (conformance checks), the CLI (`clegra`: `init`, `check`), the manifest's JSON Schema, `kinds.json` | built, as `dist/spec` |
 | `docs/` | The specification, quickstart, guides, release steps | `docs/spec.md` and `docs/quickstart.md` only |
-| `examples/` | `crm` and `warehouse` (Next.js), `shipments` (Node): npm workspaces of this repository using `@clegra/sdk` as `file:../..` (its TypeScript source, no build step); `examples/deploy.sh` deploys a Next.js example to Vercel | no |
+| `examples/` | `crm` and `warehouse` (Next.js), `shipments` (Node): npm workspaces of this repository using `@clegra/sdk` as `file:../..` (its TypeScript source, no build step), run locally | no |
 | `test/` | The real Next.js test (`test/fixture`) | no |
 | `scripts/` | The build, `prepack`/`postpack`, the pack check, the hygiene check, the JSON Schema writer | no |
 | `vendor/` | (git-ignored) the `@clegra/ui` tarball the pack check installs beside this package | no |

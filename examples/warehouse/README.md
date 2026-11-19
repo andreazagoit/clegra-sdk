@@ -91,8 +91,8 @@ person then goes through these steps:
   with URL `http://localhost:3930/mcp`, then connect and follow the OAuth flow.
 - **Claude and ChatGPT** need a public https address. They identify themselves with a Client ID
   Metadata Document, an https URL. Dynamic client registration is off.
-  - Deploy the app (below), or tunnel the local server and set `CLEGRA_PUBLIC_URL` to the
-    tunnel's https origin.
+  - Tunnel the local server (e.g. `cloudflared tunnel --url http://localhost:3930`) and set `CLEGRA_PUBLIC_URL` to
+    the tunnel's https origin.
   - Then add `<site>/mcp` as a custom connector in Claude (Settings → Connectors) or ChatGPT
     (developer mode → connectors).
 - **An access token by script**, for `clegra check` or curl. It runs the real flow over HTTP:
@@ -110,31 +110,7 @@ person then goes through these steps:
     npm run clegra:check -- http://localhost:3930
   ```
 
-## Deploy (Vercel + Neon Postgres)
-
-1. Create a Postgres database (for example Neon, in an EU region).
-   - The app uses the pooled URL (the `-pooler` host, with `?sslmode=require`).
-   - Migrations and the seed run from your machine:
-
-     ```sh
-     DATABASE_URL='postgres://…' npm run db:migrate
-     DATABASE_URL='postgres://…' DEMO_PASSWORD='…' npm run db:seed
-     ```
-
-2. Create a Vercel project with Root Directory `examples/warehouse`, framework Next.js and
-   Install Command `cd ../.. && npm ci` (the example is a workspace of this repository). Set these
-   environment variables:
-   - `DATABASE_URL`
-   - `CLEGRA_PUBLIC_URL`: the production origin, e.g. `https://warehouse.example.com` (not sensitive: pages read it
-     at build time)
-   - `BETTER_AUTH_SECRET` (`openssl rand -base64 32`)
-   - `DEMO_PASSWORD` and `DEMO_SIGNIN=1`, for a demo
-   - optionally `CLEGRA_ISSUERS`: workspace hosts (e.g. a Clegra node) whose tokens are
-     accepted, as `issuer|jwksUri`, comma-separated. Each installation gets its own copy of the
-     demo data
-3. Deploy (Vercel builds from the repository: the example is an npm workspace and uses `@clegra/sdk` from the
-   repository root), or build here and upload: `examples/deploy.sh warehouse` with `VERCEL_ORG_ID` and
-   `VERCEL_WAREHOUSE_PROJECT_ID` set. Then run the token script and `clegra check` against the public URL.
+## Runtime
 
 Nothing is written to disk at runtime: sessions, OAuth clients, signing keys, rate limits and
 the SDK's idempotency store (`clegra_store`, also the used embed tickets) all live in Postgres. `/embed/*` pages may be
@@ -156,7 +132,3 @@ framed only by the hosts declared in `lib/clegra.ts` (`EMBED_HOSTS`), signed in 
 - role changes and removed members, with tokens issued before;
 - the consent steps;
 - the conformance suite.
-
-## Public demo
-
-https://modelapp-warehouse-demo.vercel.app (MCP at `/mcp`). Invented data. The sign-in page has "Enter as …" buttons, so no password is needed.
