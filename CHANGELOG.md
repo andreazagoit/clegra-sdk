@@ -4,7 +4,7 @@ Clegra apps (spec 1.0 draft) and the `@clegra/sdk` package. Newest first. Versio
 npm dist-tag `next`. Entries below «Two scoped packages» keep the names of their time (the unscoped `clegra` package
 and its `clegra/ui`, the `modelapp` package, docs/map): they are history.
 
-## Unreleased
+## 0.1.0-next.2 (2026-11-19)
 
 - package.json names the public repository (`repository`, `homepage`, `bugs`: github.com/andreazagoit/clegra-sdk), so
   npm links to it and the README's relative links resolve there.
