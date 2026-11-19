@@ -30,16 +30,11 @@ import {
   tenantData,
 } from "@/lib/crm"
 import { database } from "@/lib/db"
+import { STAGE_WORDS } from "@/lib/format"
 
 // ------------------------------------------------------------------ schemas (fields carry their meaning)
 
-const stageLabels = {
-  lead: { en: "Lead", it: "Contatto" },
-  qualified: { en: "Qualified", it: "Qualificata" },
-  proposal: { en: "Proposal", it: "Proposta" },
-  won: { en: "Won", it: "Vinta" },
-  lost: { en: "Lost", it: "Persa" },
-}
+const stageLabels = STAGE_WORDS
 
 const companySchema = z.object({
   id: z.string(),
