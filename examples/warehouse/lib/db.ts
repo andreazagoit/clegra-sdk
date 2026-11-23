@@ -92,6 +92,15 @@ export async function pglitePool(dataDir: string): Promise<{ pool: Pool; exec(sc
   }
 }
 
+/** DATABASE_POOL_MAX: unset or empty is 5, else a whole number from 1 to 100 (`Number("")` is 0: a pool that never connects). */
+export function poolSize(value: string | undefined): number {
+  const given = value?.trim()
+  if (!given) return 5
+  const n = Number(given)
+  if (!Number.isInteger(n) || n < 1 || n > 100) throw new Error(`DATABASE_POOL_MAX must be a whole number from 1 to 100 (it is "${given}").`)
+  return n
+}
+
 async function createDb(): Promise<Db> {
   const url = process.env.DATABASE_URL
   if (url) {
@@ -99,7 +108,7 @@ async function createDb(): Promise<Db> {
     // TLS comes from the URL (`?sslmode=require`, as Neon gives it). Serverless: few connections per instance, closed
     // when idle, so instances that scale up and down don't hold the database's connections; with Neon use its pooled
     // (`-pooler`) host for the app — pg sends unnamed statements, which its transaction pooling supports.
-    const pool = new pg.Pool({ connectionString: url, max: Number(process.env.DATABASE_POOL_MAX ?? 5), idleTimeoutMillis: 10_000, connectionTimeoutMillis: 10_000 })
+    const pool = new pg.Pool({ connectionString: url, max: poolSize(process.env.DATABASE_POOL_MAX), idleTimeoutMillis: 10_000, connectionTimeoutMillis: 10_000 })
     return { kind: "postgres", pool: pool as unknown as Pool, exec: async (script) => void (await pool.query(script)) }
   }
   if (process.env.NODE_ENV === "production") throw new Error("DATABASE_URL is not set. In production the app needs a Postgres database; PGlite is for local development only.")

@@ -85,12 +85,12 @@ export const app = defineApp({ name: "acme-tasks", title: "Tasks", version: "1.0
 | `indigo` | `#4F46E5` | `#5850EC` |
 | `purple` | `#8B2FD9` | `#9340E0` |
 | `pink` | `#C81E73` | `#D42A82` |
-| `red` | `#DC2626` | `#E0302F` |
+| `red` | `#D02424` | `#E0302F` |
 | `orange` | `#EA580C` | `#FB8C3C` |
 | `yellow` | `#B88300` | `#FACC15` |
-| `green` | `#15803D` | `#34C759` |
-| `teal` | `#0F766E` | `#2DD4BF` |
-| `gray` | `#6B6B6B` | `#6B6B6B` |
+| `green` | `#127535` | `#34C759` |
+| `teal` | `#0F716A` | `#2DD4BF` |
+| `gray` | `#636363` | `#6B6B6B` |
 
 Choose the one closest to your icon. Anything else fails when the app starts (`accent: "#00AA88" is not one of …`)
 and in `clegra check` (`manifest.schema`). Without `accent` the manifest has none and hosts use `blue`.

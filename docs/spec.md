@@ -45,6 +45,7 @@ JSON Schema: [`spec/schema/clegra.schema.json`](../spec/schema/clegra.schema.jso
 | `view` | The generated `ui://` view that draws lists, records, dashboards, artifacts |
 | `resolveTool`, `searchTool?` | Tools a host uses to resolve URIs and to search |
 | `site?` | `{ start, tool }`: the app's own website, shown as it is in Clegra's clients (§5.1) |
+| `components?` | The app's own A2UI components, by name (§5.4): `{ <Name>: { title, description?, view, props, actions? } }` |
 | `kinds?` | Definitions of the namespaced kinds this app uses (§3.1) |
 | `entities`, `actions`, `pages`, `artifacts`, `agents` | §3–§5 |
 | `permissions` | `{ id, label, description?, default }`; ids are `group.verb` |
@@ -349,16 +350,17 @@ actions?, badge?, … }` (`actions`, `badge`: §5.2):
 | `custom` | `view` | The developer's MCP Apps document |
 
 An **artifact** is a small live piece of the app shown in answers and on
-dashboards: `{ type, title, description?, params, template?, view?, tool,
+dashboards: `{ type, title, description?, params, template?, component?, view?, tool,
 permission?, actions?, size?, untrusted?, visibility? }` (`visibility`: §6
 rule 11). Templates are `record` (one per
-entity, `params { id }`), `card`, `stat`, `list`, `chart`; an artifact without
-a template has only a `view`. An artifact instance's URI is
+entity, `params { id }`), `card`, `stat`, `list`, `chart`; `component` names
+one of the app's own components (§5.4); an artifact with neither has only a `view`. An artifact instance's URI is
 `clegra://<app>/<type>/<base64url of its params, keys sorted>`.
 `untrusted: true` says the artifact's texts are outsiders' (records' names):
 they are marked like an untrusted field (§7).
 
-Template data, which a workspace host draws natively:
+Template data, which a workspace host draws natively, as the A2UI surface the
+SDK writes from them (§5.4):
 
 | Template | Data |
 |---|---|
@@ -588,6 +590,189 @@ shared with other apps. With `auth.clegra`:
    `allow-top-navigation`, no `allow-popups-to-escape-sandbox`, and its own
    `frame-src` lists exactly the company's app origins.
 
+### 5.4 Artifacts as A2UI surfaces
+
+Every artifact with a template or a component reaches hosts as an **A2UI 1.0
+surface** ([A2UI](https://a2ui.org), specification v1.0, stable since
+2026-11-11: `specification/v1_0` of `a2ui-project/a2ui`). The app keeps declaring
+templates (§5) and its own components (rule 6); the SDK writes the surface from
+the data, and the data stay the app's: they travel only in the surface's data
+model, read for the caller like any artifact. A host renders the surface
+natively, with its own design system in the app's accent (§2); the app's own
+components are pages of the app, framed (rule 7). The same surface is drawn in
+an assistant's answer, on a home or a dashboard, in a record, and in any other
+A2UI host. An app's own site (§5.1) is not a surface: it stays a frame.
+
+1. **Version.** Messages are A2UI 1.0 exactly: `"version": "1.0"` on every
+   message, component ids UAX #31 identifiers (`item_title`, never
+   `item-title`), bindings `{ "@path": "/…" }` (relative inside a list
+   template), function calls `{ "@call", "args", "catalogId"? }`, no `theme`
+   (A2UI 1.0 removed it: the look is the host's). A host refuses a surface of
+   another version, one that is not valid against the A2UI 1.0 schemas and
+   the catalogs below, or one over the host's size limit; it never guesses.
+2. **Where.** The resolved artifact (`show_<type>`'s `structuredContent`,
+   `clegra_resolve` with `want: "artifact"`, a dashboard's artifacts) carries
+   `a2ui`: an array of exactly one `createSurface` message with `surfaceId` the
+   artifact instance's URI, `catalogId` the Basic Catalog's, `components` (one
+   with `id: "root"`) and `dataModel` the template's data as the app returned
+   them (a component artifact: its props). `show_<type>` also returns the same
+   array as an MCP embedded resource, `{ type: "resource", resource: { uri:
+   "a2ui://<app>/surfaces/<type>", mimeType: "application/a2ui+json", text } }`,
+   beside its text (A2UI over MCP), so any A2UI host can render it. Surface ids
+   are the host's to keep unique (A2UI's rule for orchestrators): it MAY
+   prefix them per place it draws. A host MUST NOT send `updateComponents` it
+   did not get from the app; a newer read of the artifact is a new surface.
+3. **Catalogs.** Three, all A2UI 1.0 (`protocolVersion: "1.0"`):
+
+   | `catalogId` | What |
+   |---|---|
+   | `https://a2ui.org/specification/v1_0/catalogs/basic/catalog.json` | The Basic Catalog: `Card`, `Column`, `Row`, `List`, `Text`, `Button`, `Divider`; functions `formatNumber`, `formatCurrency`, `formatString`. The surface's default |
+   | `https://clegra.com/a2ui/v1_0/catalog.json` | Clegra's (exported as `CLEGRA_A2UI_CATALOG`): the components `Chart` `{ kind, points, format?, currency? }` (each a binding) and `Spreadsheet` (rule 9), the functions `formatPercent { value }` (a share, 0.125 → «12,5 %» in the reader's locale) and `openRecord { uri }` (`rendererOnly`, `requiresUserActivation`: the host opens the record a `clegra://` URI names where records open in that host; an empty URI does nothing) |
+   | `a2ui://<app>/catalog.json` | The app's own components (rule 6), served by the app as an MCP resource at that URI (`application/json`) |
+
+   A component or function of the two others names its catalog (`@catalogId`
+   on a component, `catalogId` on a call).
+4. **Templates as components.** The SDK writes these trees (ids fixed, so
+   hosts and tests can rely on them). Texts are bound to the data model, never
+   pasted into a format string, so no text of a record is ever read as
+   Markdown. The style hints are a component-scope extension,
+   `"@metadata": { "extensions": { "com_clegra_style": <hint> } }`, with
+   `title` (the card's heading), `value` (a figure, large), `status` (a word
+   of state, as a badge) and `muted` (secondary text); a host that doesn't know
+   it draws plain text (A2UI: unknown extension keys are ignored). A part whose
+   data are absent (no `subtitle`, no `status`, no `hint`) is left out of the
+   tree; inside a list, an empty text is not drawn.
+
+   | Template | Tree |
+   |---|---|
+   | `card` | `root` Card → `body` Column [`head` Row (spaceBetween) [`title`, `status`?], `subtitle`?, `fields` List (template `/fields` → `field` Row (spaceBetween) [`field_label` Text caption `label`, `field_value` Text `value`]), `actions`?]. `title` is Text `/title` (style `title`), or with `/uri` a borderless Button around it (`title_text`) whose action calls `openRecord { uri: /uri }` |
+   | `stat` | `root` Card → `body` Column [`heading` Text (the artifact's title, style `title`), `value`, `label` Text caption `/label`, `hint`? Text caption `/hint`, `actions`?]. `value` is Text (style `value`): `formatCurrency { value: /value, currency: /currency or "EUR" }` for money, `formatPercent { value: /value }` for percent, `formatNumber { value: /value }` for a number, `/value` itself for a text |
+   | `list` | `root` Card → `body` Column [`heading`, `items` List (template `/items` → `item` Row (spaceBetween) [`item_main` Column [`item_title`, `item_subtitle` Text caption `subtitle`], `item_status` Text `status` (style `status`)]), `actions`?]. With any item's `uri`, `item_title` is a borderless Button around `item_title_text` calling `openRecord { uri }` |
+   | `chart` | `root` Card → `body` Column [`heading`, `chart` Chart (Clegra) `kind: /kind, points: /points, format: /format, currency: /currency`, `actions`?] |
+   | a component | `root` Card → `body` Column [`heading`, `component` (the app's component, `@catalogId` the app's catalog, each prop bound to `/<prop>`), `actions`?] |
+
+   `record` artifacts (an entity's record) are drawn by the host from the
+   entity's fields (§3) as before; their surface comes in a later revision of
+   this section.
+5. **Actions.** An artifact's `actions` (§5, global actions the caller may
+   use) are `actions` Row [`action_<n>` Button (the first `primary`) with child
+   `action_<n>_label` Text (the action's title in the caller's language)],
+   each with `action: { event: { name: <the action's tool>, context: {} } }`.
+   The host never runs the tool from the event: it opens the action's form
+   (§4, §5.2 rule 2), and a write goes through the confirmation (§7) as from
+   any other place. An `action` message whose name is not one of the
+   artifact's actions is dropped.
+6. **The app's own components.** The manifest's `components` maps a name to
+   `{ title, description?, view, props, actions? }`:
+   - the name is an A2UI component name of the app: `[A-Z][A-Za-z0-9]{0,39}`
+     (UAX #31), not one of the Basic Catalog's or Clegra's, unique in the app;
+   - `view` is the component's page, an MCP Apps document of the app at
+     `ui://<app>/components/<Name>` (§5), served like every view (§5.3);
+   - `props` is the JSON Schema (an object) of the data it draws; an artifact
+     with `component` returns data valid against it (the SDK checks, and an
+     invalid answer is the artifact's error, never a half-drawn component);
+   - `actions` names the app's tools the page may call (A2UI's
+     `allowedTools`), each a declared action or a read the caller may use.
+
+   The app's catalog (`a2ui://<app>/catalog.json`, rule 3) declares each one
+   as an A2UI 1.0 catalog component: `component` its name as `const`, one
+   property per prop (`common_types.json#/$defs/DynamicValue`), and
+   `metadata.extensions.com_clegra_component: { view, props, actions }`. An
+   A2UI host that doesn't know this extension MAY draw the component as the
+   A2UI MCP catalog's `McpApp` with `htmlContent` the view's document
+   (`resources/read`) and `allowedTools` its `actions`; one that can do neither
+   draws the rest of the surface and reports the component as an error, never
+   silently.
+7. **Drawing a component (a workspace host).** The host frames the view at the
+   app's own origin with a view ticket (§5.3: its CSP, `sandbox="allow-scripts
+   allow-forms allow-same-origin"`, the app's origin never the host's), and
+   speaks MCP Apps (`2026-01-26`) with it, as A2UI's `McpApp` does:
+   - **Lazily.** A frame is opened (its ticket asked) only when its block
+     comes near the viewport; until then, and until `ui/notifications/initialized`,
+     the block keeps a placeholder of the component's last or minimum height.
+     A host MAY draw several components of one app on one surface in one frame
+     when they are adjacent; otherwise one frame per component.
+   - **Context.** `ui/initialize` answers the host context: `theme`,
+     `locale`, `timeZone`, the standard `styles.variables` and the app's accent
+     in `_meta["clegra/ui"]` (§5.3 rule 5); `ui/notifications/host-context-changed`
+     on every change.
+   - **Data.** After `ui/notifications/initialized` the host sends
+     `ui/notifications/tool-input` `{ arguments: <the artifact's params> }` and
+     `ui/notifications/tool-result` `{ content: [], structuredContent: <the
+     component's props, every binding resolved> }`, and again a tool-result
+     whenever the surface's data model changes. The page draws from these and
+     reads nothing else for the person.
+   - **Size.** The page reports `ui/notifications/size-changed`; the block
+     takes its width and that height, clamped to 100–2000 px, changes under
+     5 px ignored, at most one redraw per 100 ms (A2UI `McpApp`).
+   - **Actions.** A `tools/call` whose tool is not in the component's
+     `actions` is a JSON-RPC error. Otherwise the host calls it as the person
+     (a read at once; a write waits for the person's confirmation, §7) and
+     answers the MCP result. `ui/open-link`: an `https` address, opened outside
+     the host. `ui/message`, `ui/update-model-context`: accepted, kept nowhere.
+     Any message over 64 KB, nested deeper than 10, or with a
+     `__proto__`, `constructor` or `prototype` key is dropped (A2UI `McpApp`).
+8. **Editing.** Surfaces are editable, and every edit is the app's: an
+   input or an edited cell changes only the surface's local data model (A2UI
+   two-way binding) until the person commits it; the commit is an A2UI
+   `action` whose `name` is one of the artifact's actions, its `context` the
+   edit. The host runs that action as the person, with the action's
+   permission and confirmation (§7) and nothing else: a host never writes an
+   app's data itself, and an edit the person may not make is never offered
+   (the SDK leaves out what the action's permission doesn't allow; the app
+   refuses it anyway). The result's `error.fields` are shown at the fields or
+   cells they name, in the app's words.
+   **Live.** After a write through the host, and when an app's result names
+   artifacts it changed (`_meta.clegra.changed`: artifact URIs or types), the
+   host reads each surface again for every person who has it open, each as
+   themselves, and sends it as an `updateDataModel` (path `/`) over its live
+   channel (server-sent events; never polling). The components stay; a
+   person's uncommitted edit stays where it is and is told it is now out of
+   date (rule 9).
+9. **The spreadsheet.** Clegra's catalog has a native `Spreadsheet`
+   component, drawn by the host (a grid, as a spreadsheet application's), for
+   the SDK's template `sheet`:
+
+   | Data (`dataModel`) | |
+   |---|---|
+   | `columns` | `[{ key, label, type: text\|number\|money\|percent\|date\|enum\|boolean, currency?, options?: [{ value, label }], editable?, required?, formula? }]`: `editable` (default false) as the caller may edit it; `formula: true`: computed by the app, never editable |
+   | `rows` | `[{ id, version, cells: { <key>: value }, editable?, uri? }]`: `version` the row's revision as the app keeps it (an opaque string); `editable: false` locks the row for this caller |
+   | `edit`, `add?`, `remove?` | The actions (their tools) that change a cell, add a row, remove rows |
+   | `version?` | The sheet's revision, for a host that keeps the surface open |
+
+   The component: typed cells formatted in the reader's locale, keyboard
+   navigation (arrows, Tab, Enter to edit and commit, Escape to cancel), sort
+   and filter by column (local to the person's view, never sent), copy and
+   paste of a range as tab-separated text (a paste is one edit per changed
+   cell, each its own `edit` action, applied in order), add and remove rows
+   (with `add`, `remove`). The `Spreadsheet` component is
+   `{ component: "Spreadsheet", columns, rows, edit?, add?, remove? }`, each
+   bound to the data model of the same name.
+
+   **The edit contract.** A cell commit sends `action` `{ name: <edit>,
+   context: { row, column, value, version } }`; `add` sends `{ values }` (the
+   new row's cells the person typed), `remove` `{ rows: [<id>…] }`. The app's
+   `edit` action takes exactly that input and answers `{ ok: true, data: { row
+   } }`, the row as it is now (formulas recomputed by the app), or an error:
+   `invalid_input` with `error.fields: { <column>: message }` (shown at the
+   cell, the person's value kept to fix), or `conflict` when `version` is not
+   the row's current one, with the current row in `error.details.row`.
+   The host draws a commit **optimistically**: the new value at once, marked
+   pending; the answer's row replaces it, an error puts the cell back in
+   editing with its message, a conflict shows the current value and says that
+   someone else changed it (the person's value offered to apply again, now
+   against the new `version`). A live update (rule 8) that changes a row being
+   edited does the same as a conflict. Values are never computed by the
+   host: sums, formulas and derived columns are the app's, returned in rows.
+   An app that wants another grid brings its own component (rule 6).
+10. **What it replaces.** A workspace host draws template and component
+   artifacts only from `a2ui`. The template data's bare `template` and `data`
+   in a resolved artifact remain only while the SDK's generated MCP Apps view
+   (§5) draws them; they are removed in the release in which that view draws
+   the surface itself. A host has one renderer for artifacts, the A2UI one: its
+   former template drawing goes in the same change in which its apps run an
+   SDK with this section.
+
 ## 6. The generated MCP server
 
 Streamable HTTP at `mcp.url`. Tools, in this order of derivation:
@@ -632,6 +817,7 @@ feature they see:
 | Schedules (§11) | The scheduled action's tool, as any action. A call naming a schedule is refused |
 | Notifications (§12) | Nothing: `_meta.clegra.notifications` is ignored |
 | Lifecycle (§13), `clegra_later` | Nothing: the tools are never listed to them |
+| A2UI surfaces (§5.4) | An A2UI host renders the `application/a2ui+json` resource of a `show_<type>` result (and reads the app's catalog, `a2ui://<app>/catalog.json`); any other client reads the result's text, as before |
 | View tickets (§5.3) | Nothing: `clegra_view` is listed only to a person's Clegra app token; the views themselves are the same documents `resources/read` returns |
 
 ## 7. Enforcement

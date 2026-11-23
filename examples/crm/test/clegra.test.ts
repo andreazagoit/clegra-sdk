@@ -73,7 +73,7 @@ test("the pipeline dashboard resolves its artifacts", async () => {
   const c = await testClient(app, { person: "alice", permissions: "all", installation: "dashboard" })
   const r = await c.call("open_pipeline", { days: 365 })
   const artifacts = (r.structuredContent as { artifacts: { state: string; template: string; data: Record<string, unknown> }[] }).artifacts
-  assert.deepEqual(artifacts.map((f) => f.template), ["stat", "chart", "list"])
+  assert.deepEqual(artifacts.map((f) => f.template), ["stat", "chart", "list", "component"])
   assert.equal(artifacts[0]!.data.value, 36500)
 })
 

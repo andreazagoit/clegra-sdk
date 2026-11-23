@@ -234,8 +234,21 @@ export type ArtifactConfig<P extends z.ZodObject, T extends Template> = {
   visibility?: Visibility
 } & (
   | { template: T; data: (params: z.infer<P>, ctx: Context) => Promise<TemplateData[T] | null> | TemplateData[T] | null; view?: ViewSource }
-  | { view: ViewSource; data: (params: z.infer<P>, ctx: Context) => Promise<Record<string, unknown> | null> | Record<string, unknown> | null; template?: never }
+  | { view: ViewSource; data: (params: z.infer<P>, ctx: Context) => Promise<Record<string, unknown> | null> | Record<string, unknown> | null; template?: never; component?: never }
+  | { component: string; data: (params: z.infer<P>, ctx: Context) => Promise<Record<string, unknown> | null> | Record<string, unknown> | null; template?: never; view?: never }
 )
+
+/** One of the app's own A2UI components (spec §5.4 rule 6): a page of the app that draws the props a host gives it. */
+export type ComponentConfig<P extends z.ZodObject = z.ZodObject> = {
+  title: Label
+  description?: Label
+  /** The data it draws: an artifact with this component returns them. */
+  props: P
+  /** The page: an MCP Apps document, served at `ui://<app>/components/<Name>`. */
+  view: ViewSource
+  /** The tools the page may call through the host (A2UI `allowedTools`). */
+  actions?: ActionHandle[]
+}
 
 export type AgentConfig = {
   title: Label

@@ -117,6 +117,7 @@ export const artifactSchema = z.object({
   entity: z.string().optional().describe("Set: the entity's record card (params { id })"),
   params: jsonSchema,
   template: z.enum(["record", "card", "stat", "list", "chart"]).optional(),
+  component: z.string().optional().describe("One of the app's own components (spec §5.4): its data are the component's props"),
   view: z.string().optional(),
   tool: toolRef,
   permission: z.string().optional(),
@@ -181,6 +182,19 @@ export const manifestSchema = z.object({
     })
     .optional()
     .describe("The app's own website, shown as it is in Clegra's clients (spec §5.1)"),
+  components: z
+    .record(
+      z.string().regex(/^[A-Z][A-Za-z0-9]{0,39}$/),
+      z.object({
+        title: z.string(),
+        description: z.string().optional(),
+        view: z.string().describe("Its page: ui://<app>/components/<Name>, served like every view (spec §5.3)"),
+        props: jsonSchema.describe("The JSON Schema of the data it draws"),
+        actions: z.array(z.string()).describe("The tools the page may call through the host"),
+      }),
+    )
+    .optional()
+    .describe("The app's own A2UI components, by name (spec §5.4); its catalog is the MCP resource a2ui://<app>/catalog.json"),
   searchTool: z.string().optional(),
   kinds: z
     .record(z.string(), z.object({ label: labelMap, properties: z.record(z.string(), z.object({ type: z.enum(PROPERTY_TYPES), many: z.boolean().optional(), key: z.boolean().optional() })) }))

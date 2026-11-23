@@ -27,6 +27,7 @@ import type {
   Filter,
   ArtifactConfig,
   ArtifactInstance,
+  ComponentConfig,
   KindConfig,
   LaterInfo,
   LifecycleConfig,
@@ -43,6 +44,7 @@ import type {
   ViewSource,
 } from "./types"
 import { MCP_APP_MIME_TYPE, viewHtml } from "./view"
+import { A2UI_MIME_TYPE, appCatalog, appCatalogId, COMPONENT_NAME, componentSurface, RESERVED_COMPONENTS, surfaceResourceUri, templateSurface, type ComponentEntry } from "./a2ui"
 
 /**
  * THE CLEGRA APP SERVER, v1 (docs/spec.md): an MCP server
@@ -330,6 +332,7 @@ export class AppServer {
   readonly #actions = new Map<string, ActionRecord>()
   readonly #pages = new Map<string, PageRecord>()
   readonly #artifacts = new Map<string, ArtifactRecord>()
+  readonly #components = new Map<string, ComponentConfig>()
   readonly #agents = new Map<string, AgentConfig>()
   readonly #permissions = new Map<string, PermissionConfig>()
   readonly #settings = new Map<string, SettingConfig>()
@@ -522,12 +525,24 @@ export class AppServer {
   registerArtifact<P extends z.ZodObject, T extends Template>(type: string, config: ArtifactConfig<P, T>): { readonly kind: "artifact"; readonly type: string } {
     if (!IDENT.test(type)) throw new Error(`artifact "${type}": lowercase letters, digits and _`)
     this.#taken(type)
-    if (!config.template && !config.view) throw new Error(`artifact "${type}": give a template or a view`)
+    const component = (config as { component?: string }).component
+    if (!config.template && !config.view && !component) throw new Error(`artifact "${type}": give a template, a component or a view`)
+    if (component && (config.template || config.view)) throw new Error(`artifact "${type}": a component artifact has no template and no view of its own`)
+    if (component && !this.#components.has(component)) throw new Error(`artifact "${type}": component "${component}" is not a component of this app`)
     const tool = { name: config.expose?.tool ?? `show_${type}`, plain: config.expose?.plain !== false }
     this.#claimTools(tool.name)
     this.#artifacts.set(type, { type, config: config as never, tool })
     this.#changed()
     return { kind: "artifact", type }
+  }
+
+  /** One of the app's own A2UI components (spec §5.4 rule 6): a page of the app drawing the props a host gives it. */
+  registerComponent(name: string, config: ComponentConfig): void {
+    if (!COMPONENT_NAME.test(name)) throw new Error(`component "${name}": a capital letter, then letters and digits (at most 40)`)
+    if ((RESERVED_COMPONENTS as readonly string[]).includes(name)) throw new Error(`component "${name}": the name of an A2UI Basic Catalog or Clegra component`)
+    if (this.#components.has(name)) throw new Error(`component "${name}" is registered twice`)
+    this.#components.set(name, config)
+    this.#changed()
   }
 
   /** An agent (spec §8): run by the host's model, with these tools. */
@@ -1258,7 +1273,20 @@ export class AppServer {
     if (f.config.template === "card" && !this.#uriVisible(data.uri, caller)) return { artifact, uri, state: "no-access" as const }
     if (f.config.template === "list" && Array.isArray(data.items)) data = { ...data, items: (data.items as { uri?: unknown }[]).filter((i) => this.#uriVisible(i?.uri, caller)) }
     const actions = (f.config.actions ?? []).map((h) => this.#actions.get(h.tool)).filter((a): a is ActionRecord => Boolean(a && this.#mayUse(a, caller))).map((a) => this.#actionInfo(a, caller))
-    return { artifact, uri, state: "ok" as const, template: f.config.template ?? "view", title: this.#t(caller, f.config.title), data, ...(actions.length ? { actions } : {}) }
+    const title = this.#t(caller, f.config.title)
+    // The artifact as an A2UI 1.0 surface (spec §5.4): the tree for its template or component, its data as the data model.
+    const surface = { surfaceId: uri, title, actions: actions.map((a) => ({ tool: a.tool, title: a.title })) }
+    const name = (f.config as { component?: string }).component
+    let a2ui
+    if (name) {
+      const props = this.#components.get(name)!.props
+      const checked = props.safeParse(data)
+      // A component draws only props valid against its schema: anything else is the artifact's error, never a half-drawn component.
+      if (!checked.success) throw new AppError("internal", `artifact "${f.type}": its data are not valid props of component "${name}"`)
+      data = checked.data as Record<string, unknown>
+      a2ui = componentSurface(this.name, name, data, Object.keys(props.shape), surface)
+    } else if (f.config.template) a2ui = templateSurface(f.config.template, data as never, surface)
+    return { artifact, uri, state: "ok" as const, template: f.config.template ?? (name ? "component" : "view"), ...(name ? { component: name } : {}), title, data, ...(actions.length ? { actions } : {}), ...(a2ui ? { a2ui } : {}) }
   }
 
   // ------------------------------------------------------------ calls
@@ -1515,6 +1543,23 @@ export class AppServer {
     return `ui://${this.name}/artifacts/${type}`
   }
 
+  #componentViewUri(name: string): string {
+    return `ui://${this.name}/components/${name}`
+  }
+
+  /** The app's own components as its A2UI catalog and the manifest describe them (spec §5.4 rule 6). */
+  #componentEntries(): ComponentEntry[] {
+    const t = (l: Label | undefined) => say(l, this.locale, this.locale)
+    return [...this.#components].map(([name, c]) => ({
+      name,
+      title: t(c.title),
+      ...(c.description ? { description: t(c.description) } : {}),
+      view: this.#componentViewUri(name),
+      props: plainSchema(jsonSchemaOf(c.props, "output")) as Record<string, unknown>,
+      actions: (c.actions ?? []).map((h) => h.tool),
+    }))
+  }
+
   /** A tool's view; `appOnly`: the tool of an app-only item, which no model is given (MCP Apps `visibility: ["app"]`, ChatGPT `openai/visibility: private`). */
   #ui(resourceUri: string, appOnly = false) {
     return { ui: { resourceUri, visibility: appOnly ? ["app"] : ["model", "app"] }, "ui/resourceUri": resourceUri, "openai/outputTemplate": resourceUri, "openai/widgetAccessible": true, ...(appOnly ? { "openai/visibility": "private" } : {}) }
@@ -1611,6 +1656,7 @@ export class AppServer {
     }
     for (const e of this.#entities.values()) if (e.config.view) view(this.#entityViewUri(e.name), t(e.config.label), () => (typeof e.config.view!.html === "function" ? e.config.view!.html() : e.config.view!.html), e.config.view)
     for (const f of this.#artifacts.values()) if (f.config.view) view(this.#artifactViewUri(f.type), t(f.config.title), () => (typeof f.config.view!.html === "function" ? f.config.view!.html() : f.config.view!.html), f.config.view)
+    for (const [name, c] of this.#components) view(this.#componentViewUri(name), t(c.title), () => (typeof c.view.html === "function" ? c.view.html() : c.view.html), c.view)
     return views
   }
 
@@ -1628,6 +1674,13 @@ export class AppServer {
     s.registerResource("manifest", manifestUri(this.name), { mimeType: "application/json", description: "The app's manifest (what hosts read to mount the app)" }, async () => ({
       contents: [{ uri: manifestUri(this.name), mimeType: "application/json", text: JSON.stringify(this.manifest()) }],
     }))
+    // The app's own A2UI catalog (spec §5.4 rule 3), when it has components.
+    if (this.#components.size) {
+      const catalog = appCatalogId(this.name)
+      s.registerResource("a2ui-catalog", catalog, { mimeType: "application/json", description: "The app's own A2UI 1.0 components (its catalog)" }, async () => ({
+        contents: [{ uri: catalog, mimeType: "application/json", text: JSON.stringify(appCatalog(this.name, t(o.title), this.#componentEntries())) }],
+      }))
+    }
     for (const [uri, v] of this.#viewDocuments()) {
       const ui = v.ui
       s.registerResource(v.title, uri, { mimeType: MCP_APP_MIME_TYPE, _meta: { ui } }, async () => ({ contents: [{ uri, mimeType: MCP_APP_MIME_TYPE, text: await v.html(), _meta: { ui } }] }))
@@ -2019,7 +2072,9 @@ export class AppServer {
           const r = await this.#resolve({ type: f.type, params: args }, caller, ctxOf(mctx))
           if (r.state !== "ok") return failure(r.state === "no-access" ? "permission_denied" : "not_found", r.state === "no-access" ? "No access." : "Not available.")
           const pointers: string[] = []
-          return { content: text(JSON.stringify({ uri: r.uri, data: this.#markResolved(r, "", pointers) })), structuredContent: { ...r, view: { kind: "artifact", title: this.#t(caller, f.config.title) } }, ...this.#marks(pointers) }
+          // A2UI over MCP (spec §5.4 rule 2): the surface also as an embedded resource, beside the text a model reads.
+          const surface = "a2ui" in r && r.a2ui ? [{ type: "resource" as const, resource: { uri: surfaceResourceUri(this.name, f.type), mimeType: A2UI_MIME_TYPE, text: JSON.stringify(r.a2ui) } }] : []
+          return { content: [...text(JSON.stringify({ uri: r.uri, data: this.#markResolved(r, "", pointers) })), ...surface], structuredContent: { ...r, view: { kind: "artifact", title: this.#t(caller, f.config.title) } }, ...this.#marks(pointers) }
         }),
       )
     }
@@ -2287,6 +2342,7 @@ export class AppServer {
           ...(f.config.icon ? { icon: f.config.icon } : {}),
           params: plainSchema(jsonSchemaOf(f.config.params, "input")) as Record<string, unknown>,
           ...(f.config.template ? { template: f.config.template } : {}),
+          ...((f.config as { component?: string }).component ? { component: (f.config as { component?: string }).component } : {}),
           ...(f.config.view ? { view: this.#artifactViewUri(f.type) } : {}),
           tool: f.tool,
           ...perm(f.config.permission, `artifact "${f.type}"`),
@@ -2334,6 +2390,7 @@ export class AppServer {
       view: this.#viewUri(),
       resolveTool: RESOLVE_TOOL,
       ...(this.#site ? { site: { start: this.#site.start, tool: { name: SITE_TOOL, plain: false } } } : {}),
+      ...(this.#components.size ? { components: Object.fromEntries(this.#componentEntries().map(({ name, ...c }) => [name, c])) } : {}),
       ...([...this.#entities.values()].some((e) => e.fields.some((f) => f.search)) ? { searchTool: "search" } : {}),
       ...(Object.keys(this.#kinds).length ? { kinds: Object.fromEntries(Object.entries(this.#kinds).map(([k, d]) => [k, { label: L(d.label)!, properties: d.properties }])) } : {}),
       entities,

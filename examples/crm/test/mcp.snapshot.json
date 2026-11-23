@@ -1332,6 +1332,24 @@
       }
     },
     {
+      "name": "show_funnel",
+      "title": "Pipeline funnel",
+      "description": "How many deals are in each stage, as a funnel. Shows it as a live artifact; don't repeat its data in full.",
+      "annotations": {
+        "title": "Pipeline funnel",
+        "readOnlyHint": true,
+        "idempotentHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "ui": "ui://crm/view",
+      "inputSchema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {}
+      }
+    },
+    {
       "name": "show_open_deals",
       "title": "Open deals",
       "description": "How many deals are open. Shows it as a live artifact; don't repeat its data in full.",
@@ -1417,6 +1435,10 @@
       "mimeType": "application/json"
     },
     {
+      "uri": "a2ui://crm/catalog.json",
+      "mimeType": "application/json"
+    },
+    {
       "uri": "ui://crm/view",
       "mimeType": "text/html;profile=mcp-app"
     },
@@ -1426,6 +1448,10 @@
     },
     {
       "uri": "ui://crm/pages/forecast",
+      "mimeType": "text/html;profile=mcp-app"
+    },
+    {
+      "uri": "ui://crm/components/StageFunnel",
       "mimeType": "text/html;profile=mcp-app"
     }
   ],
@@ -1450,6 +1476,50 @@
     },
     "view": "ui://crm/view",
     "resolveTool": "clegra_resolve",
+    "components": {
+      "StageFunnel": {
+        "title": "Stage funnel",
+        "description": "Deals narrowing stage by stage, with their value",
+        "view": "ui://crm/components/StageFunnel",
+        "props": {
+          "type": "object",
+          "properties": {
+            "stages": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "label": {
+                    "type": "string"
+                  },
+                  "count": {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  },
+                  "value": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "label",
+                  "count"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "currency": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "stages"
+          ],
+          "additionalProperties": false
+        },
+        "actions": []
+      }
+    },
     "searchTool": "search",
     "entities": [
       {
@@ -2890,6 +2960,30 @@
           "plain": true
         },
         "permission": "deals.view"
+      },
+      {
+        "type": "funnel",
+        "title": {
+          "en": "Pipeline funnel",
+          "it": "Imbuto della pipeline"
+        },
+        "description": {
+          "en": "How many deals are in each stage, as a funnel",
+          "it": "Quante trattative ci sono in ogni fase, come un imbuto"
+        },
+        "params": {
+          "type": "object",
+          "properties": {}
+        },
+        "component": "StageFunnel",
+        "tool": {
+          "name": "show_funnel",
+          "plain": true
+        },
+        "permission": "deals.view",
+        "actions": [
+          "create_deal"
+        ]
       },
       {
         "type": "open_deals",

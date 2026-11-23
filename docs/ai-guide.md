@@ -131,12 +131,18 @@ export default defineApp({
     stats: { title: "Stats", input: z.object({}), readOnly: true, run: () => ({ data: { n: 1 } }) },   // a read: no confirmation
   },
 
+  // Your own A2UI components (spec §5.4): a page of yours (MCP Apps HTML) drawing props the host sends; hosts frame
+  // it inside the artifact. Name: [A-Z][A-Za-z0-9]*, never a Basic Catalog name (Card, Text, List…) or Chart.
+  components: {
+    StageFunnel: { title: "Stage funnel", props: z.object({ stages: z.array(z.object({ label: z.string(), count: z.number() })) }), view: { html: funnelHtml }, actions: [] },
+  },
+
   artifacts: {
     pipeline_total: {
       title: "Open pipeline", description: "Total value of open deals", icon: "sigma",
       params: z.object({}),          // REQUIRED key
       permission: "deals.values",
-      template: "stat",              // card | stat | list | chart  (or no template and `view`)
+      template: "stat",              // card | stat | list | chart  (or `component: "Name"`, or no template and `view`)
       data: (params, ctx) => ({ label: "open", value: 36500, format: "money", currency: "EUR" }),   // or null: not available
       actions: ["create_deal"],      // optional: global actions shown inside, by name
       size: "small",                 // small | medium | large

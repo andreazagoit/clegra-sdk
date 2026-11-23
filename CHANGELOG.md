@@ -4,7 +4,24 @@ Clegra apps (spec 1.0 draft) and the `@clegra/sdk` package. Newest first. Versio
 npm dist-tag `next`. Entries below «Two scoped packages» keep the names of their time (the unscoped `clegra` package
 and its `clegra/ui`, the `modelapp` package, docs/map): they are history.
 
-## 0.1.0-next.7 (unreleased)
+## 0.1.0-next.8 (2026-11-23)
+
+- **`init --ui` installs `@clegra/ui` `^0.1.0-next.10`** (was `^0.1.0-next.5`).
+- **Artifacts as A2UI 1.0 surfaces (spec §5.4)**: every template artifact (`card`, `stat`, `list`, `chart`) and every
+  artifact drawn by one of the app's own components carries `a2ui`, one A2UI 1.0 `createSurface` (Basic Catalog
+  components bound to the data model, Clegra's `Chart`, `formatPercent` and `openRecord`, style hints as the
+  `com_clegra_style` extension), in `show_<type>` (also as an `application/a2ui+json` embedded resource) and in
+  `clegra_resolve`. Hosts render it natively; the data stay in the data model.
+- **An app's own components**: `defineApp({ components: { Name: { title, description?, props, view, actions? } } })`
+  and an artifact's `component: "Name"` (its data are the props, checked against `props`). The manifest's
+  `components`, each view at `ui://<app>/components/<Name>` (served with view tickets, §5.3), and the app's A2UI
+  catalog as the MCP resource `a2ui://<app>/catalog.json`. A host frames the page and speaks MCP Apps with it: data
+  as tool-input/tool-result, theme, language and accent as host context, its `tools/call` only for its `actions`.
+- **Spec only, not built yet**: editable surfaces (every edit an app action, live updates over the host's SSE) and
+  Clegra's native `Spreadsheet` for a `sheet` template, with its edit contract (editable cells, per-cell errors,
+  optimistic commits, row versions and conflicts) (spec §5.4 rules 8–9).
+
+## 0.1.0-next.7 (2026-11-23)
 
 - **Labels in the reader's language when the call showed that language**: `_meta.clegra.l10n` noted only a label's
   other locales, so an Italian reader of a call shown in Italian found no `it` entry and the view fell back to

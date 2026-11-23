@@ -74,7 +74,7 @@ type Manifest = {
   entities: { name: string; kind?: EntityKind; permission?: string; schema: { properties?: Record<string, { items?: { type?: unknown } }> }; fields: ManifestField[]; tools: { list: ToolRef; get: ToolRef }; searchable: boolean; visibility?: string }[]
   actions: (RulesManifest["actions"][number] & { input: { properties?: Record<string, { ref?: unknown; type?: unknown; format?: unknown }> }; permission?: string })[]
   pages: { name: string; kind: string; entity?: string; columns?: string[]; permission?: string; tool: ToolRef; view?: string; actions?: string[]; badge?: string }[]
-  artifacts: { type: string; entity?: string; template?: string; view?: string; permission?: string; tool: ToolRef; actions?: string[]; params: { properties?: Record<string, unknown>; required?: unknown }; visibility?: string }[]
+  artifacts: { type: string; entity?: string; template?: string; component?: string; view?: string; permission?: string; tool: ToolRef; actions?: string[]; params: { properties?: Record<string, unknown>; required?: unknown }; visibility?: string }[]
   agents: { name: string; tools: string[] }[]
   permissions: { id: string }[]
   nav?: RulesManifest["nav"]
@@ -200,7 +200,7 @@ export async function checkApp(options: Options): Promise<Report> {
   }
   for (const f of manifest.artifacts) {
     perm(f.permission, `artifact ${f.type}`)
-    if (!f.template && !f.view) problems.push(`artifact ${f.type}: neither a template nor a view`)
+    if (!f.template && !f.view && !f.component) problems.push(`artifact ${f.type}: neither a template, a component nor a view`)
     for (const a of f.actions ?? []) if (!actions.has(a)) problems.push(`artifact ${f.type}: unknown action ${a}`)
   }
   const refs: { where: string; tool: ToolRef; kind: "read" | "write"; destructive?: boolean; view?: string }[] = [

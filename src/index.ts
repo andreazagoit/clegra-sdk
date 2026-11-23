@@ -1,4 +1,4 @@
-export { defineApp, type ActionDef, type AgentDef, type App, type AppDefinition, type EntityDef, type ArtifactDef, type NotificationDef, type PageDef, type ScheduleDef } from "./define"
+export { defineApp, type ActionDef, type AgentDef, type App, type AppDefinition, type ComponentDef, type EntityDef, type ArtifactDef, type NotificationDef, type PageDef, type ScheduleDef } from "./define"
 export { AppError, META_KEY, OWN_ISSUER, type AppSite, type ErrorCode, type LaterReport, type PeopleResolver, type SentNotification } from "./server"
 export { isSitePath, SiteError, SITE_BRIDGE_SCRIPT, type SiteCaller, type SiteOptions, type SiteTheme, type SiteTicket } from "./site"
 export type { ViewTicket } from "./views"
@@ -12,3 +12,4 @@ export type { ActionResult, Confirm, Context, ExportFile, Exposure, Filter, Arti
 export { APP_ACCENTS, DEFAULT_APP_ACCENT, type AppAccent } from "../spec/src/protocol"
 export { LATER_TOOL, INSTALLATION_TOOL, EXPORT_TOOL, DELETE_TOOL, ROLES_TOOL, APP_TOKEN_TYPE, CONFIRMATION_TOKEN_TYPE, CONFIRMATION_PROOF_TYPE, EVENT_TYPE, EVENT_KINDS, REGISTRATION_PATH, EVENTS_PATH, VIEWS_PATH, VIEW_TOOL, VIEW_HOST_META, CORE_KEYS_PATH, SITE_TOOL, SITE_PATH, SITE_BRIDGE_PATH, SITE_MESSAGES } from "../spec/src/protocol"
 export { KINDS, RESERVED_KINDS, UNIVERSAL, type EntityKind, type PropertyDef, type PropertyType } from "../spec/src/kinds"
+export { A2UI_MIME_TYPE, A2UI_VERSION, appCatalogId, BASIC_CATALOG_ID, CLEGRA_A2UI_CATALOG, CLEGRA_CATALOG_ID, componentSurface, templateSurface, type A2uiComponent, type A2uiSurface, type CreateSurface } from "./a2ui"

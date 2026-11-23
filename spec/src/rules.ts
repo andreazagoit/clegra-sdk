@@ -37,7 +37,9 @@ type InputSchema = { properties?: Record<string, { type?: unknown; format?: unkn
 
 /** What the rules read of a manifest (a subset of its shape). */
 export type RulesManifest = {
+  name?: string
   accent?: string
+  components?: Record<string, { view: string; actions: string[] }>
   publisher?: { name: string; url: string }
   kinds?: Record<string, KindDef>
   entities: { name: string; tools: { list: ToolRef; get: ToolRef }; visibility?: string }[]
@@ -53,7 +55,7 @@ export type RulesManifest = {
     later?: { at: string; window: number }
   }[]
   pages: { name: string; kind: string; tool: ToolRef; actions?: string[]; badge?: string }[]
-  artifacts: { type: string; entity?: string; template?: string; params: InputSchema; tool: ToolRef; visibility?: string }[]
+  artifacts: { type: string; entity?: string; template?: string; component?: string; params: InputSchema; tool: ToolRef; visibility?: string }[]
   agents: { name: string; tools: string[] }[]
   permissions: { id: string }[]
   nav?: { section?: Label; pages: string[] }[]
@@ -250,5 +252,22 @@ export function manifestRuleProblems(m: RulesManifest): string[] {
     if (n.permission !== undefined && !permissions.has(n.permission)) p.push(`${where}: permission "${n.permission}" is not declared`)
   }
   if (later.length && !types.has(LATER_TOOL)) p.push(`notifications: actions with later need the type "${LATER_TOOL}" (their author is told when a run did not run)`)
+
+  // The app's own A2UI components (spec §5.4 rule 6) and the artifacts drawn by them.
+  const components = m.components ?? {}
+  const reserved = ["Text", "Image", "Icon", "Video", "AudioPlayer", "Row", "Column", "List", "Card", "Tabs", "Modal", "Divider", "Button", "CheckBox", "TextField", "DateTimeInput", "ChoicePicker", "Slider", "Chart", "Surface", "McpApp"]
+  for (const [name, c] of Object.entries(components)) {
+    const where = `component "${name}"`
+    if (!/^[A-Z][A-Za-z0-9]{0,39}$/.test(name)) p.push(`${where}: a capital letter, then letters and digits`)
+    if (reserved.includes(name)) p.push(`${where}: the name of an A2UI Basic Catalog or Clegra component`)
+    if (m.name && c.view !== `ui://${m.name}/components/${name}`) p.push(`${where}: its view is ui://${m.name}/components/${name}`)
+    for (const t of c.actions) if (!tools.includes(t)) p.push(`${where}: action "${t}" is not a tool of this app`)
+  }
+  for (const f of m.artifacts) {
+    if (f.component === undefined) continue
+    const where = `artifact "${f.type}"`
+    if (!(f.component in components)) p.push(`${where}: component "${f.component}" is not a component of this app`)
+    if (f.template !== undefined || f.entity !== undefined) p.push(`${where}: a component artifact has no template`)
+  }
   return p
 }

@@ -22,13 +22,24 @@ export type Database = { kind: "postgres" | "pglite"; db: Db; query: RawQuery; c
 /** Where PGlite keeps its files when DATABASE_URL is not set (`memory://` keeps nothing: tests). */
 const DEFAULT_PGLITE_DIR = ".data/pglite"
 
+/** DATABASE_POOL_MAX: unset or empty is 5, else a whole number from 1 to 100 (`Number("")` is 0: a pool that never connects). */
+export function poolSize(value: string | undefined): number {
+  const given = value?.trim()
+  if (!given) return 5
+  const n = Number(given)
+  if (!Number.isInteger(n) || n < 1 || n > 100) throw new Error(`DATABASE_POOL_MAX must be a whole number from 1 to 100 (it is "${given}").`)
+  return n
+}
+
 export function openDatabase(env: Record<string, string | undefined> = process.env): Database {
   const url = env.DATABASE_URL?.trim()
   if (url) {
     const host = new URL(url).hostname
     const client = postgres(url, {
-      max: Number(env.DATABASE_POOL_MAX ?? 5),
+      max: poolSize(env.DATABASE_POOL_MAX),
       idle_timeout: 20,
+      // A database that doesn't answer is an error within 10 s, never a wait.
+      connect_timeout: 10,
       // A transaction-mode pooler (Neon's `-pooler` host, PgBouncer) can't keep prepared statements between queries.
       prepare: !host.includes("-pooler"),
       // TLS from the URL (`sslmode=require`, what Neon gives); a remote database without it is refused rather than read in clear.

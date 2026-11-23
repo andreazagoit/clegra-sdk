@@ -99,7 +99,20 @@ type ArtifactBase<Pm extends z.ZodObject, P extends string, A extends string> = 
 
 export type ArtifactDef<Pm extends z.ZodObject, P extends string = string, A extends string = string> =
   | { [T in keyof TemplateData]: ArtifactBase<Pm, P, A> & { /** Drawn by the host (and by the generated view). */ template: T; data: (params: z.infer<Pm>, ctx: Context) => Awaitable<TemplateData[T] | null>; /** Your own ui:// view instead of the generated one. */ view?: ViewSource } }[keyof TemplateData]
-  | (ArtifactBase<Pm, P, A> & { template?: undefined; /** Your own ui:// view (an MCP Apps document). */ view: ViewSource; data: (params: z.infer<Pm>, ctx: Context) => Awaitable<Record<string, unknown> | null> })
+  | (ArtifactBase<Pm, P, A> & { template?: undefined; component?: undefined; /** Your own ui:// view (an MCP Apps document). */ view: ViewSource; data: (params: z.infer<Pm>, ctx: Context) => Awaitable<Record<string, unknown> | null> })
+  | (ArtifactBase<Pm, P, A> & { template?: undefined; view?: undefined; /** One of the app's own components (`components`): its data are the component's props. */ component: string; data: (params: z.infer<Pm>, ctx: Context) => Awaitable<Record<string, unknown> | null> })
+
+/** One of the app's own A2UI components (spec §5.4 rule 6): a page of the app drawing the props a host gives it, inside any A2UI surface. */
+export type ComponentDef<A extends string = string> = {
+  title: Label
+  description?: Label
+  /** The data it draws (a Zod object): an artifact with `component` returns them. */
+  props: z.ZodObject
+  /** Its page: an MCP Apps document (HTML that speaks MCP Apps with the host), served at `ui://<app>/components/<Name>`. */
+  view: ViewSource
+  /** The app's actions the page may call through the host (a write still waits for the person's confirmation). */
+  actions?: A[]
+}
 
 type PageBase<P extends string, A extends string, F extends string> = {
   title: Label
@@ -201,6 +214,8 @@ export type AppDefinition<E extends Schemas, A extends Schemas, F extends Schema
   kinds?: Record<string, KindConfig>
   entities: { [K in keyof E]: EntityDef<E[K], NoInfer<P>> }
   actions?: { [K in keyof A]: ActionDef<A[K], E, NoInfer<P>> }
+  /** The app's own A2UI components, by name (`[A-Z][A-Za-z0-9]*`, spec §5.4 rule 6). */
+  components?: Record<string, ComponentDef<NoInfer<keyof A & string>>>
   artifacts?: { [K in keyof F]: ArtifactDef<F[K], NoInfer<P>, keyof A & string> }
   pages?: Record<G, PageDef<E, NoInfer<P>, NoInfer<keyof A & string>, NoInfer<keyof F & string>>>
   /** The navigation: sections of pages, in order (no record pages; each page once). Without it a host shows every non-record page, ungrouped. */
@@ -236,7 +251,7 @@ export type App = Pick<AppServer, "name" | "locale" | "manifest" | "fetch" | "st
 const confirmOf = (c: boolean | Confirm | undefined): Confirm | undefined => (c === true ? "always" : c === false ? "never" : c)
 
 export function defineApp<E extends Schemas, A extends Schemas = Schemas, F extends Schemas = Schemas, P extends string = string, G extends string = string>(def: AppDefinition<E, A, F, P, G>): App {
-  const { permissions, settings, kinds, entities, actions, artifacts, pages, agents, nav, schedules, notifications, lifecycle, ...options } = def
+  const { permissions, settings, kinds, entities, actions, components, artifacts, pages, agents, nav, schedules, notifications, lifecycle, ...options } = def
   const app = new AppServer(options)
   if (kinds) app.defineKinds(kinds)
   for (const [id, p] of Object.entries(permissions ?? {})) app.registerPermission(id, p as PermissionConfig)
@@ -258,7 +273,19 @@ export function defineApp<E extends Schemas, A extends Schemas = Schemas, F exte
     actionHandles.set(name, app.registerAction(name, { ...config, ...(c ? { confirm: c } : {}), ...(on ? { entity: entity(on, `action "${name}"`) } : {}) }, (input, ctx, record) => run(input, ctx, record)))
   }
 
-  type AnyArtifact = ArtifactBase<z.ZodObject, string, string> & { template?: keyof TemplateData; view?: ViewSource; data: (params: unknown, ctx: Context) => Awaitable<Record<string, unknown> | null> }
+  for (const [name, c] of Object.entries(components ?? {})) {
+    const { actions: names, ...config } = c
+    app.registerComponent(name, {
+      ...config,
+      actions: (names ?? []).map((n) => {
+        const h = actionHandles.get(n)
+        if (!h) throw new Error(`component "${name}": "${n}" is not an action of this app`)
+        return h
+      }),
+    })
+  }
+
+  type AnyArtifact = ArtifactBase<z.ZodObject, string, string> & { template?: keyof TemplateData; component?: string; view?: ViewSource; data: (params: unknown, ctx: Context) => Awaitable<Record<string, unknown> | null> }
   for (const [type, f] of Object.entries(artifacts ?? {}) as [string, AnyArtifact][]) {
     const { actions: names, ...config } = f
     const handles = (names ?? []).map((n) => {

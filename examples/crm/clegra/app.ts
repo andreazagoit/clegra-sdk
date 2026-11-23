@@ -268,7 +268,32 @@ export function createCrmApp({ auth, store = new SqlStore((text, params) => data
       },
     },
 
+    // The CRM's own A2UI component (spec §5.4 rule 6): a page of the CRM that draws the props a host gives it, inside
+    // any A2UI surface, beside the host's native cards. The `funnel` artifact below is drawn by it.
+    components: {
+      StageFunnel: {
+        title: { en: "Stage funnel", it: "Imbuto per fase" },
+        description: { en: "Deals narrowing stage by stage, with their value", it: "Le trattative che si restringono fase per fase, con il loro valore" },
+        props: z.object({ stages: z.array(z.object({ label: z.string(), count: z.number().int(), value: z.number().optional() })), currency: z.string().optional() }),
+        view: { html: () => import("./funnel-view").then((m) => m.funnelHtml) },
+      },
+    },
+
     artifacts: {
+      funnel: {
+        title: { en: "Pipeline funnel", it: "Imbuto della pipeline" },
+        description: { en: "How many deals are in each stage, as a funnel", it: "Quante trattative ci sono in ogni fase, come un imbuto" },
+        params: z.object({}),
+        permission: "deals.view",
+        component: "StageFunnel",
+        actions: ["create_deal"],
+        data: async (_p, ctx) => {
+          // Values only for who may see them (`deals.values`): the component draws what it gets.
+          const money = ctx.can("deals.values")
+          const stages = (await pipelineByStage(await tenant(ctx))).map((s) => ({ label: ctx.t(stageLabels[s.stage]), count: s.count, ...(money ? { value: s.value } : {}) }))
+          return { stages, currency: "EUR" }
+        },
+      },
       // The deals page's badge (a stat artifact: its value is the count).
       open_deals: {
         title: { en: "Open deals", it: "Trattative aperte" },
@@ -340,6 +365,7 @@ export function createCrmApp({ auth, store = new SqlStore((text, params) => data
           { type: "pipeline_total", params: {}, size: "small" },
           { type: "deals_by_stage", params: {}, size: "medium" },
           { type: "closing_soon", params: { days: p.days ?? 60 }, size: "medium" },
+          { type: "funnel", params: {}, size: "medium" },
         ],
       },
       // A custom page: our own MCP Apps document (forecast-view.ts) instead of a generated view.

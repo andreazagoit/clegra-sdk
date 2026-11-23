@@ -18,6 +18,7 @@ the MIT licence covers the code, not the brand.
 | MCP TypeScript SDK (`@modelcontextprotocol/server`) | MIT | dependency |
 | Ajv (`ajv`) | MIT | dependency |
 | jose | MIT | dependency |
+| A2UI 1.0 JSON schemas | Apache-2.0 | `test/a2ui` (tests only, not in the package) |
 | Zod | MIT | peer dependency |
 | Next.js | MIT | optional peer dependency (`@clegra/sdk/next`) |
 

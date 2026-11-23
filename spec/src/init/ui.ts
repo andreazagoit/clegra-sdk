@@ -12,7 +12,7 @@ import type { Project } from "./project"
 
 /** The package and the range init adds: the @clegra/ui this SDK is checked with (`npm run pack:check`). */
 export const UI_PACKAGE = "@clegra/ui"
-export const UI_RANGE = "^0.1.0-next.5"
+export const UI_RANGE = "^0.1.0-next.10"
 
 /**
  * The libraries @clegra/ui's web components import, at @clegra/ui's ranges: its peer dependencies without React

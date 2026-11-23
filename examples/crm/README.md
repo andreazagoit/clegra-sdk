@@ -11,6 +11,10 @@ and contacts' page actions (prefilled from the page's filter), and a badge with 
 app-only stat). A workspace host that uninstalls it can export a workspace installation's data (`clegra_export`, one
 JSON file) and delete them (`clegra_delete`); an organization of the CRM's own users is never touched that way.
 
+Its artifacts reach hosts as A2UI 1.0 surfaces (spec §5.4); `funnel` is drawn by the CRM's own component,
+`StageFunnel` (`clegra/funnel-view.ts`), a page the host frames inside the surface and feeds the props, theme and
+language.
+
 In a Clegra client the CRM is shown as its own site (spec §5.1): the client frames the CRM's real pages (pipeline,
 board, deals, companies, contacts) at the CRM's origin, the person signed in with a one-minute site ticket. Only with
 Clegra's core configured (`CLEGRA_ISSUER`). `proxy.ts` (`siteProxy`) says who may frame each page, the root layout
