@@ -6,7 +6,7 @@
  */
 
 import { KINDS, kindNameProblem, NAMESPACED_KIND, PROPERTY_NAME, propertyOf, type KindDef } from "./kinds"
-import { INSTALLATION_TOOLS, LATER_TOOL } from "./protocol"
+import { APP_ACCENTS, INSTALLATION_TOOLS, LATER_TOOL, ROLES_TOOL } from "./protocol"
 
 /** The bounds of the rules below (the JSON Schema carries the same ones). */
 export const LIMITS = {
@@ -37,6 +37,7 @@ type InputSchema = { properties?: Record<string, { type?: unknown; format?: unkn
 
 /** What the rules read of a manifest (a subset of its shape). */
 export type RulesManifest = {
+  accent?: string
   publisher?: { name: string; url: string }
   kinds?: Record<string, KindDef>
   entities: { name: string; tools: { list: ToolRef; get: ToolRef }; visibility?: string }[]
@@ -52,7 +53,7 @@ export type RulesManifest = {
     later?: { at: string; window: number }
   }[]
   pages: { name: string; kind: string; tool: ToolRef; actions?: string[]; badge?: string }[]
-  fragments: { type: string; entity?: string; template?: string; params: InputSchema; tool: ToolRef; visibility?: string }[]
+  artifacts: { type: string; entity?: string; template?: string; params: InputSchema; tool: ToolRef; visibility?: string }[]
   agents: { name: string; tools: string[] }[]
   permissions: { id: string }[]
   nav?: { section?: Label; pages: string[] }[]
@@ -63,12 +64,12 @@ export type RulesManifest = {
 const requiredOf = (schema: InputSchema | undefined): string[] => (Array.isArray(schema?.required) ? (schema!.required as unknown[]).filter((r): r is string => typeof r === "string") : [])
 const isInt = (n: unknown, min: number, max: number) => typeof n === "number" && Number.isInteger(n) && n >= min && n <= max
 
-/** The tools of the app-only items (entities' list and get, actions, fragments): what no model is ever given. */
-export function appOnlyTools(m: Pick<RulesManifest, "entities" | "actions" | "fragments">): Map<string, string> {
+/** The tools of the app-only items (entities' list and get, actions, artifacts): what no model is ever given. */
+export function appOnlyTools(m: Pick<RulesManifest, "entities" | "actions" | "artifacts">): Map<string, string> {
   const out = new Map<string, string>()
   for (const e of m.entities) if (e.visibility === "app") for (const t of [e.tools.list, e.tools.get]) out.set(t.name, `entity "${e.name}"`)
   for (const a of m.actions) if (a.visibility === "app") out.set(a.tool.name, `action "${a.name}"`)
-  for (const f of m.fragments) if (f.visibility === "app" && !f.entity) out.set(f.tool.name, `fragment "${f.type}"`)
+  for (const f of m.artifacts) if (f.visibility === "app" && !f.entity) out.set(f.tool.name, `artifact "${f.type}"`)
   return out
 }
 
@@ -128,15 +129,18 @@ export function manifestRuleProblems(m: RulesManifest): string[] {
   const p: string[] = []
   const pages = new Map(m.pages.map((x) => [x.name, x]))
   const actions = new Map(m.actions.map((a) => [a.name, a]))
-  const fragments = new Map(m.fragments.map((f) => [f.type, f]))
+  const artifacts = new Map(m.artifacts.map((f) => [f.type, f]))
   const permissions = new Set(m.permissions.map((x) => x.id))
 
   // Reserved tools: the installation-level caller's, never an app's own.
-  const tools = [...m.entities.flatMap((e) => [e.tools.list.name, e.tools.get.name]), ...m.actions.map((a) => a.tool.name), ...m.pages.filter((x) => x.kind !== "record").map((x) => x.tool.name), ...m.fragments.filter((f) => !f.entity).map((f) => f.tool.name)]
+  const tools = [...m.entities.flatMap((e) => [e.tools.list.name, e.tools.get.name]), ...m.actions.map((a) => a.tool.name), ...m.pages.filter((x) => x.kind !== "record").map((x) => x.tool.name), ...m.artifacts.filter((f) => !f.entity).map((f) => f.tool.name)]
   for (const t of tools) if ((INSTALLATION_TOOLS as readonly string[]).includes(t)) p.push(`tool "${t}" is reserved (the installation's own tools)`)
+  for (const t of tools) if (t === ROLES_TOOL) p.push(`tool "${t}" is reserved (the app administrators' «who has what»)`)
 
   // The publisher: a claim, well-formed (spec §2).
   if (m.publisher) p.push(...publisherProblems(m.publisher))
+  // The accent: a name of the palette, never a colour (spec §2).
+  if (m.accent !== undefined && !(APP_ACCENTS as readonly string[]).includes(m.accent)) p.push(`accent: "${m.accent}" is not one of ${APP_ACCENTS.join(", ")}`)
 
   // Navigation.
   const seen = new Set<string>()
@@ -166,11 +170,11 @@ export function manifestRuleProblems(m: RulesManifest): string[] {
       }
     }
     if (page.badge !== undefined) {
-      const f = fragments.get(page.badge)
+      const f = artifacts.get(page.badge)
       if (page.kind === "record") p.push(`${where}: a record page has no badge`)
-      if (!f || f.entity) p.push(`${where}: badge "${page.badge}" is not a fragment type of this app`)
+      if (!f || f.entity) p.push(`${where}: badge "${page.badge}" is not an artifact type of this app`)
       else {
-        if (f.template !== "stat") p.push(`${where}: badge "${page.badge}" is not a stat fragment (its data.value is the count)`)
+        if (f.template !== "stat") p.push(`${where}: badge "${page.badge}" is not a stat artifact (its data.value is the count)`)
         if (requiredOf(f.params).length) p.push(`${where}: badge "${page.badge}" has required params (${requiredOf(f.params).join(", ")}); a badge is shown with none`)
       }
     }

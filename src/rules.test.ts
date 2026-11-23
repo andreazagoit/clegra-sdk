@@ -3,7 +3,7 @@ import { test } from "node:test"
 
 import { z } from "zod"
 
-import { defineApp } from "./index"
+import { APP_ACCENTS, DEFAULT_APP_ACCENT, defineApp, manifestSchema } from "./index"
 
 /** Every rule of spec/src/rules.ts fails at definition time, naming the place (the conformance checks run the same rules). */
 
@@ -17,14 +17,14 @@ const actions = {
   remove: { title: "Remove", input: z.object({}), run: () => {} },
   hide: { title: "Hide", input: z.object({}), readOnly: true, visibility: "app" as const, run: () => {} },
 }
-const fragments = {
+const artifacts = {
   count: { title: "Count", description: "Count", params: z.object({}), template: "stat" as const, data: () => ({ label: "n", value: 1 }) },
   per_project: { title: "Per project", description: "Per project", params: z.object({ project: z.string() }), template: "stat" as const, data: () => ({ label: "n", value: 1 }) },
   items: { title: "Items", description: "Items", params: z.object({}), template: "list" as const, data: () => ({ items: [] }) },
 }
 
 // Loosely typed on purpose: these definitions are wrong, and the point is the error each one gets at run time.
-const make = (extra: Record<string, unknown>) => () => defineApp({ name: "rules", title: "Rules", version: "1", entities, actions, fragments, ...extra } as never)
+const make = (extra: Record<string, unknown>) => () => defineApp({ name: "rules", title: "Rules", version: "1", entities, actions, artifacts, ...extra } as never)
 const pages = { list: { title: "Tasks", list: "task", columns: ["title"] }, board: { title: "Board", dashboard: [] }, task: { record: "task" } }
 
 test("a valid definition with every new key holds", () => {
@@ -35,6 +35,17 @@ test("a valid definition with every new key holds", () => {
     notifications: { done: { label: "Done" } },
   })()
   assert.equal(app.manifest().schedules!.length, 2)
+})
+
+test("accent: one name of the palette, in the manifest as declared; absent is none (hosts use blue); a colour is refused", () => {
+  assert.equal(make({ pages, accent: "red" })().manifest().accent, "red")
+  assert.equal(make({ pages })().manifest().accent, undefined)
+  assert.equal(DEFAULT_APP_ACCENT, "blue")
+  for (const name of APP_ACCENTS) assert.equal(make({ pages, accent: name })().manifest().accent, name)
+  assert.throws(make({ pages, accent: "#FF0000" }), /accent: "#FF0000" is not one of blue, indigo, purple, pink, red, orange, yellow, green, teal, gray/)
+  assert.throws(make({ pages, accent: "Red" }), /accent: "Red" is not one of/)
+  const schema = manifestSchema.safeParse({ ...make({ pages })().manifest(), accent: "rose" })
+  assert.equal(schema.success, false)
 })
 
 test("publisher: a name and an https address, in the manifest as declared; it grants nothing", () => {
@@ -64,10 +75,10 @@ test("page actions: global, declared, at most 8, not on record pages", () => {
   assert.throws(make({ pages: { ...pages, task: { record: "task", actions: ["add"] } } }), /page "task": a record page has no page actions/)
 })
 
-test("page badge: a stat fragment without required params, not on record pages", () => {
-  assert.throws(make({ pages: { ...pages, list: { ...pages.list, badge: "items" } } }), /page "list": badge "items" is not a stat fragment/)
+test("page badge: a stat artifact without required params, not on record pages", () => {
+  assert.throws(make({ pages: { ...pages, list: { ...pages.list, badge: "items" } } }), /page "list": badge "items" is not a stat artifact/)
   assert.throws(make({ pages: { ...pages, list: { ...pages.list, badge: "per_project" } } }), /page "list": badge "per_project" has required params \(project\)/)
-  assert.throws(make({ pages: { ...pages, list: { ...pages.list, badge: "nope" } } }), /page "list": badge "nope" is not a fragment type/)
+  assert.throws(make({ pages: { ...pages, list: { ...pages.list, badge: "nope" } } }), /page "list": badge "nope" is not an artifact type/)
   assert.throws(make({ pages: { ...pages, task: { record: "task", badge: "count" } } }), /page "task": a record page has no badge/)
 })
 

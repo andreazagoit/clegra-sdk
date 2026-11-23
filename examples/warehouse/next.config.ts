@@ -13,9 +13,7 @@ const nextConfig: NextConfig = {
   turbopack: { root: join(here, "../..") },
   // No generated AGENTS.md in the project.
   agentRules: false,
-  // No page may be framed, except the embedded ones (/embed/*: their frame-ancestors come from proxy.ts), so sign-in
-  // and consent can't be clickjacked.
-  headers: async () => [{ source: "/((?!embed/).*)", headers: [{ key: "Content-Security-Policy", value: "frame-ancestors 'none'" }] }],
+  // Who may frame a page is said in one place: proxy.ts (the app's own site, spec §5.1).
 }
 
 // /mcp, /.well-known/clegra.json and the OAuth metadata → app/api/clegra/[...path]/route.ts.

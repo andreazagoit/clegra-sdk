@@ -1,6 +1,6 @@
 import { oauthProviderAuthServerMetadata, oauthProviderOpenIdConfigMetadata } from "@better-auth/oauth-provider"
 import { createLocalJWKSet, decodeProtectedHeader, errors, jwtVerify, type JWK } from "jose"
-import { AuthError, type AuthOptions, type Issuer, type ResolvedCaller } from "@clegra/sdk"
+import { AuthError, clegraFromEnv, type AuthOptions, type ResolvedCaller } from "@clegra/sdk"
 
 import { CLEGRA_SCOPE, type Auth } from "./auth"
 import { sql } from "./db"
@@ -19,24 +19,8 @@ export async function callerFor(userId: string, organizationId: string): Promise
 }
 
 /**
- * Workspace hosts whose tokens (with the `clegra` claim) are accepted: CLEGRA_ISSUERS, `issuer|jwksUri`,
- * comma-separated. Their tenant is `<installation>@<issuer>`, an installation of that host, never an organization.
- */
-export function issuersFromEnv(env: Record<string, string | undefined> = process.env): Issuer[] {
-  return (env.CLEGRA_ISSUERS ?? "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .map((entry) => {
-      const [issuer, jwksUri] = entry.split("|").map((s) => s.trim())
-      if (!issuer) throw new Error(`CLEGRA_ISSUERS: "${entry}" has no issuer`)
-      return { issuer, ...(jwksUri ? { jwksUri } : {}) }
-    })
-}
-
-/**
- * Clegra apps' `auth` for this app. Workspace hosts from CLEGRA_ISSUERS (`env`): the SDK verifies their tokens itself,
- * for this MCP server alone. The app's own users: better-auth (its mcp plugin) issues the access tokens, the app
+ * Clegra apps' `auth` for this app. Clegra's core from CLEGRA_ISSUER and the rest of CLEGRA_* (`env`, `clegraFromEnv`): the
+ * SDK verifies its tokens itself (DPoP, for this MCP server alone; the tenant `<company>@<issuer>`; the app's own roles). The app's own users: better-auth (its mcp plugin) issues the access tokens, the app
  * verifies them here. Such a token counts only when it is a JWT (`typ: at+jwt`) signed by better-auth's own keys, from its issuer, for this
  * MCP server alone (`aud`), not expired (30 s of clock skew), not sender-bound (`cnf`), with the `clegra` scope
  * and the organization (`org`) — and the person is still a member of that organization.
@@ -48,6 +32,7 @@ export function issuersFromEnv(env: Record<string, string | undefined> = process
 export function clegraAuth(getAuth: () => Promise<Auth>, env: Record<string, string | undefined> = process.env): AuthOptions {
   const issuer = `${publicUrl()}/api/auth`
   const resource = mcpResource()
+  const clegra = clegraFromEnv(env)
 
   // better-auth's keys, read in-process and cached; read again (at most every 10 s) for a key id not in them (rotation).
   let keys: { set: ReturnType<typeof createLocalJWKSet>; at: number } | null = null
@@ -70,7 +55,7 @@ export function clegraAuth(getAuth: () => Promise<Auth>, env: Record<string, str
   return {
     resource,
     authorizationServers: [issuer],
-    issuers: issuersFromEnv(env),
+    ...(clegra ? { clegra } : {}),
     resolve: async (token) => {
       try {
         decodeProtectedHeader(token)

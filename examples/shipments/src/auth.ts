@@ -1,22 +1,24 @@
-import type { AuthOptions, Issuer } from "@clegra/sdk"
+import { clegraFromEnv, type AuthOptions, type ClegraOptions } from "@clegra/sdk"
 
 /**
- * WHO MAY CALL: the workspace hosts (Clegra nodes) of the companies that
- * installed the app, in Clegra apps' trusted-issuer mode (spec §7). The SDK
- * verifies their tokens itself: signed by the issuer's keys, `aud` exactly
- * this server's MCP address, one request each.
+ * WHO MAY CALL: the people of the Clegra companies that installed the app, through Clegra's core, in Clegra apps'
+ * trusted-issuer mode (spec §7, «Clegra tokens»). The SDK verifies the core's tokens itself: signed by the core's
+ * `app` keys, `aud` exactly this server's MCP address, bound to the caller's key (DPoP).
  *
- * SEVERAL COMPANIES PER SERVER: a courier hosts one server for all its
- * customers, so several issuers may be trusted (one per company's node). The
- * tenant is `<installation>@<issuer>`: two nodes never reach each other's
- * shipments, even with the same installation id.
+ * SEVERAL COMPANIES PER SERVER: a courier hosts one server for all its customers. The tenant is
+ * `<company>@<issuer>`: two companies never reach each other's shipments. Which companies may use it is the
+ * courier's list (CLEGRA_ALLOWED_COMPANIES), or `any`.
  *
- *   SHIPMENTS_PUBLIC_URL  the address the nodes install the app from (its MCP address is <url>/mcp)
- *   CLEGRA_ISSUERS        the trusted nodes, separated by commas: `issuer` or `issuer|jwksUri`
+ *   SHIPMENTS_PUBLIC_URL          the address the companies connect the app from (its MCP address is <url>/mcp)
+ *   CLEGRA_ISSUER                 Clegra's core (required)
+ *   CLEGRA_REGISTRATION_ID        the id the core gave this server when it was registered (required)
+ *   CLEGRA_REGISTRATION_CHALLENGE the registration challenge, while the core verifies the address
+ *   CLEGRA_ALLOWED_COMPANIES      the companies that may use it, separated by commas, or `any` (required)
+ *   CLEGRA_CLIENT_ORIGINS         the Clegra clients' origins (CORS), separated by commas
  */
-export function shipmentsAuth(env: Record<string, string | undefined> = process.env): AuthOptions & { resource: string; issuers: Issuer[] } {
+export function shipmentsAuth(env: Record<string, string | undefined> = process.env): AuthOptions & { resource: string; clegra: ClegraOptions } {
   const base = env.SHIPMENTS_PUBLIC_URL?.trim().replace(/\/+$/, "")
-  if (!base) throw new Error("SHIPMENTS_PUBLIC_URL is not set: the address the companies' nodes install Shipments from (its MCP address is <SHIPMENTS_PUBLIC_URL>/mcp)")
+  if (!base) throw new Error("SHIPMENTS_PUBLIC_URL is not set: the address the companies connect Shipments from (its MCP address is <SHIPMENTS_PUBLIC_URL>/mcp)")
   let url: URL
   try {
     url = new URL(base)
@@ -25,17 +27,9 @@ export function shipmentsAuth(env: Record<string, string | undefined> = process.
   }
   if (url.protocol !== "https:" && url.protocol !== "http:") throw new Error(`SHIPMENTS_PUBLIC_URL: "${base}" is not an http(s) address`)
   if (url.search || url.hash) throw new Error(`SHIPMENTS_PUBLIC_URL: "${base}" has a query or a fragment`)
-  const entries = (env.CLEGRA_ISSUERS ?? "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean)
-  if (!entries.length) throw new Error("CLEGRA_ISSUERS is not set: the companies' nodes this server trusts (`issuer` or `issuer|jwksUri`, separated by commas)")
-  const issuers = entries.map((entry) => {
-    const [issuer, jwksUri] = entry.split("|").map((s) => s.trim())
-    if (!issuer) throw new Error(`CLEGRA_ISSUERS: "${entry}" has no issuer`)
-    return { issuer, ...(jwksUri ? { jwksUri } : {}) }
-  })
-  const repeated = issuers.find((i, n) => issuers.findIndex((x) => x.issuer === i.issuer) !== n)
-  if (repeated) throw new Error(`CLEGRA_ISSUERS: "${repeated.issuer}" is named twice`)
-  return { resource: `${base}/mcp`, issuers }
+  const clegra = clegraFromEnv(env)
+  if (!clegra) throw new Error("CLEGRA_ISSUER is not set: Clegra's core, whose tokens this server accepts")
+  if (!clegra.registrationId) throw new Error("CLEGRA_REGISTRATION_ID is not set: the id Clegra's core gave this server when it was registered")
+  if (!clegra.allowedCompanies) throw new Error("CLEGRA_ALLOWED_COMPANIES is not set: the companies that may use this server (ids separated by commas), or any")
+  return { resource: `${base}/mcp`, clegra }
 }

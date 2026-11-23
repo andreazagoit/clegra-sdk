@@ -18,8 +18,8 @@ import { CourierError, PICKUP_STATUSES, SHIPMENT_STATUSES, createCourier, type C
  *   list and a dashboard, both with «Book a pickup» as their primary action;
  *   a shipment's record page in sections; navigation in one section.
  * - A schedule the workspace host runs every 15 minutes, as the installation,
- *   that tells whoever sees shipments of each delivery and each delay
- *   (typed notifications, `to: { permission }`).
+ *   that tells the company's administrators of each delivery and each delay
+ *   (typed notifications, `to: "admins"`).
  * - Lifecycle: the tenant's data exported and deleted.
  *
  * The data are invented and kept in memory (courier.ts), one set per tenant
@@ -98,7 +98,7 @@ function depotOf(ctx: Context): string {
 const pickupLine = (p: Pickup, ctx: Context) => ctx.t(l(`${p.parcels} parcels from ${p.depot}`, `${p.parcels} colli da ${p.depot}`))
 
 export type ShipmentsAppOptions = {
-  /** Who may call (spec §7): workspace hosts (`issuers` + `resource`, auth.ts), or the dev authority in tests and local runs. */
+  /** Who may call (spec §7): Clegra's core (`clegra` + `resource`, auth.ts), or the dev authority in tests and local runs. */
   auth: AuthOptions
   /** Idempotency of writes and one-time token ids. In memory: this example keeps everything in one process. */
   store?: IdempotencyStore
@@ -215,8 +215,8 @@ export function defineShipmentsApp({ auth, store = new MemoryStore(), courier = 
           for (const { shipment: s, status } of changes)
             ctx.notify(
               status === "delivered"
-                ? { type: "delivered", title: l(`Delivered: ${s.trackingNumber}`, `Consegnata: ${s.trackingNumber}`), body: l(`To ${s.customer}, ${s.destination}.`, `A ${s.customer}, ${s.destination}.`), uri: ctx.uri("shipment", s.id), to: { permission: "shipments.view" } }
-                : { type: "late", title: l(`Late: ${s.trackingNumber}`, `In ritardo: ${s.trackingNumber}`), body: l(`Expected on ${s.expectedDelivery} at ${s.customer}.`, `Prevista il ${s.expectedDelivery} da ${s.customer}.`), uri: ctx.uri("shipment", s.id), to: { permission: "shipments.view" } },
+                ? { type: "delivered", title: l(`Delivered: ${s.trackingNumber}`, `Consegnata: ${s.trackingNumber}`), body: l(`To ${s.customer}, ${s.destination}.`, `A ${s.customer}, ${s.destination}.`), uri: ctx.uri("shipment", s.id), to: "admins" }
+                : { type: "late", title: l(`Late: ${s.trackingNumber}`, `In ritardo: ${s.trackingNumber}`), body: l(`Expected on ${s.expectedDelivery} at ${s.customer}.`, `Prevista il ${s.expectedDelivery} da ${s.customer}.`), uri: ctx.uri("shipment", s.id), to: "admins" },
             )
           return { message: ctx.t(l(`${changes.length} shipments delivered or late since the last check.`, `${changes.length} spedizioni consegnate o in ritardo dall'ultimo controllo.`)), data: { told: changes.map((c) => c.shipment.id) } }
         },
@@ -241,7 +241,7 @@ export function defineShipmentsApp({ auth, store = new MemoryStore(), courier = 
       delete: (ctx) => ({ counts: courier.deleteTenant(ctx.installation) }),
     },
 
-    fragments: {
+    artifacts: {
       late_shipments: {
         title: l("Late shipments", "Spedizioni in ritardo"),
         description: l("How many shipments missed their expected delivery", "Quante spedizioni non sono arrivate alla consegna prevista"),

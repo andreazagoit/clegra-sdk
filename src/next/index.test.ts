@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { afterEach, describe, test } from "node:test"
 import { z } from "zod"
 
-import { defineApp, MANIFEST_PATH, type App } from "../index"
+import { defineApp, EVENTS_PATH, MANIFEST_PATH, REGISTRATION_PATH, SITE_PATH, VIEWS_PATH, type App } from "../index"
 import type { NextConfig } from "next"
 
 import { clegraRewrites, toNextHandlers, withClegra } from "./index"
@@ -183,10 +183,15 @@ describe("withClegra: rewrites and config", () => {
   const ours = clegraRewrites()
   const theirs = { source: "/old", destination: "/new" }
 
-  test("the rewrites: /mcp, the manifest and every OAuth metadata path to the mount", () => {
+  test("the rewrites: /mcp, the manifest, Clegra's registration document, events, views and the site, every OAuth metadata path to the mount", () => {
     assert.deepEqual(ours, [
       { source: "/mcp", destination: "/api/clegra/mcp" },
       { source: MANIFEST_PATH, destination: `/api/clegra${MANIFEST_PATH}` },
+      { source: REGISTRATION_PATH, destination: `/api/clegra${REGISTRATION_PATH}` },
+      { source: EVENTS_PATH, destination: `/api/clegra${EVENTS_PATH}` },
+      { source: `${VIEWS_PATH}/:path*`, destination: `/api/clegra${VIEWS_PATH}/:path*` },
+      { source: SITE_PATH, destination: `/api/clegra${SITE_PATH}` },
+      { source: `${SITE_PATH}/:path*`, destination: `/api/clegra${SITE_PATH}/:path*` },
       { source: "/.well-known/oauth-protected-resource/:path*", destination: "/api/clegra/.well-known/oauth-protected-resource/:path*" },
       { source: "/.well-known/oauth-authorization-server/:path*", destination: "/api/clegra/.well-known/oauth-authorization-server/:path*" },
       { source: "/.well-known/openid-configuration/:path*", destination: "/api/clegra/.well-known/openid-configuration/:path*" },

@@ -42,7 +42,7 @@ The package is this repository's root. Versions before 1.0 are prereleases on th
 
 ```sh
 # once: the @clegra/ui tarball beside this package (git-ignored)
-(cd ../clegra-ui && npm pack --pack-destination ../clegra-sdk/vendor)   # or, once published: npm pack @clegra/ui@next --pack-destination vendor
+npm pack @clegra/ui@next --pack-destination vendor
 npm run pack:check -- --dir "$(mktemp -d /tmp/clegra-pack.XXXX)" --port 3946
 ```
 
@@ -70,20 +70,26 @@ the apps' `node_modules`.
 
 ## Publishing
 
-Decided (owner, 2026-11-17): two scoped packages in the npm organisation `clegra`, `@clegra/sdk` (this repository)
-and `@clegra/ui` (its own repository), MIT, first versions `0.1.0-next.0` on the dist-tag `next`. Publish
-`@clegra/ui` first: `init --ui` names it. Still open: a public home for the code (`repository`, `homepage`, `bugs`
-are left out of package.json until it exists).
+Two scoped packages in the npm organisation `clegra`: `@clegra/sdk` (this repository) and `@clegra/ui` (a separate
+package and repository), MIT, versions before 1.0 on the dist-tag `next`. Publish `@clegra/ui` first when `init --ui`
+names a new version of it.
+
+This repository is a snapshot of the package at each version. Its `.github/workflows/publish.yml` runs on a push to
+`main` that changes `package.json`: when that version is not on npm yet it runs `npm ci`, `npm pack` (printing the
+tarball's integrity) and publishes that tarball with `npm publish <tarball> --tag next|latest --access public
+--provenance`, through npm's Trusted Publishing (OIDC: no token anywhere). The provenance statement on npm links the
+version to the commit and the run that built it. The pack is reproducible: the same commit packs to the same bytes
+anywhere (same Node major and npm).
+
+Before a snapshot is pushed, where the package is developed:
 
 ```sh
 npm ci
 npm run typecheck && npm test
 npm run pack:check -- --dir "$(mktemp -d /tmp/clegra-pack.XXXX)"
-npm whoami                       # a member of the npm organisation `clegra`
-npm publish --dry-run --tag next # read the file list once more
-npm publish --tag next           # prepack builds dist/; the published package.json goes up; postpublish restores
+npm publish --dry-run --tag next # read the file list once more; uploads nothing
 ```
 
-A new version: bump `version` in package.json, move the changelog's «Unreleased» to the version, tag the commit
-(`v0.1.0-next.1`), then the same steps. When `@clegra/ui` moves to a version outside `UI_RANGE`, raise it (and the
-library list) in `spec/src/init/ui.ts`; the pack check fails until they match the tarball in `vendor/`.
+A new version: bump `version` in package.json, move the changelog's «Unreleased» to the version, then the snapshot
+(tagged `v<version>` here). When `@clegra/ui` moves to a version outside `UI_RANGE`, raise it (and the library list)
+in `spec/src/init/ui.ts`; the pack check fails until they match the tarball in `vendor/`.

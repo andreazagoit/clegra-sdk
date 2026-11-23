@@ -52,6 +52,44 @@ const contract = (name: string, store: () => IdempotencyStore) =>
       assert.equal(await s.once(key, 60_000), false)
     })
 
+    test("put and get keep a short value until it expires; hit counts in a window", async () => {
+      const s = store()
+      const key = `v-${Math.random()}`
+      assert.equal(await s.get(key), null)
+      await s.put(key, "1700000000", 60_000)
+      assert.equal(await s.get(key), "1700000000")
+      await s.put(key, "1700000001", 60_000)
+      assert.equal(await s.get(key), "1700000001")
+      await s.put(`${key}-short`, "x", 1)
+      await new Promise((r) => setTimeout(r, 20))
+      assert.equal(await s.get(`${key}-short`), null)
+      const counter = `h-${Math.random()}`
+      assert.deepEqual(await Promise.all([s.hit(counter, 60_000), s.hit(counter, 60_000)]).then((n) => n.sort()), [1, 2])
+      assert.equal(await s.hit(counter, 60_000), 3)
+      await s.hit(`${counter}-short`, 1)
+      await new Promise((r) => setTimeout(r, 20))
+      assert.equal(await s.hit(`${counter}-short`, 1000), 1, "a new window")
+    })
+
+    test("roles: assigned and seen per person per tenant, removed one by one or all", async () => {
+      const roles = store().roles!
+      const tenant = `co-${Math.random()}@https://core.test`
+      assert.equal(await roles.get(tenant, "pw-1"), null)
+      await roles.seen(tenant, "pw-1", { name: "Zed", email: "zed@clegra.test", companyRole: "member" })
+      await roles.assign(tenant, "pw-2", { admin: false, permissions: ["b.x", "a.y", "a.y"] })
+      await roles.seen(tenant, "pw-2", { name: "Ann", email: null, companyRole: "admin" })
+      const one = await roles.get(tenant, "pw-1")
+      assert.deepEqual([one?.assigned, one?.name, one?.companyRole, one?.permissions], [false, "Zed", "member", []])
+      const two = await roles.get(tenant, "pw-2")
+      assert.deepEqual([two?.assigned, two?.permissions, two?.companyRole, typeof two?.seenAt], [true, ["a.y", "b.x"], "admin", "string"], "seen keeps what was assigned")
+      assert.deepEqual((await roles.list(tenant)).map((g) => g.sub), ["pw-2", "pw-1"], "by name")
+      assert.deepEqual(await roles.list(`other@https://core.test`), [])
+      assert.equal(await roles.remove(tenant, "pw-1"), true)
+      assert.equal(await roles.remove(tenant, "pw-1"), false)
+      assert.equal(await roles.clear(tenant), 1)
+      assert.deepEqual(await roles.list(tenant), [])
+    })
+
     test("two begins at the same moment: exactly one runs", async () => {
       const s = store()
       const key = `k-${Math.random()}`
@@ -129,13 +167,13 @@ const laterContract = (name: string, store: () => IdempotencyStore) =>
 laterContract("MemoryStore", () => new MemoryStore())
 laterContract("SqlStore (Postgres, PGlite)", () => sql)
 
-test("SqlStore.schema creates both tables, and can run again (a new migration)", async () => {
+test("SqlStore.schema creates its three tables, and can run again (a new migration)", async () => {
   const db = new PGlite()
   try {
     await db.exec(SqlStore.schema("app_store"))
     await db.exec(SqlStore.schema("app_store"))
     const tables = (await db.query<{ table_name: string }>("SELECT table_name FROM information_schema.tables WHERE table_name LIKE 'app_store%' ORDER BY table_name")).rows.map((r) => r.table_name)
-    assert.deepEqual(tables, ["app_store", "app_store_later"])
+    assert.deepEqual(tables, ["app_store", "app_store_later", "app_store_roles"])
   } finally {
     await db.close()
   }

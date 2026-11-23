@@ -16,7 +16,7 @@ export default async function PipelinePage() {
   const companies = await companyNames(member.orgId, [...new Set(soon.map((d) => d.company))])
   return (
     <>
-      <PageTitle actions={<Link href="/embed/pipeline" className={secondaryButtonClass}>Open the board</Link>}>Pipeline</PageTitle>
+      <PageTitle actions={<Link href="/board" className={secondaryButtonClass}>Open the board</Link>}>Pipeline</PageTitle>
       <div className="grid gap-4 md:grid-cols-3">
         <Card title="Open pipeline">
           <p className="text-2xl font-semibold">{money ? formatMoney(open.value) : open.count}</p>

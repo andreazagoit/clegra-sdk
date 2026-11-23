@@ -3,8 +3,8 @@ node_modules/
 # swapped in (scripts/prepack.mjs, put back by scripts/postpack.mjs).
 dist/
 .package.repo.json
-# Tarballs made for other repositories (npm pack --pack-destination artifacts).
-artifacts/
+# Tarballs made for other projects (npm pack --pack-destination tarballs).
+/tarballs/
 *.tgz
 # Next.js, local data and secrets of the examples and the test fixture.
 .next/

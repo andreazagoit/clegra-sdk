@@ -8,7 +8,7 @@ import { z } from "zod"
 
 import { checkApp, formatReport } from "../spec/src/conformance"
 
-import { AuthError, defineApp, generateSigningKey, signAccessToken, type AuthOptions, type ResolvedCaller } from "./index"
+import { AuthError, defineApp, type AuthOptions, type ResolvedCaller } from "./index"
 import { testClient } from "./testing"
 
 // auth.resolve (spec §7, «The app's own tokens»): the app verifies its own access tokens and says who is calling.
@@ -63,8 +63,6 @@ function makeApp(auth: Partial<AuthOptions> = {}, path?: string) {
         list: (q, ctx) => ({ rows: rows.filter((r) => r.org === ctx.installation && (!q.text || (q.textFields ?? []).some((f) => String(r[f as keyof Row]).toLowerCase().includes(q.text!.toLowerCase())))) }),
       },
     },
-    pages: { board: { title: "Board", url: "/embed/board" } },
-    embed: { frameAncestors: ["https://host.test"], secret: "a-test-secret-for-embedded-pages-0123456789" },
   })
 }
 
@@ -98,18 +96,6 @@ describe("auth.resolve: the app's own tokens", () => {
     const app = makeApp()
     const c = await testClient(app, { token: "tok-made-up-permission" })
     assert.deepEqual(await listOf(c), [{ id: "a1", title: "Alpha" }])
-  })
-
-  test("a workspace host's token still goes to the issuer check, never to resolve", async () => {
-    const key = await generateSigningKey()
-    const iss = "https://node.test"
-    const app = makeApp({ issuers: [{ issuer: iss, jwks: { keys: [key.publicJwk] } }] })
-    const before = seen.length
-    const token = await signAccessToken(key, { iss, aud: RES, sub: "p1", clegra: { installation: "org-a", permissions: ["notes.view"] } })
-    const c = await testClient(app, { token })
-    // The host's tenant is bound to its issuer: org-a@https://node.test is not the app's org-a.
-    assert.deepEqual(await listOf(c), [])
-    assert.equal(seen.length, before, "resolve was not asked")
   })
 
   test("protected-resource metadata names the app's own authorization server", async () => {
@@ -158,29 +144,12 @@ describe("path prefix and same-site pages", () => {
   test("a bad path is refused at definition", () => {
     assert.throws(() => makeApp({}, "api/map"), /a URL path/)
   })
-
-  test("a relative url page stays relative in the manifest and is framed at the app's own origin", async () => {
-    const app = makeApp()
-    const page = app.manifest().pages.find((p) => p.name === "board") as { url?: string }
-    assert.equal(page.url, "/embed/board")
-    const c = await testClient(app, { token: "tok-admin-a" })
-    const [view] = await c.readResource("ui://notes/pages/board")
-    // Signed in with a ticket (spec §5.1, embed.test.ts): the view frames the page at the app's own origin.
-    assert.ok(view?.text?.includes('{"url":"http://127.0.0.1/embed/board","embed":{"tool":"clegra_embed","page":"board"}}'), view?.text)
-    assert.deepEqual((view?._meta?.ui as { csp: { frameDomains: string[] } }).csp.frameDomains, ["http://127.0.0.1"])
-  })
-
-  test("a protocol-relative or javascript: url is refused", () => {
-    for (const url of ["//evil.test/x", "javascript:alert(1)"]) assert.throws(() => defineApp({ name: "x1", title: "X", version: "1", entities: {}, pages: { p: { title: "P", url } } }), /url must be/)
-  })
 })
 
 describe("conformance with a resolver", () => {
   test("the app passes the checks with one of its own tokens", async () => {
     const app = makeApp()
-    // The embed page itself is the app's own (a framework serves it, with the embed headers).
-    const fetch = async (r: Request) => (new URL(r.url).pathname === "/embed/board" ? new Response("board", { headers: app.embed!.headers() }) : app.fetch(r))
-    const report = await checkApp({ url: "https://notes.test", token: "tok-admin-a", fetch })
+    const report = await checkApp({ url: "https://notes.test", token: "tok-admin-a", fetch: (r) => app.fetch(r) })
     assert.ok(report.ok && report.complete, formatReport(report))
   })
 })

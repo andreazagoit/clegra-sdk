@@ -5,10 +5,10 @@
 //      { types, default } in dist, the bin to the built CLI, no devDependencies, workspaces or overrides, and of the
 //      scripts only "postpublish" (below).
 //
-// Publishing is the owner's plain `npm publish --tag next` from the repository root (docs/RELEASE.md). npm re-reads
-// package.json after packing and uploads THAT as the version's metadata, so during a real publish postpack leaves the
-// published manifest in place and "postpublish" (the one script the published manifest keeps; it never runs on
-// install) puts the repository's back. A dry run, a plain `npm pack` and a failed check restore it at postpack.
+// Publishing packs first and uploads that tarball (.github/workflows/publish.yml, docs/RELEASE.md). A plain
+// `npm publish` from the folder works too: npm re-reads package.json after packing and uploads THAT as the version's
+// metadata, so during a real publish postpack leaves the published manifest in place and "postpublish" (the one
+// script the published manifest keeps; it never runs on install) puts the repository's back. A dry run, a plain `npm pack` and a failed check restore it at postpack.
 //
 // THE GUARD: a prerelease version (0.1.0-next.0) is never published without a dist-tag, so it can't become "latest".
 // npm itself refuses that ("You must specify a tag using --tag when publishing a prerelease version"), unless

@@ -61,11 +61,39 @@ npx @clegra/sdk check http://localhost:3000 --token <CLEGRA_LOCAL_TOKEN>
 **The local bearer, and why it is safe.** The generated `resolve` accepts `CLEGRA_LOCAL_TOKEN` only when
 `NODE_ENV` is not `production`. `next build`, `next start` and every deployment (Vercel previews included) set
 `production`, and then the bearer is refused whatever the environment holds. In production without
-`CLEGRA_PUBLIC_URL`, every request gets a `500 misconfigured` that names the missing setting. The token is random
+`CLEGRA_PUBLIC_URL`, every request but the manifest gets a `500 misconfigured` that names the missing setting. The token is random
 per project and lives in `.env.local`, which Next's `.gitignore` keeps out of git. The SDK's own dev sign-in
 (`auth.dev`, a sign-in page for test people) does **not** exist under Next: it trusts only loopback callers, and a
 route handler can't know the caller's address, so `toNextHandlers` refuses it. `auth.anonymous` (no token at all) is
 not used either. It has no production guard, and with it nobody ever gets a `401`.
+
+## Your app's colour
+
+Each app has its own tint colour, like Apple's apps: Clegra draws the app's primary buttons, selected rows and
+filters, links, switches and focus ring in it, and keeps its own chrome blue. Pick one name of the palette (never a
+hex: the palette is tuned for light and dark and for contrast):
+
+```ts
+export const app = defineApp({ name: "acme-tasks", title: "Tasks", version: "1.0.0", accent: "teal", … })
+```
+
+![The palette: blue, indigo, purple, pink, red, orange, yellow, green, teal, gray, in light and dark](accents.svg)
+
+| `accent` | Light | Dark |
+| --- | --- | --- |
+| `blue` (the default) | `#2D4BEE` | `#2D4BEE`, text `#8FA2FF` |
+| `indigo` | `#4F46E5` | `#5850EC` |
+| `purple` | `#8B2FD9` | `#9340E0` |
+| `pink` | `#C81E73` | `#D42A82` |
+| `red` | `#DC2626` | `#E0302F` |
+| `orange` | `#EA580C` | `#FB8C3C` |
+| `yellow` | `#B88300` | `#FACC15` |
+| `green` | `#15803D` | `#34C759` |
+| `teal` | `#0F766E` | `#2DD4BF` |
+| `gray` | `#6B6B6B` | `#6B6B6B` |
+
+Choose the one closest to your icon. Anything else fails when the app starts (`accent: "#00AA88" is not one of …`)
+and in `clegra check` (`manifest.schema`). Without `accent` the manifest has none and hosts use `blue`.
 
 ## A day to ship
 
@@ -78,7 +106,7 @@ Work through the TODOs in `clegra.ts`:
    WorkOS are in [auth.md](auth.md). Keep the `localCaller` line if you like; it never answers in production.
 3. **The public address.** Set `CLEGRA_PUBLIC_URL=https://app.example.com` (an origin only) in each environment.
    `auth.resource` is then `https://app.example.com/mcp`, the only audience tokens are accepted for. Without it,
-   production answers `500 misconfigured`. A client can send `x-forwarded-host`, so never rely on it. On Vercel,
+   production answers `500 misconfigured` (the manifest excepted). A client can send `x-forwarded-host`, so never rely on it. On Vercel,
    previews have other hosts: give each environment its own value.
 4. **A shared store.** On serverless or with several instances, use
    `store: new SqlStore((text, params) => pool.query(text, params))`. It keeps write results (idempotency) and
@@ -93,15 +121,14 @@ Work through the TODOs in `clegra.ts`:
    server must also be reachable there. Add `https://app.example.com/mcp` as a connector and sign in with your own
    sign-in. Lists, records and dashboards show as MCP Apps views. Clients identify themselves with a Client ID
    Metadata Document, so your authorization server must support CIMD (see [auth.md](auth.md)).
-7. **Embedded pages.** A page `{ title, url: "/embed/stock" }` frames a real page of your app inside hosts. The
-   frame is cross-site there, so your session cookie never reaches it: the host signs the viewer in with a
-   one-minute ticket instead (spec §5.1). Three pieces:
-   - `embed: { frameAncestors: ["https://app.clegra.com", "https://chatgpt.com", …], secret }` in `defineApp`
-     (`secret` default `CLEGRA_EMBED_SECRET`, 32+ characters; the hosts that may frame `/embed/*`);
-   - `proxy.ts`: `export const proxy = embedProxy(app)` with `export const config = { matcher: "/embed/:path*" }`
-     (the ticket exchange at `POST /embed/_ticket`, `frame-ancestors` on every embed response);
-   - in the page: `const caller = await getEmbedCaller(app, "stock")` (null: show "open it from the app"), then
-     scope by `caller.installation`, check `caller.can(…)`. Give `/embed/*` a bare layout.
+7. **Your own site in Clegra.** With `auth.clegra`, `site: { secret }` in `defineApp` shows your real pages in
+   Clegra's clients, the person signed in with a one-minute ticket (spec §5.1). Three pieces:
+   - `site: { start: "/", secret }` (`secret` default `CLEGRA_SITE_SECRET`, 32+ characters);
+   - `proxy.ts`: `export const proxy = siteProxy(app)` over every page (each page framable only by the session's
+     Clegra client; `frame-ancestors 'none'` outside a session);
+   - in the root layout `<ClegraSite />` (the bridge) and the caller's theme and language on `<html>`; in pages,
+     server functions and route handlers `const caller = await getClegraCaller(app)` (null: your own sign-in), then
+     scope by `caller.installation` and check `caller.can(…)`.
 
 What needs https: every remote MCP client (Claude, ChatGPT), and any authorization server they reach. What doesn't:
 the Inspector, `clegra check` and workspace hosts on your machine.
@@ -166,7 +193,7 @@ export default defineApp({
     },
   },
 
-  fragments: {
+  artifacts: {
     open_count: {
       title: "Open notes",
       description: "How many notes are open",
@@ -231,7 +258,7 @@ actions: {
     readOnly: true,
     run: (_input, ctx) => {
       const open = [...notesOf(ctx.installation).values()].filter((n) => n.status === "open").length
-      if (open) ctx.notify({ type: "reminder", title: `${open} notes are open`, to: { permission: "notes.edit" } })   // no person in a schedule: say `to`
+      if (open) ctx.notify({ type: "reminder", title: `${open} notes are open`, to: "admins" })   // no person in a schedule: say `to`
       return { message: `${open} open.` }
     },
   },
@@ -336,13 +363,13 @@ nothing. Details: [AI guide](ai-guide.md#kinds-the-same-kind-of-thing-across-app
 
 ## Three rules, three escape hatches
 
-- `input` (actions) and `params` (fragments) are always given: `z.object({})` for none.
+- `input` (actions) and `params` (artifacts) are always given: `z.object({})` for none.
 - `on: "<entity>"` makes a record action; without it the action is global and `run` gets `(input, ctx)`.
 - Every handler scopes its data by `ctx.installation`.
 
 - `mcp: (server, caller) => { … }` hands you the raw `McpServer` of each request for hand-written tools, resources
   and views.
-- `view: { html }` on an entity, a page or a fragment replaces the generated view. A page that is only
+- `view: { html }` on an entity, a page or an artifact replaces the generated view. A page that is only
   `{ title, view }` or `{ title, url }` is fully yours.
 - `expose: { plain, tool }` (entities: `{ plain, list, get }`) decides what plain MCP clients see and what the tools
   are called.

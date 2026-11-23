@@ -2,12 +2,13 @@ import type { Icon, McpServer } from "@modelcontextprotocol/server"
 import type { z } from "zod"
 
 import type { EntityKind } from "../spec/src/kinds"
+import type { AppAccent } from "../spec/src/protocol"
 import type { AuthOptions, Caller } from "./auth"
-import type { EmbedOptions } from "./embed"
+import type { SiteOptions } from "./site"
 import type { Label } from "./labels"
 import { AppServer, type PeopleResolver } from "./server"
 import type { IdempotencyStore } from "./store"
-import type { ActionHandle, ActionResult, Confirm, Context, EntityHandle, Exposure, FragmentInstance, KindConfig, LaterConfig, LifecycleConfig, ListResult, PageConfig, PermissionConfig, Publisher, Query, SettingConfig, Target, TemplateData, ViewSource, Visibility } from "./types"
+import type { ActionHandle, ActionResult, Confirm, Context, EntityHandle, Exposure, ArtifactInstance, KindConfig, LaterConfig, LifecycleConfig, ListResult, PageConfig, PermissionConfig, Publisher, Query, SettingConfig, Target, TemplateData, ViewSource, Visibility } from "./types"
 
 /**
  * defineApp: THE authoring API (spec §1). One typed object holds the whole
@@ -78,7 +79,7 @@ export type ActionDef<I extends z.ZodObject, E extends Schemas, P extends string
     })
   | { [N in keyof E]: ActionBase<I, P> & { /** The entity whose record the action works on. */ on: N; targets?: never; run: (input: z.infer<I>, ctx: Context, record: z.infer<E[N]>) => Awaitable<ActionResult | void> } }[keyof E]
 
-type FragmentBase<Pm extends z.ZodObject, P extends string, A extends string> = {
+type ArtifactBase<Pm extends z.ZodObject, P extends string, A extends string> = {
   title: Label
   description: Label
   icon?: string
@@ -88,7 +89,7 @@ type FragmentBase<Pm extends z.ZodObject, P extends string, A extends string> = 
   /** Actions shown inside, by name (actions without `on`). */
   actions?: A[]
   size?: "small" | "medium" | "large"
-  /** Plain MCP clients: `plain: false` hides its tool; `tool` renames it (default `show_<fragment>`). */
+  /** Plain MCP clients: `plain: false` hides its tool; `tool` renames it (default `show_<artifact>`). */
   expose?: Exposure
   /** Its texts are written by outsiders (records' names, notes): marked as data for models. */
   untrusted?: boolean
@@ -96,9 +97,9 @@ type FragmentBase<Pm extends z.ZodObject, P extends string, A extends string> = 
   visibility?: Visibility
 }
 
-export type FragmentDef<Pm extends z.ZodObject, P extends string = string, A extends string = string> =
-  | { [T in keyof TemplateData]: FragmentBase<Pm, P, A> & { /** Drawn by the host (and by the generated view). */ template: T; data: (params: z.infer<Pm>, ctx: Context) => Awaitable<TemplateData[T] | null>; /** Your own ui:// view instead of the generated one. */ view?: ViewSource } }[keyof TemplateData]
-  | (FragmentBase<Pm, P, A> & { template?: undefined; /** Your own ui:// view (an MCP Apps document). */ view: ViewSource; data: (params: z.infer<Pm>, ctx: Context) => Awaitable<Record<string, unknown> | null> })
+export type ArtifactDef<Pm extends z.ZodObject, P extends string = string, A extends string = string> =
+  | { [T in keyof TemplateData]: ArtifactBase<Pm, P, A> & { /** Drawn by the host (and by the generated view). */ template: T; data: (params: z.infer<Pm>, ctx: Context) => Awaitable<TemplateData[T] | null>; /** Your own ui:// view instead of the generated one. */ view?: ViewSource } }[keyof TemplateData]
+  | (ArtifactBase<Pm, P, A> & { template?: undefined; /** Your own ui:// view (an MCP Apps document). */ view: ViewSource; data: (params: z.infer<Pm>, ctx: Context) => Awaitable<Record<string, unknown> | null> })
 
 type PageBase<P extends string, A extends string, F extends string> = {
   title: Label
@@ -109,11 +110,11 @@ type PageBase<P extends string, A extends string, F extends string> = {
   expose?: Exposure
   /** Global actions (without `on`) offered on the page, at most 8; the first is its primary. Page params prefill inputs of the same name. */
   actions?: A[]
-  /** A `stat` fragment type without required params: its value is the page's count in the navigation. */
+  /** A `stat` artifact type without required params: its value is the page's count in the navigation. */
   badge?: F
 }
 
-/** A page is one of: `list`, `record`, `dashboard`, a custom `view`, or a custom `url`. */
+/** A page is one of: `list`, `record`, `dashboard`, or a custom `view`. */
 export type PageDef<E extends Schemas, P extends string = string, A extends string = string, F extends string = string> =
   | (PageBase<P, A, F> & {
       /** A list of this entity's records. */
@@ -128,13 +129,12 @@ export type PageDef<E extends Schemas, P extends string = string, A extends stri
     })
   | (Omit<PageBase<P, A, F>, "title" | "actions" | "badge"> & { /** The page of one record of this entity (every entity has a default one). */ record: keyof E & string; title?: Label; sections?: { title: Label; fields: string[] }[]; view?: ViewSource; actions?: never; badge?: never })
   | (PageBase<P, A, F> & {
-      /** Fragments on a grid. */
-      dashboard: FragmentInstance[] | ((params: any, ctx: Context) => Awaitable<FragmentInstance[]>) // eslint-disable-line @typescript-eslint/no-explicit-any
+      /** Artifacts on a grid. */
+      dashboard: ArtifactInstance[] | ((params: any, ctx: Context) => Awaitable<ArtifactInstance[]>) // eslint-disable-line @typescript-eslint/no-explicit-any
       params?: z.ZodObject
       view?: ViewSource
     })
   | (PageBase<P, A, F> & { /** A custom page: your own MCP Apps document. */ view: ViewSource; params?: z.ZodObject })
-  | (PageBase<P, A, F> & { /** A custom page: your own site, in an isolated frame. */ url: string; params?: z.ZodObject })
 
 export type AgentDef = {
   title: Label
@@ -173,6 +173,12 @@ export type AppDefinition<E extends Schemas, A extends Schemas, F extends Schema
   description?: Label
   icons?: Icon[]
   /**
+   * The app's tint (spec §2), like an Apple app's: one name of the palette (`APP_ACCENTS`: blue, indigo, purple, pink,
+   * red, orange, yellow, green, teal, gray), never a free colour. Clegra draws the app's primary buttons, selected
+   * rows and filters, links, switches and focus ring in it. Default `blue`.
+   */
+  accent?: AppAccent
+  /**
    * Who publishes the app (spec §2): a name and the publisher's web address (https). A claim, granting nothing: a
    * store or host may verify it against the address's domain and show it as verified.
    */
@@ -195,7 +201,7 @@ export type AppDefinition<E extends Schemas, A extends Schemas, F extends Schema
   kinds?: Record<string, KindConfig>
   entities: { [K in keyof E]: EntityDef<E[K], NoInfer<P>> }
   actions?: { [K in keyof A]: ActionDef<A[K], E, NoInfer<P>> }
-  fragments?: { [K in keyof F]: FragmentDef<F[K], NoInfer<P>, keyof A & string> }
+  artifacts?: { [K in keyof F]: ArtifactDef<F[K], NoInfer<P>, keyof A & string> }
   pages?: Record<G, PageDef<E, NoInfer<P>, NoInfer<keyof A & string>, NoInfer<keyof F & string>>>
   /** The navigation: sections of pages, in order (no record pages; each page once). Without it a host shows every non-record page, ungrouped. */
   nav?: { section?: Label; pages: NoInfer<G>[] }[]
@@ -217,19 +223,20 @@ export type AppDefinition<E extends Schemas, A extends Schemas, F extends Schema
    */
   people?: PeopleResolver
   /**
-   * Pages on the app's own site that hosts frame (spec §5.1): the hosts that may frame them (`frameAncestors`), the
-   * signing secret (default `CLEGRA_EMBED_SECRET`), their path (default `/embed`). Required with a same-site `url` page.
+   * The app's own website (spec §5.1): Clegra's clients show the app as that site, the person signed in with a
+   * one-minute ticket. `start` (default `/`), the signing secret (default `CLEGRA_SITE_SECRET`), `sessionSeconds`.
+   * Needs `auth.clegra`. The site's pages read the caller with `getClegraCaller` (`@clegra/sdk/next`).
    */
-  embed?: EmbedOptions
+  site?: SiteOptions
 }
 
 /** What defineApp returns: the app, ready to serve. */
-export type App = Pick<AppServer, "name" | "locale" | "manifest" | "fetch" | "start" | "devMode" | "uri" | "fragmentUri" | "parseUri" | "createMcpServer" | "devToken" | "devConfirmation" | "embed" | "runLater">
+export type App = Pick<AppServer, "name" | "locale" | "manifest" | "fetch" | "start" | "devMode" | "uri" | "artifactUri" | "parseUri" | "createMcpServer" | "devToken" | "devConfirmation" | "site" | "runLater" | "roles">
 
 const confirmOf = (c: boolean | Confirm | undefined): Confirm | undefined => (c === true ? "always" : c === false ? "never" : c)
 
 export function defineApp<E extends Schemas, A extends Schemas = Schemas, F extends Schemas = Schemas, P extends string = string, G extends string = string>(def: AppDefinition<E, A, F, P, G>): App {
-  const { permissions, settings, kinds, entities, actions, fragments, pages, agents, nav, schedules, notifications, lifecycle, ...options } = def
+  const { permissions, settings, kinds, entities, actions, artifacts, pages, agents, nav, schedules, notifications, lifecycle, ...options } = def
   const app = new AppServer(options)
   if (kinds) app.defineKinds(kinds)
   for (const [id, p] of Object.entries(permissions ?? {})) app.registerPermission(id, p as PermissionConfig)
@@ -251,15 +258,15 @@ export function defineApp<E extends Schemas, A extends Schemas = Schemas, F exte
     actionHandles.set(name, app.registerAction(name, { ...config, ...(c ? { confirm: c } : {}), ...(on ? { entity: entity(on, `action "${name}"`) } : {}) }, (input, ctx, record) => run(input, ctx, record)))
   }
 
-  type AnyFragment = FragmentBase<z.ZodObject, string, string> & { template?: keyof TemplateData; view?: ViewSource; data: (params: unknown, ctx: Context) => Awaitable<Record<string, unknown> | null> }
-  for (const [type, f] of Object.entries(fragments ?? {}) as [string, AnyFragment][]) {
+  type AnyArtifact = ArtifactBase<z.ZodObject, string, string> & { template?: keyof TemplateData; view?: ViewSource; data: (params: unknown, ctx: Context) => Awaitable<Record<string, unknown> | null> }
+  for (const [type, f] of Object.entries(artifacts ?? {}) as [string, AnyArtifact][]) {
     const { actions: names, ...config } = f
     const handles = (names ?? []).map((n) => {
       const h = actionHandles.get(n)
-      if (!h) throw new Error(`fragment "${type}": "${n}" is not an action of this app`)
+      if (!h) throw new Error(`artifact "${type}": "${n}" is not an action of this app`)
       return h
     })
-    app.registerFragment(type, { ...config, ...(handles.length ? { actions: handles } : {}) } as never)
+    app.registerArtifact(type, { ...config, ...(handles.length ? { actions: handles } : {}) } as never)
   }
 
   const actionOf = (n: string, where: string) => {
@@ -280,9 +287,9 @@ export function defineApp<E extends Schemas, A extends Schemas = Schemas, F exte
       config = { kind: "record", entity: entity(record, where), ...rest } as PageConfig
     } else if ("dashboard" in p) {
       const { dashboard, ...rest } = p
-      config = { kind: "dashboard", fragments: dashboard, ...rest } as PageConfig
-    } else if ("url" in p || "view" in p) config = { kind: "custom", ...p } as PageConfig
-    else throw new Error(`${where}: give one of list, record, dashboard, view or url`)
+      config = { kind: "dashboard", artifacts: dashboard, ...rest } as PageConfig
+    } else if ("view" in p) config = { kind: "custom", ...p } as PageConfig
+    else throw new Error(`${where}: give one of list, record, dashboard or view (an app's own pages are its site: defineApp({ site }), spec §5.1)`)
     app.registerPage(name, config)
   }
 

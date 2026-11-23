@@ -70,13 +70,13 @@ function makeApp(options: { notify?: Record<string, unknown> } = {}) {
         input: z.object({}),
         readOnly: true,
         run: (_input, ctx) => {
-          ctx.notify((options.notify as never) ?? { type: "digest", title: "Your digest", to: { permission: "tasks.edit" } })
+          ctx.notify((options.notify as never) ?? { type: "digest", title: "Your digest", to: "admins" })
           return { message: `schedule ${ctx.schedule ?? "none"}, person ${ctx.person?.id ?? "none"}` }
         },
       },
       touch: { title: "Touch", input: z.object({}), readOnly: true, visibility: "app", run: () => ({ message: "touched" }) },
     },
-    fragments: {
+    artifacts: {
       open_count: { title: "Open tasks", description: "How many tasks are open", params: z.object({}), template: "stat", data: (_p, ctx) => ({ label: "open", value: tasksOf(ctx.installation).filter((t) => !t.done).length }) },
       secret: { title: "Secret", description: "For the view only", params: z.object({}), template: "stat", visibility: "app", data: () => ({ label: "s", value: 1 }) },
     },
@@ -112,7 +112,7 @@ describe("manifest", () => {
     assert.equal(m.entities.find((e) => e.name === "audit")!.visibility, "app")
     assert.equal(m.entities.find((e) => e.name === "task")!.visibility, undefined)
     assert.equal(m.actions.find((a) => a.name === "touch")!.visibility, "app")
-    assert.equal(m.fragments.find((f) => f.type === "secret")!.visibility, "app")
+    assert.equal(m.artifacts.find((f) => f.type === "secret")!.visibility, "app")
     assert.deepEqual(m.schedules, [{ name: "daily_digest", action: "digest", tool: "digest", every: 60, maxSeconds: 60 }])
     assert.deepEqual(m.notifications, [
       { type: "digest", label: { en: "Digest" }, default: true, permission: "tasks.edit" },
@@ -172,7 +172,7 @@ describe("schedules", () => {
     const r = await inst.schedule("daily_digest")
     assert.equal(r.isError, undefined)
     assert.equal((r.structuredContent as { message: string }).message, "schedule daily_digest, person none")
-    assert.deepEqual((r._meta as { clegra: { notifications: unknown[] } }).clegra.notifications, [{ type: "digest", title: "Your digest", to: { permission: "tasks.edit" } }])
+    assert.deepEqual((r._meta as { clegra: { notifications: unknown[] } }).clegra.notifications, [{ type: "digest", title: "Your digest", to: "admins" }])
   })
 
   test("a schedule meta is refused with a person, for another tool, or naming no schedule", async () => {
@@ -192,8 +192,8 @@ describe("schedules", () => {
 
 describe("notifications", () => {
   const failed = (r: { isError?: boolean; structuredContent?: Record<string, unknown> }) => r.isError === true && (r.structuredContent as { error: { code: string } }).error.code === "internal"
-  test("an undeclared type, a missing type, a permission nobody declared, or no recipients without a person: a programming error", async () => {
-    for (const notify of [{ type: "nope", title: "x", to: ["p1"] }, { title: "x", to: ["p1"] }, { type: "digest", title: "x", to: { permission: "nope.read" } }, { type: "digest", title: "x" }]) {
+  test("an undeclared type, a missing type, a permission as recipients (Clegra keeps none), or no recipients without a person: a programming error", async () => {
+    for (const notify of [{ type: "nope", title: "x", to: ["p1"] }, { title: "x", to: ["p1"] }, { type: "digest", title: "x", to: { permission: "tasks.edit" } }, { type: "digest", title: "x" }]) {
       const inst = await installationClient(makeApp({ notify }))
       assert.ok(failed(await inst.schedule("daily_digest")), JSON.stringify(notify))
     }

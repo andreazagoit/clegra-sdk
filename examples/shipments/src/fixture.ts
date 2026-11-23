@@ -54,12 +54,13 @@ export const SHIPMENTS_URL = "https://shipments.example.com"
 
 /**
  * The manifest exactly as the app serves it at `/.well-known/clegra.json`, plain JSON, for a server at
- * `SHIPMENTS_URL` trusting one node (`https://node.example.com`). The dev fixture's manifest differs only in `auth`.
+ * `SHIPMENTS_URL` trusting Clegra's core (`https://core.example.com`). The dev fixture's manifest differs only in `auth`
+ * and in what Clegra's core adds (`events`, `rolesTool`).
  */
 export const shipmentsManifest: Manifest = JSON.parse(
   JSON.stringify(
     defineShipmentsApp({
-      auth: { resource: `${SHIPMENTS_URL}/mcp`, issuers: [{ issuer: "https://node.example.com" }] },
+      auth: { resource: `${SHIPMENTS_URL}/mcp`, clegra: { issuer: "https://core.example.com", registrationId: "00000000-0000-4000-8000-000000000000", allowedCompanies: "any" } },
       store: new MemoryStore(),
       courier: createCourier(),
     }).manifest(),

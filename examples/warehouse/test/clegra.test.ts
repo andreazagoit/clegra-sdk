@@ -7,10 +7,10 @@ import { readFileSync } from "node:fs"
 import { after, before, describe, test } from "node:test"
 
 import { decodeJwt, decodeProtectedHeader, generateKeyPair, SignJWT } from "jose"
-import { generateSigningKey, signAccessToken, SqlStore, type Person } from "@clegra/sdk"
-import { embedProxy, toNextHandlers } from "@clegra/sdk/next"
+import { SqlStore, type Person } from "@clegra/sdk"
+import { toNextHandlers } from "@clegra/sdk/next"
 import { checkApp, formatReport } from "@clegra/sdk/spec"
-import { installationClient, testClient } from "@clegra/sdk/testing"
+import { deviceKey, installationClient, testClient, testCore } from "@clegra/sdk/testing"
 
 process.env.PGLITE_DIR = "memory://"
 process.env.BETTER_AUTH_SECRET = randomBytes(32).toString("base64url")
@@ -21,7 +21,7 @@ const { closeDb, getDb, sql } = await import("../lib/db")
 const { migrate } = await import("../lib/migrate")
 const { seed } = await import("../lib/seed")
 const { createAuth, getAuth } = await import("../lib/auth")
-const { issuersFromEnv, clegraAuth } = await import("../lib/clegra-auth")
+const { clegraAuth } = await import("../lib/clegra-auth")
 const { ALL_PERMISSIONS } = await import("../lib/permissions")
 const { createWarehouseApp } = await import("../lib/clegra")
 const { oauthAccessToken } = await import("../scripts/oauth-flow")
@@ -37,10 +37,8 @@ type Rows = { rows: Record<string, unknown>[]; next?: string; total?: number }
 const auth = await getAuth()
 const app = createWarehouseApp({ auth: clegraAuth(async () => auth) })
 const route = toNextHandlers(app, { publicUrl: SITE })
-// proxy.ts in front of the embedded pages (spec §5.1): the ticket exchange, frame-ancestors on every /embed response.
-const proxy = embedProxy(app, { publicUrl: SITE })
-/** The site as an HTTP client reaches it: /embed through the proxy, everything else through the clegra route. */
-const site = (r: Request) => (new URL(r.url).pathname.startsWith("/embed/") ? proxy(r) : route[r.method as "GET"](r))
+/** The site as an HTTP client reaches it: the clegra route (what Next does with withClegra's rewrites). */
+const site = (r: Request) => route[r.method as "GET"](r)
 const handler = (request: Request) => auth.handler(request)
 
 const ids: Record<string, { userId: string; orgId: string }> = {}
@@ -131,7 +129,7 @@ describe("purchase cost (products.cost)", () => {
     assert.ok(!JSON.stringify(tool.inputSchema).includes("purchaseCost"))
   })
 
-  test("the stock value fragment is for admins only", async () => {
+  test("the stock value artifact is for admins only", async () => {
     assert.ok(!(await luke.listTools()).some((t) => t.name === "show_stock_value"))
     const r = await ada.call("show_stock_value", {})
     const [expected] = await sql<{ v: string }>(`SELECT sum(purchase_cost * GREATEST(stock, 0)) AS v FROM product_stock WHERE tenant_id = $1`, [aurora])
@@ -264,23 +262,34 @@ describe("create_order", () => {
   })
 })
 
-// A workspace host on its own keys (a Clegra node): its public key given to the app as a local JWKS, its tokens signed here.
-const HOST = "https://node.test"
-const hostKey = await generateSigningKey()
-const hostApp = createWarehouseApp({ auth: { ...clegraAuth(async () => auth), issuers: [{ issuer: HOST, jwks: { keys: [hostKey.publicJwk] } }] } })
+// Clegra's core (a test one): its app key given to the app as a local key set, its tokens minted here, DPoP-bound.
+const HOST = "https://core.test"
+const core = await testCore({ resource: RESOURCE, issuer: HOST })
+// Clegra's web client, which frames the app's own site (spec §5.1): one of the app's client origins.
+const CLIENT = "https://app.clegra.test"
+const hostApp = createWarehouseApp({ auth: { ...clegraAuth(async () => auth), clegra: core.options({ clientOrigins: [CLIENT] }) } })
+const hostRoute = toNextHandlers(hostApp, { publicUrl: SITE })
 
-describe("workspace hosts (CLEGRA_ISSUERS)", () => {
-  /** A client of one installation of the host: a new one-request token for each call, as a workspace host signs them. */
-  const hostClient = (installation: string, person: Person) =>
-    testClient(hostApp, { token: () => signAccessToken(hostKey, { iss: HOST, aud: RESOURCE, sub: person.id, lifetimeSeconds: 60, clegra: { installation, person, permissions: ALL_PERMISSIONS, host: "workspace" } }) })
+describe("Clegra companies (CLEGRA_ISSUER)", () => {
+  /** A person of a Clegra company (its administrator: every permission here), through a Clegra client: a fresh app token for each call. */
+  const hostClient = (company: string, person: Person) => core.client(hostApp, { company, sub: person.id, name: person.name, role: "admin" })
   const carla = { id: "host-person-7", name: "Carla Test" }
 
-  test("hosts come from the environment, with the app's one MCP address as their audience", () => {
-    assert.deepEqual(issuersFromEnv({}), [])
-    assert.deepEqual(issuersFromEnv({ CLEGRA_ISSUERS: " https://node.test|https://node.test/keys , https://other.test " }), [{ issuer: "https://node.test", jwksUri: "https://node.test/keys" }, { issuer: "https://other.test" }])
-    assert.throws(() => issuersFromEnv({ CLEGRA_ISSUERS: "|https://node.test/keys" }), /has no issuer/)
-    const options = clegraAuth(async () => auth, { CLEGRA_ISSUERS: "https://node.test" })
-    assert.deepEqual([options.issuers, options.resource], [[{ issuer: "https://node.test" }], RESOURCE])
+  test("Clegra's core comes from the environment, with the app's one MCP address as the audience", () => {
+    assert.equal("clegra" in clegraAuth(async () => auth, {}), false)
+    const options = clegraAuth(async () => auth, { CLEGRA_ISSUER: "https://core.example.com", CLEGRA_ALLOWED_COMPANIES: "co-1,co-2" })
+    assert.deepEqual([options.clegra, options.resource], [{ issuer: "https://core.example.com", allowedCompanies: ["co-1", "co-2"] }, RESOURCE])
+  })
+
+  test("a member has what the warehouse's administrator assigned; «who has what» is the administrator's", async () => {
+    const member = await core.client(hostApp, { company: "shop-roles", sub: "host-person-9", name: "Dora Test", role: "member" })
+    const before = (await member.listTools()).map((t) => t.name)
+    assert.ok(!before.includes("clegra_roles"))
+    await hostApp.roles.assign(`shop-roles@${HOST}`, "host-person-9", { permissions: ALL_PERMISSIONS })
+    assert.ok((await member.listTools()).length > before.length, "the assigned permissions count on the next call")
+    const admin = await hostClient("shop-roles", carla)
+    const who = (await admin.call("clegra_roles")).structuredContent as { people: { sub: string; source: string }[] }
+    assert.deepEqual(who.people.map((p) => [p.sub, p.source]).sort(), [["host-person-7", "company-admin"], ["host-person-9", "assigned"]])
   })
 
   test("an installation gets its own copy of the demo company once, and never sees an organization's data", async () => {
@@ -305,21 +314,48 @@ describe("workspace hosts (CLEGRA_ISSUERS)", () => {
     assert.equal(errorOf(await ada.call("product_get", { id: String(products.rows[0]!.id) }))?.code, "not_found")
   })
 
-  test("the embedded stock board for a host's person: the ticket carries the installation as its tenant", async () => {
+  test("the app's own site for a company's person: a site ticket, exchanged once, signs them in as a viewer of the installation", async () => {
     const { provisionWorkspace } = await import("../lib/tenants")
     const { listProducts } = await import("../lib/warehouse")
-    const c = await hostClient("shop-embed", carla)
-    const t = (await c.call("clegra_embed", { page: "stock", origin: "https://app.clegra.com" })).structuredContent as { action: string; field: string; ticket: string }
-    const hostProxy = embedProxy(hostApp, { publicUrl: SITE })
-    const r = await hostProxy(new Request(t.action, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", origin: "https://app.clegra.com", "sec-fetch-dest": "iframe" }, body: new URLSearchParams({ [t.field]: t.ticket }) }))
+    assert.deepEqual(hostApp.manifest().site, { start: "/", tool: { name: "clegra_site", plain: false } })
+    const c = await hostClient("shop-site", carla)
+    const asked = await c.call("clegra_site", { origin: CLIENT, path: "/stock", theme: "light", locale: "en" })
+    assert.ok(!asked.isError, JSON.stringify(asked.structuredContent))
+    const t = asked.structuredContent as { action: string; field: string; ticket: string; path: string }
+    assert.deepEqual([t.action, t.path], [`${SITE}/clegra/site`, "/stock"])
+    assert.equal((await c.call("clegra_site", { origin: "https://evil.example" })).isError, true, "no ticket for another origin")
+    // What the client's frame posts: the ticket in a form, never in the address.
+    const post = (origin: string) => hostRoute.POST(new Request(t.action, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", origin, "sec-fetch-dest": "iframe" }, body: new URLSearchParams({ [t.field]: t.ticket }) }))
+    assert.equal((await post("https://evil.example")).status, 403, "posted from another origin")
+    const r = await post(CLIENT)
     assert.equal(r.status, 303)
-    const who = await hostApp.embed!.caller("stock", new Request(`${SITE}/embed/stock`, { headers: { cookie: r.headers.get("set-cookie")!.split(";")[0]!, "sec-fetch-dest": "iframe" } }))
-    assert.deepEqual([who?.installation, who?.person?.name, who?.host], [`shop-embed@${HOST}`, "Carla Test", "workspace"])
-    // What app/embed/stock/page.tsx does with it: the installation's own copy, never an organization's rows.
+    assert.equal(r.headers.get("location"), `${SITE}/stock`)
+    const cookies = r.headers.getSetCookie()
+    assert.equal(cookies.length, 2)
+    assert.ok(cookies.every((x) => /; Path=\/; Max-Age=\d+; Secure; HttpOnly; SameSite=None; Partitioned$/.test(x)), cookies.join("\n"))
+    assert.equal((await post(CLIENT)).status, 401, "a ticket is used once")
+    // Every page reads the caller (getClegraCaller in lib/session.ts) and is framable by that client only.
+    const page = new Request(`${SITE}/stock`, { headers: { cookie: cookies.map((x) => x.split(";")[0]).join("; "), "sec-fetch-dest": "iframe" } })
+    const who = await hostApp.site!.caller(page)
+    assert.deepEqual([who?.installation, who?.person?.name, who?.admin], [`shop-site@${HOST}`, "Carla Test", true])
+    assert.deepEqual(ALL_PERMISSIONS.filter((p) => who?.can(p)), ALL_PERMISSIONS, "the company's administrator: every permission")
+    assert.deepEqual((await hostApp.site!.guard(page)).headers, { "content-security-policy": `frame-ancestors 'self' ${CLIENT}` })
+    // What the stock board does with it: the installation's own copy, never an organization's rows.
     await provisionWorkspace(who!.installation)
     const board = await listProducts(who!.installation, { limit: 200 })
     assert.equal(board.rows.length, 25)
     assert.ok(board.rows.every((p) => /^prd_w[0-9a-f]{16}_/.test(p.id)))
+  })
+
+  test("as a company's person the app passes the conformance checks, the site's included", async () => {
+    const device = await deviceKey()
+    const report = await checkApp({
+      url: SITE,
+      fetch: (r) => hostRoute[r.method as "GET"](r),
+      clegra: { token: () => core.appToken({ company: "shop-check", sub: carla.id, name: carla.name, role: "admin", device }), proof: device.proof, clientOrigin: CLIENT },
+    })
+    assert.ok(report.ok, formatReport(report))
+    for (const id of ["site.frame-ancestors", "site.ticket"]) assert.ok(report.checks.some((x) => x.id === id && x.ok && !x.skipped), `${id} ran: ${formatReport(report)}`)
   })
 
   test("a host person's change works and shows their name; the demo people are named too", async () => {
@@ -338,17 +374,20 @@ describe("workspace hosts (CLEGRA_ISSUERS)", () => {
   })
 })
 
+// The installation-level caller (a workspace host with no person: schedules, lifecycle tools) is the SDK's dev authority's,
+// for development and tests (spec §7, «Development»): its tenants are `<installation>@clegra-dev`.
+const DEV = "clegra-dev"
+const devApp = createWarehouseApp({ auth: { ...clegraAuth(async () => auth), dev: { keyFile: false, code: "TEST" } } })
+
 describe("the installation itself: the low-stock schedule and the lifecycle", () => {
-  /** The installation-level caller: a workspace host's token with no person, listing exactly `permissions`. */
-  const installation = (name: string, permissions: string[] = []) =>
-    installationClient(hostApp, { token: () => signAccessToken(hostKey, { iss: HOST, aud: RESOURCE, sub: `installation:${name}`, lifetimeSeconds: 60, clegra: { installation: name, permissions, host: "workspace" } }) })
-  const person = (name: string) =>
-    testClient(hostApp, { token: () => signAccessToken(hostKey, { iss: HOST, aud: RESOURCE, sub: "host-person-7", lifetimeSeconds: 60, clegra: { installation: name, person: { id: "host-person-7", name: "Carla Test" }, permissions: ALL_PERMISSIONS, host: "workspace" } }) })
+  /** The installation-level caller: a dev workspace host's token with no person, listing exactly `permissions`. */
+  const installation = (name: string, permissions: string[] = []) => installationClient(devApp, { installation: name, permissions })
+  const person = (name: string) => testClient(devApp, { host: "workspace", installation: name, person: { id: "host-person-7", name: "Carla Test" }, permissions: ALL_PERMISSIONS })
   type Sent = { type?: string; title: string; body?: string; uri?: string; to: unknown }
   const sentOf = (r: { _meta?: Record<string, unknown> }) => ((r._meta?.clegra as { notifications?: Sent[] } | undefined)?.notifications ?? []) as Sent[]
 
   test("declared: the schedule, the typed notification, the lifecycle tools; app-only, never a model's", async () => {
-    const m = hostApp.manifest()
+    const m = devApp.manifest()
     assert.deepEqual(m.schedules, [{ name: "low_stock_check", action: "check_low_stock", tool: "check_low_stock", every: 60, maxSeconds: 30 }])
     assert.deepEqual(m.notifications?.map((n) => [n.type, n.default, n.permission]), [["low_stock", true, "products.view"]])
     assert.deepEqual(m.lifecycle, { installation: "clegra_installation", export: "clegra_export", delete: "clegra_delete" })
@@ -359,14 +398,14 @@ describe("the installation itself: the low-stock schedule and the lifecycle", ()
     assert.ok(["clegra_installation", "clegra_export", "clegra_delete"].every((n) => own.includes(n)), own.join())
   })
 
-  test("the schedule tells the stock movers about each low product once, until it is back in stock", async () => {
+  test("the schedule tells the company's administrators about each low product once, until it is back in stock", async () => {
     const host = await installation("shop-alerts", ["products.view"])
     const first = await host.schedule("low_stock_check")
     assert.ok(!first.isError, JSON.stringify(first.content))
     const sent = sentOf(first)
     const data = first.structuredContent?.data as { low: number; told: string[] }
     assert.ok(data.low > 0 && sent.length === data.low, JSON.stringify(first.structuredContent))
-    assert.ok(sent.every((n) => n.type === "low_stock" && JSON.stringify(n.to) === JSON.stringify({ permission: "stock.move" }) && n.uri?.startsWith("clegra://warehouse/product/")), JSON.stringify(sent))
+    assert.ok(sent.every((n) => n.type === "low_stock" && n.to === "admins" && n.uri?.startsWith("clegra://warehouse/product/")), JSON.stringify(sent))
     assert.ok(sent.some((n) => n.title === "Out of stock: Enamel paint, blue"), JSON.stringify(sent.map((n) => n.title)))
     // Again: nothing new to tell.
     assert.deepEqual(sentOf(await host.schedule("low_stock_check")), [])
@@ -390,32 +429,32 @@ describe("the installation itself: the low-stock schedule and the lifecycle", ()
   test("the installation's state is kept; its data exported as JSON, deleted once, and the export keeps working after", async () => {
     const host = await installation("shop-gone")
     for (const state of ["enabled", "disabled", "uninstalled"] as const) assert.deepEqual((await host.call("clegra_installation", { state })).structuredContent, { ok: true })
-    assert.deepEqual(await sql(`SELECT state FROM installation_state WHERE tenant_id = $1`, [`shop-gone@${HOST}`]), [{ state: "uninstalled" }])
+    assert.deepEqual(await sql(`SELECT state FROM installation_state WHERE tenant_id = $1`, [`shop-gone@${DEV}`]), [{ state: "uninstalled" }])
 
     const { file } = await host.exportData()
     assert.ok(file, "an export")
     assert.deepEqual([file.name, file.contentType, file.bytes], ["warehouse-export.json", "application/json", file.body.byteLength])
     assert.equal(file.sha256, createHash("sha256").update(file.body).digest("hex"))
     const data = JSON.parse(file.body.toString("utf8")) as { installation: string; state: string; products: { id: string; stock: number }[]; orders: { lines: unknown[] }[]; people: unknown[] }
-    assert.deepEqual([data.installation, data.state, data.products.length, data.orders.length, data.people.length], [`shop-gone@${HOST}`, "uninstalled", 25, 12, 2])
+    assert.deepEqual([data.installation, data.state, data.products.length, data.orders.length, data.people.length], [`shop-gone@${DEV}`, "uninstalled", 25, 12, 2])
     assert.ok(data.orders.every((o) => o.lines.length > 0))
 
     const deleted = await host.call("clegra_delete")
     const counts = (deleted.structuredContent as { deleted: boolean; counts: Record<string, number> }).counts
     assert.deepEqual([deleted.structuredContent?.deleted, counts.products, counts.orders, counts.movements! > 25], [true, 25, 12, true])
-    assert.deepEqual(await sql(`SELECT (SELECT count(*) FROM tenant WHERE id = $1)::integer AS tenants, (SELECT count(*) FROM product WHERE tenant_id = $1)::integer AS products, (SELECT count(*) FROM installation_state WHERE tenant_id = $1)::integer AS states`, [`shop-gone@${HOST}`]), [{ tenants: 0, products: 0, states: 0 }])
+    assert.deepEqual(await sql(`SELECT (SELECT count(*) FROM tenant WHERE id = $1)::integer AS tenants, (SELECT count(*) FROM product WHERE tenant_id = $1)::integer AS products, (SELECT count(*) FROM installation_state WHERE tenant_id = $1)::integer AS states`, [`shop-gone@${DEV}`]), [{ tenants: 0, products: 0, states: 0 }])
     // Idempotent; the export after it: nothing kept. Uninstalled after the delete marks nothing.
     assert.deepEqual((await host.call("clegra_delete")).structuredContent, { deleted: true, counts: { products: 0, movements: 0, orders: 0 } })
     const after = await host.exportData()
     assert.deepEqual([after.file, after.result.structuredContent], [null, { empty: true }])
     assert.deepEqual((await host.call("clegra_installation", { state: "uninstalled" })).structuredContent, { ok: true })
-    assert.deepEqual(await sql(`SELECT count(*)::integer AS n FROM tenant WHERE id = $1`, [`shop-gone@${HOST}`]), [{ n: 0 }])
+    assert.deepEqual(await sql(`SELECT count(*)::integer AS n FROM tenant WHERE id = $1`, [`shop-gone@${DEV}`]), [{ n: 0 }])
     // The organizations are untouched.
     assert.equal(rows(await ada.call("product_list", { limit: 1 })).total, 25)
   })
 })
 
-describe("fragments and pages", () => {
+describe("artifacts and pages", () => {
   test("low stock lists the emptiest products first", async () => {
     const r = await luke.call("show_low_stock", { limit: 3 })
     const items = (r.structuredContent?.data as { items: { title: string; status: string }[] }).items
@@ -429,59 +468,21 @@ describe("fragments and pages", () => {
     assert.equal((r.structuredContent?.data as { points: unknown[] }).points.length, 4)
   })
 
-  test("the manifest names the same-site stock board and the agent", () => {
-    const m = app.manifest() as unknown as { pages: { name: string; url?: string }[]; agents: { name: string }[] }
-    assert.equal(m.pages.find((p) => p.name === "stock")?.url, "/embed/stock")
+  test("the manifest names the agent; a site only with Clegra's core", () => {
+    const m = app.manifest()
     assert.ok(m.agents.some((a) => a.name === "assistant"))
+    assert.equal(m.site, undefined)
   })
 
   test("the store's tables in the latest migration are the SDK's", () => {
-    const migration = readFileSync(new URL("../db/migrations/006_clegra_lifecycle.sql", import.meta.url), "utf8")
-    assert.ok(migration.includes(SqlStore.schema()), "db/migrations/006_clegra_lifecycle.sql must contain SqlStore.schema()")
+    const migration = readFileSync(new URL("../db/migrations/007_clegra_roles.sql", import.meta.url), "utf8")
+    assert.ok(migration.includes(SqlStore.schema()), "db/migrations/007_clegra_roles.sql must contain SqlStore.schema()")
   })
 })
 
-describe("the embedded stock board (spec §5.1)", () => {
-  const HOST = "https://app.clegra.com"
-  const ticketFor = async (c: Client, origin = HOST) => (await c.call("clegra_embed", { page: "stock", origin })) as { isError?: boolean; structuredContent?: { action: string; field: string; ticket: string; error?: { code: string } } }
-  const exchange = (t: { action: string; field: string; ticket: string }, origin = HOST) =>
-    proxy(new Request(t.action, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", origin, "sec-fetch-dest": "iframe" }, body: new URLSearchParams({ [t.field]: t.ticket }) }))
-  const viewer = (setCookie: string) => app.embed!.caller("stock", new Request(`${SITE}/embed/stock`, { headers: { cookie: setCookie.split(";")[0]!, "sec-fetch-dest": "iframe" } }))
-
-  test("declared: the hosts that may frame it, the page behind products.view", () => {
-    const m = app.manifest() as unknown as { embed: { path: string; frameAncestors: string[] }; pages: { name: string; permission?: string }[] }
-    assert.equal(m.embed.path, "/embed")
-    assert.ok(m.embed.frameAncestors.includes(HOST) && m.embed.frameAncestors.includes("https://chatgpt.com"))
-    assert.equal(m.pages.find((p) => p.name === "stock")?.permission, "products.view")
-  })
-
-  test("a real token's ticket opens the board for that person and organization, once", async () => {
-    const t = (await ticketFor(ada)).structuredContent!
-    assert.equal(t.action, `${SITE}/embed/_ticket`)
-    const r = await exchange(t)
-    assert.equal(r.status, 303)
-    assert.equal(r.headers.get("location"), `${SITE}/embed/stock`)
-    const cookie = r.headers.get("set-cookie")!
-    assert.match(cookie, /; Path=\/embed\/stock; Max-Age=600; Secure; HttpOnly; SameSite=None; Partitioned$/)
-    const who = await viewer(cookie)
-    assert.equal(who?.installation, aurora)
-    assert.equal(who?.person?.id, ids["ada.fernley@aurora.example"]!.userId)
-    assert.equal((await exchange(t)).status, 401, "a ticket is used once")
-  })
-
-  test("another organization's person gets their own organization; an undeclared host gets no ticket", async () => {
-    const who = await viewer((await exchange((await ticketFor(sophie)).structuredContent!)).headers.get("set-cookie")!)
-    assert.equal(who?.installation, hummingbird)
-    const refused = await ticketFor(ada, "https://evil.example")
-    assert.equal(refused.isError, true)
-  })
-
-  test("every /embed response says who may frame it; other pages may not be framed at all", async () => {
-    const r = await proxy(new Request(`${SITE}/embed/stock`))
-    assert.match(r.headers.get("content-security-policy") ?? "", /^frame-ancestors https:\/\/app\.clegra\.com https:\/\/chatgpt\.com /)
-    const config = (await import("../next.config")).default as { headers: () => Promise<{ source: string; headers: { key: string; value: string }[] }[]> }
-    assert.deepEqual(await config.headers(), [{ source: "/((?!embed/).*)", headers: [{ key: "Content-Security-Policy", value: "frame-ancestors 'none'" }] }])
-  })
+test("who may frame a page is said in proxy.ts alone: next.config sets no frame-ancestors", async () => {
+  const config = (await import("../next.config")).default as { headers?: unknown }
+  assert.equal(config.headers, undefined)
 })
 
 describe("MCP authorization (better-auth tokens, verified by the app)", () => {
@@ -517,7 +518,7 @@ describe("MCP authorization (better-auth tokens, verified by the app)", () => {
     assert.ok(listed.tools.some((t) => t.name === "product_list"))
     const report = await checkApp({ url: SITE, token, fetch: site })
     assert.ok(report.ok && report.complete, formatReport(report))
-    for (const id of ["kinds.known", "kinds.properties", "kinds.tools", "kinds.keys", "kinds.values", "embed.frame-ancestors", "embed.ticket"]) assert.ok(report.checks.some((c) => c.id === id && c.ok && !c.skipped), `${id} ran: ${formatReport(report)}`)
+    for (const id of ["kinds.known", "kinds.properties", "kinds.tools", "kinds.keys", "kinds.values"]) assert.ok(report.checks.some((c) => c.id === id && c.ok && !c.skipped), `${id} ran: ${formatReport(report)}`)
   })
 
   test("the organization comes from the token only, never from arguments", async () => {

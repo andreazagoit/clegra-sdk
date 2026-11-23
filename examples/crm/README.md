@@ -11,6 +11,12 @@ and contacts' page actions (prefilled from the page's filter), and a badge with 
 app-only stat). A workspace host that uninstalls it can export a workspace installation's data (`clegra_export`, one
 JSON file) and delete them (`clegra_delete`); an organization of the CRM's own users is never touched that way.
 
+In a Clegra client the CRM is shown as its own site (spec §5.1): the client frames the CRM's real pages (pipeline,
+board, deals, companies, contacts) at the CRM's origin, the person signed in with a one-minute site ticket. Only with
+Clegra's core configured (`CLEGRA_ISSUER`). `proxy.ts` (`siteProxy`) says who may frame each page, the root layout
+loads the bridge (`<ClegraSite />`) and starts in the client's theme and language, and `lib/session.ts` takes the
+Clegra caller as a member of its company's installation with the permissions the CRM's roles give them there.
+
 ```sh
 npm run setup      # .env.local (generated BETTER_AUTH_SECRET, DEMO_PASSWORD) if missing, then migrate + seed
 npm run dev        # http://localhost:3920
@@ -58,9 +64,9 @@ organization.
 | Variable | |
 |---|---|
 | `CLEGRA_PUBLIC_URL` | The public origin. better-auth (`<origin>/api/auth`, the issuer) and MCP (`<origin>/mcp`) both derive from it. Required in production, https |
-| `BETTER_AUTH_SECRET` | Required. Long and random. The embed tickets' signing key is derived from it too |
+| `BETTER_AUTH_SECRET` | Required. Long and random (32 characters at least). The keys of the site tickets and sessions (Clegra) are derived from it too |
 | `DATABASE_URL` | Postgres. Required in production (a Neon pooled URL with `sslmode=require` works) |
 | `DEMO_PASSWORD`, `DEMO_SIGNIN=1` | The demo accounts' password (used by the seed) and the one-click sign-in |
-| `CLEGRA_ISSUERS` | Workspace hosts (e.g. a Clegra node) whose tokens are accepted, as `issuer\|jwksUri`, comma-separated. Each installation gets its own copy of the demo data |
+| `CLEGRA_ISSUER` | Clegra's core, whose tokens are accepted (spec §7, «Clegra tokens»); with it `CLEGRA_REGISTRATION_ID`, `CLEGRA_REGISTRATION_CHALLENGE`, `CLEGRA_ALLOWED_COMPANIES` (`any` or ids) and `CLEGRA_CLIENT_ORIGINS` (the clients that may frame the site). Each company gets its own copy of the demo data |
 
 A missing variable is an error, never a silent fallback.

@@ -19,8 +19,8 @@ export default async function DashboardPage() {
   return (
     <>
       <PageHeader title="Dashboard">
-        <Link href="/embed/stock" target="_blank" className="text-sm text-accent hover:underline">
-          Stock board (embeddable) ↗
+        <Link href="/stock" className="text-sm text-accent hover:underline">
+          Stock board →
         </Link>
       </PageHeader>
       <div className="grid gap-4 md:grid-cols-3">

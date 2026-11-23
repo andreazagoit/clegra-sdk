@@ -11,7 +11,7 @@
 ## 1. What it is
 
 An **app** is described once, as one definition: entities, actions, pages,
-fragments, agents, permissions, settings, and optionally its navigation,
+artifacts, agents, permissions, settings, and optionally its navigation,
 schedules, notification types and lifecycle. The definition has two halves:
 
 - the **manifest**: pure JSON, no code. The *workspace host* (Clegra: the
@@ -38,20 +38,23 @@ JSON Schema: [`spec/schema/clegra.schema.json`](../spec/schema/clegra.schema.jso
 |---|---|
 | `specVersion` | `"1.0"` |
 | `name`, `title`, `version`, `description?`, `icons?`, `locale` | Identity. `name` is the app id: `[a-z][a-z0-9-]{1,39}` |
+| `accent?` | The app's tint, like an Apple app's: one name of a closed palette, `blue`, `indigo`, `purple`, `pink`, `red`, `orange`, `yellow`, `green`, `teal`, `gray` (`APP_ACCENTS`), never a free colour; absent means `blue`. A host draws the app's own controls in it (primary buttons, selected rows and filters, links, switches, progress, the focus ring) and keeps its own chrome and the status colours. The colours of each name, light and dark, are the host's (Clegra's: `@clegra/ui/accents`, every pair WCAG AA) |
 | `publisher?` | `{ name, url }`: who publishes the app. `name` is the publisher's own name (1–100 characters, no spaces around it, no control characters), `url` its web address, an absolute `https` URL without credentials (at most 300 characters). A claim: it grants nothing. A store or host may verify it against the domain of `url` and show the app's publisher as verified; an unverified publisher is never shown as verified |
 | `mcp` | `{ url }`: the MCP endpoint (Streamable HTTP), relative to the manifest (`/mcp`, or under the app's path, `/api/clegra/mcp`). The manifest and the OAuth metadata are always under `/.well-known/` at the root |
 | `auth` | `{ resource?, authorizationServers }` (§7). `resource` is the app's own public MCP address: the only token audience it accepts |
-| `view` | The generated `ui://` view that draws lists, records, dashboards, fragments |
+| `view` | The generated `ui://` view that draws lists, records, dashboards, artifacts |
 | `resolveTool`, `searchTool?` | Tools a host uses to resolve URIs and to search |
-| `embed?` | `{ tool, path, frameAncestors }`: the app's own pages that hosts frame (§5.1). Present exactly when a page has a same-site `url` |
+| `site?` | `{ start, tool }`: the app's own website, shown as it is in Clegra's clients (§5.1) |
 | `kinds?` | Definitions of the namespaced kinds this app uses (§3.1) |
-| `entities`, `actions`, `pages`, `fragments`, `agents` | §3–§5 |
+| `entities`, `actions`, `pages`, `artifacts`, `agents` | §3–§5 |
 | `permissions` | `{ id, label, description?, default }`; ids are `group.verb` |
 | `settings` | `{ id, label, description?, type: text\|number\|boolean, required, default? }` (`id`: `[a-z][a-z0-9_]{1,39}`): values an administrator sets per installation; the workspace host sends them with every call (§7). Never secrets: those stay in the app's own configuration |
 | `nav?` | `[{ section?, pages }]`: the app's navigation (§5.2) |
 | `schedules?` | `[{ name, action?, tool, every, maxSeconds }]`: actions the workspace host runs as the installation (§11) |
 | `notifications?` | `[{ type, label, description?, default, permission? }]`: the notification types the app sends (§12) |
 | `lifecycle?` | `{ installation?, export?, delete? }`: the reserved lifecycle tools the app implements (§13) |
+| `events?` | `{ url }`: where Clegra's core posts its signed events, on the app's own origin (§7, «Events»). Present with `auth.clegra` |
+| `rolesTool?` | The read-only «who has what» tool, `clegra_roles` (§7, «Roles»). Present with `auth.clegra` |
 
 **Labels** are always maps per locale (`{ "en": "Deal", "it": "Trattativa" }`);
 a host picks the person's locale, then `locale`, then the first entry.
@@ -60,8 +63,8 @@ tool, and whether it is listed to plain MCP clients.
 **Agents** are `{ name, title, description, instructions, tools, tier:
 fast|standard|strong, starters? }`: the host's model runs them with those tools.
 **Reserved names**: the tools `clegra_later`, `clegra_installation`,
-`clegra_export` and `clegra_delete` are the installation's (§10); no entity,
-action, page or fragment tool takes them. The schedule and notification type
+`clegra_export` and `clegra_delete` are the installation's (§10), `clegra_roles`
+the app administrators' (§7); no entity, action, page or artifact tool takes them. The schedule and notification type
 `clegra_later` are the SDK's (§4.2). Identifiers of schedules and notification
 types match `[a-z][a-z0-9_]{0,39}`.
 
@@ -333,7 +336,7 @@ and it runs at the time `at` names, as its author, without being asked again.
    from its own cron (the SDK's `app.runLater(tenant)`; the notifications it
    returns are the app's to deliver).
 
-## 5. Pages and fragments
+## 5. Pages and artifacts
 
 A **page** is `{ name, kind, title, icon?, permission?, params, tool,
 actions?, badge?, … }` (`actions`, `badge`: §5.2):
@@ -342,17 +345,17 @@ actions?, badge?, … }` (`actions`, `badge`: §5.2):
 |---|---|---|
 | `list` | `entity`, `columns` | Natively, from the list tool's rows |
 | `record` | `entity`, `sections?` | Natively. Every entity has one (`derived: true` unless declared) |
-| `dashboard` | `view` | Fragments on a grid |
-| `custom` | `view`, or `view` + `url` | The developer's MCP Apps document, or their site in an isolated frame. `url` is https, or a path on the app's own site (`/embed/pipeline`), resolved against the app's public origin |
+| `dashboard` | `view` | Artifacts on a grid |
+| `custom` | `view` | The developer's MCP Apps document |
 
-A **fragment** is a small live piece of the app shown in answers and on
+An **artifact** is a small live piece of the app shown in answers and on
 dashboards: `{ type, title, description?, params, template?, view?, tool,
 permission?, actions?, size?, untrusted?, visibility? }` (`visibility`: §6
 rule 11). Templates are `record` (one per
-entity, `params { id }`), `card`, `stat`, `list`, `chart`; a fragment without
-a template has only a `view`. A fragment instance's URI is
+entity, `params { id }`), `card`, `stat`, `list`, `chart`; an artifact without
+a template has only a `view`. An artifact instance's URI is
 `clegra://<app>/<type>/<base64url of its params, keys sorted>`.
-`untrusted: true` says the fragment's texts are outsiders' (records' names):
+`untrusted: true` says the artifact's texts are outsiders' (records' names):
 they are marked like an untrusted field (§7).
 
 Template data, which a workspace host draws natively:
@@ -368,7 +371,7 @@ A `uri` is a record of the app: the item opens it. An item (or a card) whose
 `uri` is a record the caller can't reach is not sent.
 
 **Views** are MCP Apps documents (`ui://<app>/…`, `text/html;profile=mcp-app`).
-Any generated view MAY be overridden per entity, page or fragment; the
+Any generated view MAY be overridden per entity, page or artifact; the
 manifest then names the override in `view`. A host MAY still draw natively.
 
 The generated view sorts a list by its sortable columns, opens records,
@@ -399,61 +402,102 @@ The generated view and the host (MCP Apps, `2026-01-26`):
   `ui/update-model-context` with the result's text, so the model knows in
   its next turn.
 
-### 5.1 Embedded pages: the sign-in ticket
+### 5.1 The app's own site
 
-A `custom` page whose `url` is a path on the app's own site (an *embed
-page*) is framed by hosts on other sites, where the app's own session cookie
-is a third-party cookie that browsers block. The viewer is signed in to it
-with a ticket instead:
+An app with a website of its own (its screens, its sidebar, its forms) is shown
+**as that site** in a Clegra client: the client frames the app's real pages,
+the person signed in without a word, and draws nothing around them. The
+generated views (§5, §5.3) stay for an app without a site and for every other
+host (ChatGPT, Claude: MCP Apps). The site lives at the app's own origin, the
+origin of its MCP address (`auth.resource`).
 
-1. **Declared.** An app with an embed page MUST have `embed` in its manifest:
-   `tool` (`clegra_embed`), `path` (default `/embed`; every embed page is
-   under it) and `frameAncestors`, the hosts that may frame embed pages, as
-   CSP sources: `https://host[:port]`, `https://*.host`, `'self'`; outside
-   production `http://localhost` and `http://127.0.0.1` (port or `:*`).
-2. **Asked for.** The host, holding the viewer's token for the app, calls
-   `clegra_embed { page, origin }`: `origin` is the origin of the document
-   that will frame the page and post the ticket. The tool is listed to every
-   caller with `_meta.ui.visibility: ["app"]` (hidden from models). It MUST
-   refuse a page the caller can't open (the page's permission, `plain`), an
-   origin that is opaque (`null`), not a serialized origin, or not matched by
-   `frameAncestors`. It answers `{ page, action, field, ticket, expiresAt }`.
-3. **The ticket** is a JWT (`typ: clegra-embed+jwt`, HMAC with a key only
-   the app holds), `iss` the app's origin, `aud` the page's absolute URL,
-   `origin`, `jti`, `iat`, `exp` at most 60 seconds after `iat`, and the
-   caller as the app named it (`clegra: { installation, person,
-   permissions, locale?, host }`), nothing more.
+1. **Declared.** The manifest's `site` is `{ start, tool }`: `start` the path
+   the app opens at (default `/`), `tool` the ticket tool (`clegra_site`, not
+   listed to plain callers). It needs `auth.clegra` and a signing secret
+   (`CLEGRA_SITE_SECRET`, 32+ characters; or `site.secret`).
+2. **Asked for.** The client, holding the person's own app token (no `act`:
+   an agent never opens a site), calls `clegra_site { path?, origin, theme?,
+   locale?, renew? }`. `path` is a path on the app's own origin (`/`, then
+   anything but `//`, `\` or spaces; a query and a fragment allowed; at most
+   2048 characters; never under `/clegra/`), default `start`; `origin` the
+   origin of the document that frames the site, exactly one of the app's client
+   origins (`clientOrigins`, `CLEGRA_CLIENT_ORIGINS`; the desktop app's `app://client` included); `theme` `light` or
+   `dark` and `locale` the client's now. `renew: true` asks for a ticket that
+   only renews the session (step 7). It answers `{ path, action, field, ticket,
+   expiresAt, sessionSeconds }`: `action` is `<app origin>/clegra/site`,
+   `field` is `ticket`.
+3. **The ticket** is a JWT (`typ: clegra-site+jwt`, HMAC with a key only the
+   app holds), `iss` and `aud` the app's origin, `path`, `origin`, `jti`, `iat`,
+   `exp` at most 60 seconds after `iat`, and the caller as the token named it
+   (`clegra: { installation, person, email?, permissions, admin, locale?,
+   theme? }`), nothing more.
 4. **Posted, never in a URL.** The framing document submits a form with
-   `method="post"`, `action` = `<app origin><path>/_ticket`, `target` = the
-   frame, the ticket in the field `field`. So the ticket is never in an
-   address bar, the history, a server's access log or a `Referer`, and the
-   browser itself states the poster's `Origin`.
-5. **Exchanged once.** The app MUST refuse (a 4xx, no cookie) a request that
-   is not a POST, whose `Sec-Fetch-Dest` is not `iframe`, whose `Origin` is
-   not the ticket's `origin` or no longer matched by `frameAncestors`, and a
-   ticket that is tampered, of another app, for a page that isn't one of its
-   embed pages, expired, issued more than 5 seconds in the future, living
-   longer than 60 seconds, or already used (its `jti` kept, atomically,
-   until it expires: shared by every instance). Otherwise it answers `303` to
-   the page (absolute, from the ticket: never from the request) with
-   `Referrer-Policy: no-referrer`, `Cache-Control: no-store` and a session
-   cookie: `Secure; HttpOnly; SameSite=None; Partitioned` (CHIPS: kept under
-   the host's top-level site only), `Path` = the page's path, no `Domain`, a
-   short `Max-Age` (default 10 minutes, at most an hour), holding the
-   ticket's caller signed with another key than tickets.
-6. **Read by the page.** The page's caller is the session's (scope by its
-   `installation`, as a handler's `ctx`). The session counts only for its own
-   page and never for a top-level navigation (`Sec-Fetch-Dest: document`).
-7. **Framing.** Every response under `path` (the pages, the exchange and its
-   refusals) MUST carry `Content-Security-Policy: frame-ancestors` with
-   exactly the declared sources, and no `X-Frame-Options`. Every frame up to
-   the top must match one, so a host whose view runs in an opaque sandbox
-   frames embed pages from its own document, not from inside that view.
-
-The SDK's view of an embed page (`ui://<app>/pages/<page>`) does steps 2 and 4
-over the MCP Apps bridge, with its own `location.origin`; a host that draws
-natively does them itself. A page on another site (`https://…`) is framed as
-it is, with no ticket.
+   `method="post"`, `action`, `target` = the frame, the ticket in `field`. So
+   the ticket is never in an address bar, the history, a server's log or a
+   `Referer`, and the browser itself states the poster's `Origin`.
+5. **Exchanged once.** The app MUST refuse (a 4xx page, no cookie) a request
+   that is not a POST, whose `Sec-Fetch-Dest` is not `iframe`, whose `Origin`
+   is not the ticket's or no longer a client origin, and a ticket that is
+   tampered, of another app, expired, issued more than 5 seconds in the
+   future, living longer than 60 seconds, or already used (its `jti` kept,
+   atomically, until it expires: shared by every instance). Otherwise it
+   answers `303` to `<app origin><path>` (absolute, from the ticket: never
+   from the request) with `Referrer-Policy: no-referrer`, `Cache-Control:
+   no-store` and two cookies, both `Secure; HttpOnly; SameSite=None;
+   Partitioned` (CHIPS: kept under the client's top-level site only),
+   `Path=/`, no `Domain`: the **session** (`__Secure-clegra-site`), holding
+   the ticket's caller and origin signed with another key than tickets, a
+   short `Max-Age` (default 10 minutes, at most an hour); and a **marker**
+   (`__Secure-clegra-site-origin`, 12 hours, the framing origin), which says
+   that this partition is a Clegra client's.
+6. **Read by the site.** Any page, server function or route handler of the
+   site asks who is calling (`getClegraCaller`): the session's caller, its
+   tenant (`installation`, exactly as a handler's `ctx`), person, permissions
+   (the app's own roles, §7), locale and theme; null without a valid session,
+   for a top-level navigation (`Sec-Fetch-Dest: document`), and for a person
+   removed (or an app uninstalled, a company suspended) since it was issued.
+   The app treats that caller as a member of the tenant with exactly those
+   permissions, beside its own sign-in.
+7. **Framing.** Every page of the site answers, in front of the app:
+   - with a valid session: `Content-Security-Policy: frame-ancestors 'self'
+     <the session's origin>` (no `X-Frame-Options`);
+   - without one, in a frame (`Sec-Fetch-Dest: iframe`) of a partition with
+     the marker: a short page framable by the marker's origin that posts
+     `{ type: "clegra/signed-out" }` to it (the client says so and opens the
+     site again with a new ticket);
+   - otherwise: the app's own policy (`frame-ancestors 'none'` for our apps).
+   So the site's own sign-in, consent and settings pages are never framed by
+   anyone outside a Clegra session.
+8. **The bridge.** A page of the site loads the SDK's bridge
+   (`<script src="/clegra/site/bridge.js" async>`; `<ClegraSite />` in Next).
+   Outside a frame, or without a session (`GET /clegra/site/session` answers
+   `204`), it does nothing. In a session it speaks with `window.parent` only,
+   posting with `targetOrigin` the session's origin and taking a message only
+   when its `source` is `window.parent` and its `origin` that origin:
+   - `{ type: "clegra/location", path, title }` (frame → client) at load and
+     after every navigation (the History API, `popstate`, the title's
+     changes): `path` is the path, query and fragment. The client checks the
+     frame and the app's origin and shows `/<app><path>` in its own address
+     (the History API); a reload, «Back» or a link open the site again at that
+     path, with a new ticket.
+   - `{ type: "clegra/context", theme, locale }` (client → frame): after the
+     first message and on every change. The bridge sets the document's theme
+     (`data-theme` and the `dark` class on `<html>`, `color-scheme`) at once;
+     when theme or locale differ from the session's it keeps them in the
+     session (`POST /clegra/site/context`, same origin), and a new locale
+     reloads the page, drawn in it. The site's server reads both from the
+     caller (no flash: `<html>` gets them while rendering).
+   - `{ type: "clegra/renew" }` (frame → client), 90 seconds before the
+     session ends. The client asks a ticket with `renew: true` and posts it
+     into a hidden frame of the same sandbox; its exchange sets a new session
+     in the same partition and lands on `/clegra/site/renewed`, which posts
+     `{ type: "clegra/renewed", expiresAt }` to the client; the client passes
+     it on to the site's frame. A renewal that fails leaves the session to end:
+     the next request in the frame is step 7's signed-out page.
+9. **The frame.** The client frames the site with `sandbox="allow-scripts
+   allow-forms allow-same-origin allow-downloads allow-popups"`, never
+   `allow-top-navigation` or `allow-popups-to-escape-sandbox`, never at an
+   origin of its own; its `frame-src` lists exactly the company's app origins.
 
 ### 5.2 Navigation, page actions and badges
 
@@ -470,15 +514,15 @@ it is, with no ticket.
    the others in a menu; each opens the action's form drawn from its `input`
    (§4), prefilled, and a read's form shows its result. A write goes through
    the confirmation (§7).
-3. **Badge.** A page's `badge` names a fragment type with `template: "stat"`
+3. **Badge.** A page's `badge` names an artifact type with `template: "stat"`
    whose params have no required key (not on a `record` page). The page's
-   count in the navigation is the fragment's `data.value` (a number), called
+   count in the navigation is the artifact's `data.value` (a number), called
    as the viewer with params `{}`. A badge the viewer can't show is not drawn.
 4. **In the view.** A page's result carries what the generated view needs to
    draw the same thing in any MCP Apps host: `structuredContent.view.actions`
    (`[{ tool, title, confirm, input, prefill? }]`, only the actions this caller
    may use) and `view.nav` (`[{ section?, pages: [{ name, title, tool, badge? }]
-   }]`, `badge` the stat fragment's tool, only the pages this caller may open).
+   }]`, `badge` the stat artifact's tool, only the pages this caller may open).
 
 **Host guidance** (non-normative; nothing in the manifest): Clegra derives a
 list page's filters from the fields' meaning: an `enum` field with `filter` is
@@ -486,6 +530,63 @@ a choice, the first date field with `filter` (`format: date` or `date-time`)
 a period sent as `{ gte, lte }` (a date-time as the bounds of the days in the
 workspace's time zone). A list page whose entity has a record page is drawn
 with the record beside the list.
+
+### 5.3 Views at the app's own origin: the view ticket
+
+A Clegra client shows an app's MCP Apps views (§5) in a frame loaded from the
+app's own origin, never as a document it writes on an origin of its own or
+shared with other apps. With `auth.clegra`:
+
+1. **Asked for.** The client, holding the person's app token, calls
+   `clegra_view { view, origin }`: `view` one of the app's view URIs
+   (`ui://<app>/…`), `origin` the origin of the document that will frame the
+   view and post the ticket. The tool is app-only (`_meta.ui.visibility:
+   ["app"]`) and listed only to a person's own app token (no `act`: an agent
+   never opens a view). It refuses a view the app doesn't have and an origin
+   that is not exactly one of the app's client origins (`clientOrigins`,
+   `CLEGRA_CLIENT_ORIGINS`; the desktop app's `app://client` included). It
+   answers `{ view, action, field, ticket, expiresAt }`: `action` is
+   `<app origin><path>/clegra/views/<the URI's path>`
+   (`ui://crm/pages/board` → `/clegra/views/pages/board`), `field` is
+   `ticket`.
+2. **The ticket** is opaque (32 random bytes, base64url), kept in the app's
+   store (shared by every instance) for at most 60 seconds with the view, the
+   origin, the tenant and the person, and is used once.
+3. **Posted, never in a URL.** The framing document submits a form with
+   `method="post"`, `action`, `target` = the frame, the ticket in `field`.
+4. **Opened once.** The app MUST refuse (a 4xx, framable by no one:
+   `frame-ancestors 'none'`) a request that is not a POST (`405`), whose
+   `Sec-Fetch-Dest` is not `iframe`, whose `Origin` is not a client origin or
+   not the ticket's, and a ticket that is unknown, expired, for another view,
+   already used, or issued to a person removed (or a tenant closed) since.
+   Otherwise it answers `200` with the view's document and:
+   - `Content-Security-Policy`: `default-src 'none'`, inline scripts and
+     styles plus the declared `resourceDomains`, `connect-src`,
+     `frame-src` and `base-uri` exactly the declared domains (`'none'`
+     without), `form-action 'none'`, `object-src 'none'`, and
+     `frame-ancestors` exactly the ticket's origin; no `X-Frame-Options`;
+   - `Referrer-Policy: same-origin` (the view's own requests to the app keep
+     their `Origin`; other origins get no referrer),
+     `Cache-Control: no-store`,
+     `X-Content-Type-Options: nosniff`;
+   - `<meta name="clegra-host" content="<the ticket's origin>">` first in the
+     document's head.
+5. **The bridge.** A view served this way speaks MCP Apps with
+   `window.parent` only: it posts every message with `targetOrigin` the
+   `clegra-host` origin and takes a message only when its `source` is
+   `window.parent` and its `origin` is that origin. The SDK's views do this;
+   a hand-written view SHOULD read the same meta tag. In other hosts (no meta
+   tag) the SDK's views behave as before (`"*"`). The client takes a message
+   only when its `source` is that frame's window and its `origin` is the
+   origin of that app's registered address, and posts to the frame with that
+   exact `targetOrigin`; another app's origin is refused. The host context
+   (theme, locale, the app's accent in `_meta["clegra/ui"]`) travels in
+   `ui/initialize` and `ui/notifications/host-context-changed`.
+6. **The frame.** The client frames it with `sandbox="allow-scripts
+   allow-forms allow-same-origin"` (the app's own origin, never the
+   client's: a client refuses a view whose origin is its own), no
+   `allow-top-navigation`, no `allow-popups-to-escape-sandbox`, and its own
+   `frame-src` lists exactly the company's app origins.
 
 ## 6. The generated MCP server
 
@@ -498,7 +599,7 @@ Streamable HTTP at `mcp.url`. Tools, in this order of derivation:
 | `clegra_resolve` | always: `{ uris, want? }` → each URI's state `ok \| gone \| no-access \| not_found` and data, for hosts; hidden from models. `not_found`: a URI that is not this app's (a host MUST send an app only its own URIs); `gone`: this app's record or type that doesn't exist | read |
 | `<entity>_<action>` or `<action>` | each action | read or write |
 | `open_<page>` | each page except `record` pages (those are `<entity>_get`) | read |
-| `show_<fragment>` | each non-record fragment | read |
+| `show_<artifact>` | each non-record artifact | read |
 | `clegra_later` | an action with `later` (§4.2) | write; only for the installation (§10) |
 | `clegra_installation`, `clegra_export`, `clegra_delete` | `lifecycle` (§13) | write, read, write; only for the installation (§10) |
 
@@ -507,14 +608,14 @@ Rules:
 1. Names match `[a-zA-Z0-9_.-]{1,64}`, are unique, and MAY be renamed by the developer; the manifest carries the actual names.
 2. Names, titles and descriptions are in the app's `locale` and identical for every caller and every call. Data labels follow the caller's locale.
 3. Reads carry `readOnlyHint: true`. Writes carry `readOnlyHint: false` and `destructiveHint: true` exactly when `confirm` is `always`.
-4. A write is listed to plain MCP clients only when the developer opted in (`plain: true`). An entity, page or fragment MAY be hidden from them (`plain: false`).
+4. A write is listed to plain MCP clients only when the developer opted in (`plain: true`). An entity, page or artifact MAY be hidden from them (`plain: false`).
 5. A tool the caller lacks the permission for is not listed.
 6. Tools with a view name it in `_meta.ui.resourceUri`; the data to draw is the result's `structuredContent`. Every tool a view calls (lists, records, actions, pages) carries `_meta.ui.visibility` with `"app"` (ChatGPT also reads `openai/widgetAccessible: true`); a host refuses a view's call to any other tool.
 7. Hand-written tools, resources and views MAY be added to the same server; they are outside the manifest.
 8. Entity tools (`<entity>_list`, `<entity>_get`) carry `_meta.clegra: { entity, kind? }`, `kind` as in the manifest. With a kind, their description ends with one fixed sentence: `Kind: person.`; with `{ by, map }`, the kinds in the map's order and the field: `Kind: organization or person (by type).`
 9. A list filter on a field with `as` names the property in its description (`Company (worksFor): …`); a key filter says it is exact (`Email: exact email; a value or { in: [...] }`) and carries `format` where JSON Schema has one (`email`).
 10. **Records are named by their title.** In the text a model reads, every record of a list, a get, `search` and `fetch` carries its `title` beside its `uri` (an outsider's title wrapped, §7). A tool of an action on a record takes `id` (required) and `record_title` (optional string, at most 300 characters): the record's title as the model read it, so a client that writes its own approval prompt from the arguments can name the record the person approves. Both descriptions tell the model to name the record by its title, never by its id. `record_title` is a display hint and never trusted: the app names the record from `id` in everything it shows or confirms, never passes the hint to the handler, and refuses the call with `invalid_input` (`fields.record_title`) when the hint names another record (compared without the untrusted wrapper, case, width, quotes and extra spaces). `record_title` is reserved: an action's `input` can't declare it.
-11. **App-only items.** An entity, action or fragment with `visibility: "app"` is for views and the host's own UI, never for a model. Its tools (the entity's list and get, the action's, the fragment's show tool) carry `_meta.ui.visibility: ["app"]` (no `"model"`), `openai/visibility: "private"` and `openai/widgetAccessible: true`. `search` and `fetch` leave its records out (`fetch` answers `not_found`), and no agent of the app may use it (a definition error). A host MUST NOT give such a tool to any model, its own agents included; views and the host's UI still call it. App-only is not access control: a client that ignores `_meta.ui.visibility` lists the tool like any other, so what a client must not call stays behind a permission or `plain: false`.
+11. **App-only items.** An entity, action or artifact with `visibility: "app"` is for views and the host's own UI, never for a model. Its tools (the entity's list and get, the action's, the artifact's show tool) carry `_meta.ui.visibility: ["app"]` (no `"model"`), `openai/visibility: "private"` and `openai/widgetAccessible: true`. `search` and `fetch` leave its records out (`fetch` answers `not_found`), and no agent of the app may use it (a definition error). A host MUST NOT give such a tool to any model, its own agents included; views and the host's UI still call it. App-only is not access control: a client that ignores `_meta.ui.visibility` lists the tool like any other, so what a client must not call stays behind a permission or `plain: false`.
 12. **The installation's tools** (`clegra_later`, `clegra_installation`, `clegra_export`, `clegra_delete`) carry the same app-only `_meta` and are listed only to the installation-level caller (§10): never to a plain client, never to a person.
 
 ### 6.1 What plain MCP clients see
@@ -531,6 +632,7 @@ feature they see:
 | Schedules (§11) | The scheduled action's tool, as any action. A call naming a schedule is refused |
 | Notifications (§12) | Nothing: `_meta.clegra.notifications` is ignored |
 | Lifecycle (§13), `clegra_later` | Nothing: the tools are never listed to them |
+| View tickets (§5.3) | Nothing: `clegra_view` is listed only to a person's Clegra app token; the views themselves are the same documents `resources/read` returns |
 
 ## 7. Enforcement
 
@@ -538,37 +640,127 @@ All of it happens in the server, on every surface (tools, `search`, `fetch`,
 the resolver, dashboards, views), before any handler runs.
 
 **Authorization is MCP's.** OAuth bearer tokens, protected-resource metadata
-(RFC 9728), a `401` with `WWW-Authenticate: Bearer resource_metadata=…`.
-There is no second sign-in. An app accepts two kinds of token:
+(RFC 9728), a `401` with `WWW-Authenticate`. There is no second sign-in. An
+app accepts two kinds of token:
 
-1. **Its own** (a web app with its own users): issued by the app's own
-   authorization server to an MCP client (ChatGPT, Claude, Clegra connect the
-   same way, as OAuth clients; each person links their account of the app
+1. **Its own** (an app with its own users): issued by the app's own
+   authorization server to an MCP client (ChatGPT, Claude, any client connect
+   the same way, as OAuth clients; each person links their account of the app
    once). The app verifies them itself and names the caller (below, «The
-   app's own tokens»). No `clegra` claim is involved.
-2. **A workspace host's** (in-house apps a company installs into its own
-   host): the trusted-issuer mode, with the `clegra` claim. The rest of this
-   list is about these.
+   app's own tokens»).
+2. **Clegra's core's** (the trusted-issuer mode, `auth.clegra`): Clegra is a
+   platform of integrated apps, its core the one issuer an app trusts for
+   Clegra's people. Below, «Clegra tokens».
 
-- A workspace host's token is a JWT with `typ: at+jwt`, `exp` and `sub`, from an issuer the
-  app trusts, with one claim, `clegra: { installation, person?,
-  permissions?, locale?, host?: "workspace" | "plain" }`. `installation`
-  matches `[A-Za-z0-9._:-]{1,128}`.
-- **Audience** (RFC 8707): `aud` MUST be the app's own public MCP address,
-  `auth.resource`. An app never accepts its name, or another address, as an
-  audience. A host signs `aud` = the MCP address it installed the app from,
-  never a value read from the manifest, and MUST refuse to install an app
-  whose `auth.resource` is not that address (an app on an internal address is
-  configured with that same address, or it is not installed). So a token
-  signed for one app is useless at any other, whatever the other claims.
-- **Tenant**: the installation is bound to its issuer. Handlers receive
-  `<installation>@<issuer>` and MUST scope every read and write by it; two
-  issuers can't reach each other's data by naming the same installation.
-- **A workspace host's token** (`host: "workspace"`) is for one request: it
-  MUST carry `jti` and `iat`, live 60 seconds at most, and is accepted once.
-- A call without a `person` has the permissions its token lists, like any
-  other: none unless the token says so. A workspace host's call for the
-  installation itself is defined in §10.
+An app may accept both (a CRM with its own users that Clegra companies also
+use); the two never meet: a core token is recognised by its `iss` and its
+`DPoP` scheme and is never handed to `auth.resolve`.
+
+**Clegra tokens.** Clegra's core mints, for exactly one app, tokens signed with
+its keys of `use: "app"`, published at `<issuer>/.well-known/clegra-keys.json`
+(fetched once and kept; refreshed every 10 minutes and on an unknown `kid`, at
+most once a minute):
+
+| Token | `typ` | Claims beyond `iss`, `aud`, `sub`, `iat`, `exp`, `jti` | Lives |
+|---|---|---|---|
+| app token: a person from a Clegra client | `clegra-app+jwt` | `company`, `company_role` (`admin`/`member`), `email`, `name`, `cnf.jkt` (the device's key) | ≤ 10 minutes |
+| delegated token: Clegra's agent for the person | `clegra-app+jwt` | as above, `act: { sub: "server:<id>" }`, `cnf.jkt` the server's key, `person_jkt` the person's device key | ≤ 60 s, one call |
+| automation run token | `clegra-app+jwt` | as the delegated token, `grant` (the person's consent) and `tools` (the tools consented to) | ≤ 60 s, one call |
+| device-agent token: an agent on the person's device | `clegra-app+jwt` | as the app token, `act: { sub: "device-agent:<jkt>" }` | ≤ 10 minutes |
+
+- **Audience.** `aud` is the app's own resource, `auth.resource`, exactly, as
+  a string (an array is refused, even one holding the resource). A token for
+  another app is useless here.
+- **Tenant.** `<company>@<issuer>`, from the token only, never from anything a
+  client sends. `company` matches `[A-Za-z0-9._:-]{1,128}`.
+- **Subject.** `sub` is **pairwise**: the core gives the same person a
+  different id in every app. It is `ctx.person.id`; the name is the token's.
+- **Allowed companies.** A private app is configured with the companies that
+  may use it (`allowedCompanies`), a public one with `"any"`; a token of
+  another company is refused. **In production an app without
+  `registrationId` and `allowedCompanies` fails closed**: every request answers
+  `500 misconfigured`, except the two public documents registering needs (the
+  manifest and the registration document, below).
+- **Proof of possession (DPoP, RFC 9449).** Every Clegra token is sent as
+  `Authorization: DPoP <token>` with a `DPoP` proof: `typ: dpop+jwt`, a public
+  `jwk` whose thumbprint is the token's `cnf.jkt`, `htm` the request's method,
+  `htu` **the app's configured resource** (query and fragment ignored; never
+  compared with the request's own URL or `Host`, which a proxy or a tunnel
+  changes), `ath` the base64url SHA-256 of the token, `iat` within 60 seconds,
+  `jti` used once (kept in the store). A proof whose `iat` is off, or whose
+  `nonce` is unknown, gets `401` with `WWW-Authenticate: DPoP
+  error="use_dpop_nonce"` and a `DPoP-Nonce` header; a proof carrying a nonce
+  the app gave (good for 5 minutes) is accepted whatever its clock. A Clegra
+  token sent as a bearer is refused.
+- **Single use.** A token with a `server:` actor is accepted once.
+- **Revocation.** The core's events (below) make the app refuse what was
+  issued before them: to a removed person, for an unassigned or uninstalled
+  app, for a suspended company.
+- **Settings.** A Clegra caller never says them: `_meta.clegra.settings` from
+  it is ignored and handlers get the defaults (an app's settings live in the
+  app).
+
+**CORS.** Clegra's clients call an app from a browser, cross-origin (nothing
+assumes the client and the app share an origin). With `auth.clegra` an app
+answers only its configured client origins (`clientOrigins`, exact):
+`Access-Control-Allow-Origin` that origin, `Authorization`, `DPoP` and
+`Content-Type` (and MCP's own headers) allowed, `DPoP-Nonce` and
+`WWW-Authenticate` exposed, never `Access-Control-Allow-Credentials`; a
+preflight is answered `204`. Any other origin gets no allow header. Without
+`auth.clegra` an app answers any origin (an open MCP server).
+
+**Views at the app's own origin.** Clegra never draws an app's view on a page
+of its own: a Clegra client frames it from the app itself (§5.3), so the app's
+origin is the view's isolation boundary. The view never shares an origin,
+cookies or storage with the client, holds no token, and its tool calls are
+proxied by the client. An app's own site (§5.1) is framed the same way, at its
+own origin, the person signed in with a site ticket.
+
+**Roles: the app's own permissions.** Who may do what inside an app is the
+app's: for a Clegra caller the SDK keeps a grant per person (`sub`) per tenant
+in the store (`roles`). A company administrator (`company_role: "admin"`) is an
+app administrator, with every declared permission, unless the app says
+`companyAdmin: "member"`; anyone else has what an app administrator assigned,
+or the declared defaults (`default: true`) until then. `ctx.admin` says whether
+the caller is an app administrator. The read-only tool `clegra_roles` («who has
+what», named in the manifest's `rolesTool`) lists, for an app administrator,
+every person the app knows in the tenant with their company role, whether they
+administer the app, their permissions and where those come from
+(`company-admin`, `assigned`, `default`).
+
+**Events.** The core tells an app what changed by posting a signed event to the
+endpoint its manifest declares (`events: { url }`, on the app's own origin; the
+SDK serves `<path>/clegra/events`): `POST`, `content-type: application/jwt`, one
+JWS with `typ: clegra-event+jwt`, signed with an `app` key, `aud` the app's
+resource, `exp` at most 5 minutes after `iat`, `jti` the event's id, and
+`event: { kind, at, company, sub?, installation? }`. The app takes each `jti`
+once (a retry of a handled one answers `204` again; a handler's failure
+answers `500`, so the core retries).
+
+| `kind` | What the SDK does | The lifecycle hook (§13) |
+|---|---|---|
+| `member.removed` (`sub`) | drops the person's roles in the tenant; refuses tokens, view tickets and site sessions issued to them before | — |
+| `app.unassigned` | drops the tenant's roles; refuses what was issued for it before | `disabled` |
+| `app.uninstalled` | the same | `uninstalled` |
+| `company.suspended` | refuses what was issued for the tenant before | — |
+| `app.installed` | — | `enabled` |
+
+Then the app's own handler for that kind runs (`auth.clegra.events`).
+
+**Registration.** The core proves an app's URL is the app's before it trusts
+it: it gives a registration id and a challenge, and reads back
+`GET /.well-known/clegra-app.json` = `{ registration_id, challenge, resource,
+issuer }`, which the SDK serves from `registrationId` and `challenge`.
+Registering is what gives the app its registration id, so these two public
+documents are served before the production configuration is checked, whatever
+it lacks: the manifest (`GET /.well-known/clegra.json`, read first) and the
+registration document (`404 not_configured` until `registrationId` and
+`challenge` are set). Neither carries or accepts a token. Everything else (MCP,
+events, views, the site's exchange, `health`, the OAuth metadata) answers `500
+misconfigured` until the app is configured. The order is: deploy with
+`auth.clegra` (issuer, resource), add the app by its URL at the core, set the
+registration id, challenge and allowed companies it hands out, redeploy, and
+let the core read the registration document back.
 
 **The app's own tokens.** The app verifies each one (signature, expiry, and
 `aud` = `auth.resource`, RFC 8707: a token issued for another resource is
@@ -580,30 +772,26 @@ with the reason.
 - `installation` is the app's own tenant (an organization, a workspace, an
   account), taken from the verified token or the session behind it, never
   from a request parameter. It matches `[A-Za-z0-9._:-]{1,128}`: no `@`, so it
-  can never equal a workspace host's `<installation>@<issuer>`.
+  can never equal a Clegra tenant `<company>@<issuer>`.
 - `permissions` come from the app's own roles; ids the manifest does not
   declare are dropped. The caller is a plain host (`host: "plain"`).
-- A token that is a JWT from a configured issuer (or the development
-  authority) is never handed to `auth.resolve`.
+- A token of Clegra's core (or of the development authority) is never handed
+  to `auth.resolve`.
 - The protected-resource metadata names the app's authorization server
   (`auth.authorizationServers`). Paths the authorization server needs outside
   its own mount (RFC 8414 metadata under `/.well-known/`) MAY be answered by
   the same routes (`auth.serve`).
-- In production `auth.resource` is required with `resolve` or `issuers`:
-  without it every request fails with a clear `500 misconfigured`, never with
-  an address guessed from request headers.
-
-**Clegra and third-party apps.** Clegra connects to an app it does not host
-exactly as ChatGPT does: as an OAuth client with a Client ID Metadata
-Document, the person signs in to the app and consents once, and Clegra keeps
-the refresh token on the person's behalf. It then also reads the manifest to
-draw the app natively. Confirmations to such an app follow MCP (annotations
-and elicitation, below); a workspace host's proof applies only to tokens of
-the trusted-issuer mode.
+- `auth.resource` is required with `clegra`, and in production with
+  `resolve`: without it every request but the manifest and the registration
+  document fails with a clear `500 misconfigured`,
+  never with an address guessed from request headers.
+- The protected-resource metadata keeps naming the app's own authorization
+  server with `auth.clegra` too: Clegra's core is never one (its tokens come
+  from Clegra, not by OAuth).
 
 **Permissions and visibility**
 
-- Entity, action, page, fragment and field permissions are checked on every call.
+- Entity, action, page, artifact and field permissions are checked on every call.
 - A field the caller may not see is absent from rows, records, cards, filters
   and sorts, and text search looks only in the search fields the caller may
   see (handlers receive them as `textFields`).
@@ -611,9 +799,36 @@ the trusted-issuer mode.
   everywhere: its tools are not listed, and `fetch`, the resolver, reference
   titles, dashboards and record actions answer `no-access` for it.
 
-**Confirmation** of a write whose `confirm` is `always`:
+**Confirmation** of a write whose `confirm` is `always` (a sensitive tool):
 
-- a workspace host shows the person the exact values, then sends a proof: a
+- **an agent with a Clegra token** (`act`: delegated, automation, device
+  agent) carries, in `_meta.clegra.confirmation`, `{ token, proof }`:
+  - `token`: the core's confirmation token, minted for the person's device
+    (which asked the core with its own account token): `typ:
+    clegra-confirmation+jwt`, signed with an `app` key, `aud` the app's
+    resource, `sub` the caller's pairwise `sub`, `company` the caller's,
+    `tool`, `args_sha256` (the base64url SHA-256 of the canonical JSON of the
+    arguments as sent, as below), `cnf.jkt` the device's key, `jti` used once,
+    10 minutes at most;
+  - `proof`: signed by that device key: `typ:
+    clegra-confirmation-proof+jwt`, its public `jwk` in the header (its
+    thumbprint the token's `cnf.jkt`), claims `{ cth, iat, jti }`, `cth` the
+    base64url SHA-256 of the confirmation token, `iat` within 60 seconds, `jti`
+    used once;
+  - the device must be the caller's person's: a delegated token's
+    `person_jkt`, a device agent's own key. Without both, or with another
+    tool, other arguments, another app, person or company, a used one, or a
+    proof by another key, the call fails with `confirmation_required`. A
+    server can't make one: it has neither the person's account token nor
+    their device key;
+- **the person from a Clegra client** (a Clegra token without `act`): the UI
+  that sends the call asks the person first (the app's own view, or the client
+  drawing the app's form from the manifest) and sends
+  `_meta.clegra.confirmed: true`. Without it the call fails with
+  `confirmation_required` and `error.confirm` (below), for the UI to ask and
+  send again. The call is bound to the person's device key (DPoP), which no
+  agent holds;
+- a development workspace host (§10) shows the person the exact values, then sends a proof: a
   JWT (`typ: clegra-confirm+jwt`, 5 minutes at most) signed by the token's
   issuer for the same audience and subject, with `installation`, `tool`,
   `call` (the call id) and `args`: the base64url SHA-256 of the canonical
@@ -651,17 +866,17 @@ and `error.pending: true`.
 
 **Host metadata**: one key, `_meta.clegra`.
 
-- Requests MAY carry `{ call, confirmation, settings, schedule }`. `settings`
-  are the installation's values (§2) and count only from a workspace host;
+- Requests MAY carry `{ call, confirmation, confirmed, settings, schedule }`.
+  `confirmation` and `confirmed` are a confirmation (above). `settings` are the
+  installation's values (§2) and count only from a development workspace host;
   any other caller gets the defaults. `schedule` names the schedule this call
   is a run of (§11); it counts only from the installation-level caller (§10),
   and any other call carrying it is refused.
 - Results MAY carry `{ notifications, untrusted, l10n }`:
   - `notifications`: `[{ type?, title, body?, uri?, to }]` (§12). `to` is
     either the ids of people (as the token named them; default the caller's
-    person) or `{ permission }`: everyone of the installation who holds that
-    declared permission. A workspace host delivers them; a plain client
-    ignores them.
+    person) or `"admins"`: the company's administrators (§12). A workspace
+    host delivers them; a plain client ignores them.
   - `untrusted`: JSON pointers into `structuredContent` to every value that
     is outsiders' text. In the result's text those values are wrapped in
     `<untrusted>…</untrusted>` with `&`, `<`, `>` (and their full-width and
@@ -676,7 +891,9 @@ and `error.pending: true`.
 
 **Errors**: `isError: true` and `structuredContent.error = { code, message }`,
 `code` one of `unauthorized`, `permission_denied`, `not_found`,
-`invalid_input`, `confirmation_required`, `conflict`, `internal`.
+`invalid_input`, `confirmation_required`, `conflict`, `rate_limited`,
+`internal`. `rate_limited` (a handler's `ctx.rateLimit`, per person or per
+tenant) carries `retryAfterSeconds`.
 An action's `invalid_input` also carries `fields`: `{ <input key>: <what is
 wrong> }`, in the caller's locale where the server has it; `message` names
 the fields by their labels. It is a tool error, never a protocol error, so a
@@ -754,8 +971,7 @@ its authorization server needs:
   `code_challenge_methods_supported`. Clients refuse a server that does not
   list it.
 - Protected-resource metadata (RFC 9728). The SDK serves it;
-  `auth.authorizationServers` names the authorization server (default: the
-  issuers of `auth.issuers`).
+  `auth.authorizationServers` names the authorization server.
 - The `resource` parameter (RFC 8707): the token's `aud` MUST be the app's
   `auth.resource`.
 - Client registration, in this order of preference:
@@ -773,12 +989,9 @@ its authorization server needs:
   (`SqlStore` in the app's Postgres, or another atomic store), never memory.
 - No key files: keys and secrets come from the environment.
 
-A workspace host's token, in the trusted-issuer mode, is a signed JWT whose
-header has `typ: at+jwt`, with `iss` exactly one of `auth.issuers`, `aud` =
-`auth.resource`, `exp`, `sub`, and the `clegra` claim with a valid
-`installation` (above). The signature is checked against the issuer's key
-set: `<issuer>/.well-known/jwks.json`, or the issuer's `jwksUri`. Clocks may
-differ by 30 seconds. Opaque tokens are not accepted in this mode.
+A Clegra token, in the trusted-issuer mode, is verified as «Clegra tokens»
+says (above). Clocks may differ by 30 seconds. Opaque tokens are not accepted
+in this mode.
 
 ## 8. Conformance
 
@@ -789,12 +1002,21 @@ over HTTP, whatever it is built with:
 npx @clegra/sdk check https://crm.example.com --token <a plain caller's bearer>
 ```
 
+An app in the trusted-issuer mode (§7, «Clegra tokens») is checked as a
+Clegra caller instead, from code: `checkApp({ url, clegra: { token, proof,
+confirmation? } })`, the token of Clegra's core sent as `Authorization: DPoP`
+with a proof per request (`htu` the app's resource, once more with the app's
+`DPoP-Nonce`). `@clegra/sdk/testing`'s `testCore` and `deviceKey` make one for
+tests; Clegra's store review signs its own. A Clegra caller sees what is hidden
+from plain clients (`plain: false`), so `mcp.tools` doesn't count those as
+leaks.
+
 | Check | Passes when |
 |---|---|
 | `manifest.served` | `GET /.well-known/clegra.json` answers 200 with JSON |
 | `manifest.schema` | the manifest validates against the JSON Schema |
 | `manifest.references` | names refer to things the manifest declares; tool names are unique and valid, none reserved; the publisher is well-formed (§2); navigation, page actions, badges, app-only items, targets, `later`, schedules and notification types meet their rules (§4.1, §4.2, §5.2, §6 rule 11, §11, §12) |
-| `auth.mcp` | without a token the endpoint answers 401 and points to protected-resource metadata, whose `resource` is the address the app was reached at (or the manifest's `auth.resource`) |
+| `auth.mcp` | without a token the endpoint answers 401 and points to protected-resource metadata, whose `resource` is the address the app was reached at (or the manifest's `auth.resource`) and which names an authorization server; an app that trusts only Clegra's core (it declares `events` and no `auth.authorizationServers`) may name none |
 | `mcp.initialize` | `initialize` succeeds with no extension |
 | `mcp.tools` | tools match the manifest: names, `readOnlyHint`, `destructiveHint`; nothing hidden is listed |
 | `mcp.deterministic` | `tools/list` is the same on every call |
@@ -802,8 +1024,9 @@ npx @clegra/sdk check https://crm.example.com --token <a plain caller's bearer>
 | `mcp.views` | every view a tool names is served as an MCP Apps document |
 | `mcp.titles` | each row of a list's text carries its `uri` and `title`, and the record's text from its get tool the same title; every action tool on a record takes a required string `id` and an optional string `record_title` |
 | `mcp.app-callable` | the tools a view calls (lists, records, actions, pages) don't leave `"app"` out of `_meta.ui.visibility` |
-| `mcp.visibility` | the tools of app-only entities, actions and fragments carry `_meta.ui.visibility: ["app"]`, without `"model"`; `search` finds no record of an app-only entity |
-| `lifecycle.hidden` | `clegra_later`, `clegra_installation`, `clegra_export` and `clegra_delete` are not listed to a plain caller |
+| `mcp.visibility` | the tools of app-only entities, actions and artifacts carry `_meta.ui.visibility: ["app"]`, without `"model"`; `search` finds no record of an app-only entity |
+| `lifecycle.hidden` | `clegra_later`, `clegra_installation`, `clegra_export` and `clegra_delete` are not listed to a plain caller or a person |
+| `mcp.confirm` | (a Clegra caller) a `confirm: "always"` write called without a confirmation answers `confirmation_required` and runs nothing; with an agent's caller that can get the core's confirmations (`confirmation`), one of other arguments is refused too and one of the call's own arguments, with the device's proof, is taken (the write runs once: check a test installation). Called with sample arguments (each required input from its schema, an action on a record with the first listed record); a write they don't fit is not counted |
 | `mcp.manifest` | the manifest is one MCP resource, identical to the file |
 | `kinds.known` | every unprefixed kind is in `kinds.json` for the `specVersion`; every dotted kind is well-formed |
 | `kinds.properties` | every `as` belongs to the entity's kind (or is universal) with a matching type; single-valued properties appear once; required ones exist; keys are filters; `kinds` definitions are well-formed |
@@ -812,17 +1035,19 @@ npx @clegra/sdk check https://crm.example.com --token <a plain caller's bearer>
 | `kinds.tools` | entity tools carry the kind in the description and in `_meta.clegra`; `search` offers `kind`, keeps to it, and names each result's kind |
 | `refs.cross` | a `ref: { kind }` field's values are record URIs; its text form is `{ uri, kind }`; no `refs` title is sent for it; such an action input is a string |
 | `resolve.foreign` | the resolver answers `not_found` for another app's URI |
-| `embed.frame-ancestors` | (public) an app with same-site pages declares `embed`; each embed page and `GET <path>/_ticket` (refused) answer with `frame-ancestors` exactly the declared sources, no `X-Frame-Options` |
-| `embed.ticket` | a ticket for a declared origin is a ≤ 60 s JWT for the page with a `jti`; an undeclared origin gets none; posted from another `Origin`, a second time, or by a top-level page it is refused; posted right it answers 303 to the page with `Referrer-Policy: no-referrer` and a `Secure; HttpOnly; SameSite=None; Partitioned` cookie scoped to the page's path |
+| `site.frame-ancestors` | (public) an app with a `site`: `GET /clegra/site` is refused (a ticket is only ever posted) with `frame-ancestors 'none'`, no cookie, no `X-Frame-Options` |
+| `site.ticket` | (a person's Clegra app token and one of the app's client origins, `clegra.clientOrigin`) a ticket is a ≤ 60 s JWT with a `jti` naming the framing origin, for the site's start by default; another origin or a path off the site gets none; posted from another `Origin`, a second time, or by a top-level page it is refused; posted right it answers 303 to the path with `Referrer-Policy: no-referrer` and the session and marker cookies, each `Secure; HttpOnly; SameSite=None; Partitioned; Path=/`, no `Domain` |
 
 The `kinds.*` checks are skipped, not failed, for an app that declares no
 kinds (and `kinds.keys` when no listed record holds a key value to try);
-`refs.cross` for an app without references to other apps; the `embed.*`
-checks for an app without same-site pages; `mcp.visibility` for an app
+`refs.cross` for an app without references to other apps; the `site.*`
+checks for an app without a site (`site.ticket` also without a Clegra caller and its client origin); `mcp.visibility` for an app
 without app-only items; `lifecycle.hidden` for an app without lifecycle tools
-or later runs.
+or later runs; `mcp.confirm` for a plain caller and for an app without
+sensitive writes listed to the caller.
 
-An app is conformant when every check passes with a token. Without a token
+An app is conformant when every check passes with a token (a plain caller's,
+or a Clegra caller's for an app that trusts only Clegra's core). Without a token
 only the public checks run: the report says «Incomplete», never «Conformant».
 
 ## 9. Workspace hosts: across apps
@@ -880,11 +1105,15 @@ Some calls are made by a workspace host for the installation itself, with
 nobody at the screen: schedules (§11), later runs (§4.2) and the lifecycle
 (§13). The **installation-level caller** is exactly:
 
-1. **The token.** A workspace host's token in the trusted-issuer mode (§7:
-   `host: "workspace"`, one request, `jti`), whose `clegra` claim has **no
-   `person`**, with `sub` = `installation:<installation>` and `permissions` =
-   exactly the permission the called action declares (an empty list when it
-   declares none, and for the reserved tools; never more).
+1. **The token.** A development workspace host's token (the SDK's dev
+   authority: `host: "workspace"`, one request, `jti`), whose `clegra` claim
+   has **no `person`**, with `sub` = `installation:<installation>` and
+   `permissions` = exactly the permission the called action declares (an
+   empty list when it declares none, and for the reserved tools; never more).
+   Clegra's core issues no token without a person: with Clegra the lifecycle
+   reaches an app as signed events (§7, «Events»), and an app runs its own
+   cron (draft 1.0: how a Clegra deployment runs an app's schedules, later
+   runs and its export or delete through the core is still open).
 2. **What it may call.** (a) A schedule's tool, with `_meta.clegra.schedule`
    = that schedule's name; (b) `clegra_later`; (c) the lifecycle tools. The
    app refuses with `permission_denied` a `schedule` that names no schedule of
@@ -902,7 +1131,7 @@ nobody at the screen: schedules (§11), later runs (§4.2) and the lifecycle
 5. **Results.** Notifications in its results are delivered by the host as
    any (§12); each says `to`, since there is no person to default to.
 
-Only a workspace host in the trusted-issuer mode can be this caller. An app
+Only a development workspace host can be this caller. An app
 that signs its callers in itself (its own tokens, §7) is never called as the
 installation: a host that connects to it as an OAuth client runs no
 schedules and no lifecycle tools there, and the app runs its own cron.
@@ -940,17 +1169,20 @@ people of the installation something: `{ type?, title, body?, uri?, to }`,
 1. **Types.** `notifications` in the manifest lists the types an app sends:
    `{ type, label, description?, default, permission? }`. People turn a type
    off (or on) per app. `default: false` keeps it off for a person until they
-   turn it on. With `permission` (a declared one) only its holders receive it,
-   checked by the host on top of `to`.
+   turn it on. With `permission` (a declared one) only its holders receive it:
+   who holds what is the app's to know (its own roles), so the app names only
+   them in `to`.
 2. **Typed or untyped.** An app that declares types names one of them in
    every notification it sends (the SDK refuses any other: a programming
    error). An app that declares none sends untyped notifications, which the
    host files under one type of its own per app. The SDK's `clegra_later`
    (§4.2) does not count as a declared type: it never makes the app's other
    notifications typed.
-3. **Recipients.** `to` is a list of person ids, or `{ permission }`: everyone
-   of the installation who holds that declared permission. Without `to` the
-   SDK sends the caller's person; a call without a person (§10) MUST say `to`.
+3. **Recipients.** `to` is a list of person ids (as the token named them), or
+   `"admins"`: the company's administrators. The host keeps none of the app's
+   permissions, so «everyone who holds a permission» is a list of ids the app
+   makes from its own roles (the SDK's `app.roles.list`). Without `to` the SDK sends the caller's person; a
+   call without a person (§10) MUST say `to`.
 4. **Reserved.** `clegra_later` is the SDK's type for later runs that did not
    run (`default: true`); an app declares it only through `later`.
 

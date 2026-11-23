@@ -12,7 +12,7 @@ import type { Project } from "./project"
 
 /** The package and the range init adds: the @clegra/ui this SDK is checked with (`npm run pack:check`). */
 export const UI_PACKAGE = "@clegra/ui"
-export const UI_RANGE = "^0.1.0-next.0"
+export const UI_RANGE = "^0.1.0-next.5"
 
 /**
  * The libraries @clegra/ui's web components import, at @clegra/ui's ranges: its peer dependencies without React
@@ -21,6 +21,9 @@ export const UI_RANGE = "^0.1.0-next.0"
  */
 export const UI_WEB_LIBRARIES: Readonly<Record<string, string>> = {
   "@base-ui/react": "^1.9.0",
+  "@dnd-kit/core": "^6.3.1",
+  "@dnd-kit/sortable": "^10.0.0",
+  "@dnd-kit/utilities": "^3.2.2",
   "@shadcn/react": "^0.3.1",
   "class-variance-authority": "^0.7.1",
   cmdk: "^1.1.1",

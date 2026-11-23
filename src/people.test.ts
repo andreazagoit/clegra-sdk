@@ -122,6 +122,8 @@ describe("labels in the reader's language", () => {
     const r = await c.call("ticket_list", {})
     assert.equal((r.structuredContent as { view: { title: string } }).view.title, "Richieste")
     assert.equal((r._meta?.clegra as { l10n: Record<string, Record<string, string>> }).l10n.en!.Richieste, "Tickets")
+    // The shown language is noted as itself: an Italian reader of an Italian call must not fall back to English.
+    assert.equal((r._meta?.clegra as { l10n: Record<string, Record<string, string>> }).l10n.it!.Richieste, "Richieste")
   })
 
   test("the view follows hostContext.locale, then English", () => {

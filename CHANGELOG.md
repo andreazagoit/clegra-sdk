@@ -4,8 +4,147 @@ Clegra apps (spec 1.0 draft) and the `@clegra/sdk` package. Newest first. Versio
 npm dist-tag `next`. Entries below «Two scoped packages» keep the names of their time (the unscoped `clegra` package
 and its `clegra/ui`, the `modelapp` package, docs/map): they are history.
 
-## Unreleased
+## 0.1.0-next.7 (unreleased)
 
+- **Labels in the reader's language when the call showed that language**: `_meta.clegra.l10n` noted only a label's
+  other locales, so an Italian reader of a call shown in Italian found no `it` entry and the view fell back to
+  English. The shown locale is now noted too, as itself.
+
+- **An app's own website is shown as it is in Clegra (spec §5.1)**, replacing `url` pages and embed pages (removed,
+  with no compatibility path: `embed`, `clegra_embed`, the url-page view, `embedProxy`, `getEmbedCaller`,
+  `EmbedError`, `CLEGRA_EMBED_SECRET`). `defineApp({ site: { start?, secret?, sessionSeconds? } })` (needs
+  `auth.clegra`) puts `site { start, tool }` in the manifest. `clegra_site { path?, origin, theme?, locale?, renew? }`
+  gives a person's own app token (never an agent's) a one-minute, single-use ticket for a path of the site and one
+  exact client origin; `POST /clegra/site` exchanges it (a framed POST from that origin only) for a partitioned
+  session cookie for the whole site and a marker cookie, and 303s to the path. `@clegra/sdk/next`:
+  `siteProxy(app)` (a session's pages framable by its client only, `frame-ancestors 'none'` otherwise, the signed-out
+  page in a Clegra frame whose session ended), `siteGuard`, `getClegraCaller(app)` (`{ installation, person, email,
+  permissions, can, admin, locale, theme, origin, … }`) and `<ClegraSite />`, the bridge
+  (`/clegra/site/bridge.js`: `clegra/location` to the client, `clegra/context` theme and language from it,
+  `clegra/renew` before the session ends). Conformance: `site.frame-ancestors`, `site.ticket` (with
+  `clegra.clientOrigin`). `react` is an optional peer (for `<ClegraSite />`).
+  The desktop app's origin (`app://client`) gets a ticket like a web client's, when it is one of the client
+  origins (it was refused as not an origin).
+- **Views post no forms**: `form-action 'none'` (was `'self'` for the url-page hop). Views keep `Referrer-Policy:
+  same-origin`.
+- **Frame ancestors from the app's configuration**: the Clegra client origins come from `auth.clegra.clientOrigins`
+  (`CLEGRA_CLIENT_ORIGINS`), never from an address an app writes.
+
+## 0.1.0-next.6 (2026-11-21)
+
+- **An app's own views frame its embed pages**: a url page's view, framed by Clegra from the app's own origin
+  (spec §5.3), frames the page inside it, so the framing document's origin is the app's. An app whose
+  `embed.frameAncestors` did not name `'self'` refused its own view («… may not frame this app's pages
+  (embed.frameAncestors)») and its pages never opened in Clegra. `'self'` is now always one of `frameAncestors`,
+  first, in the manifest and in every embed response's `frame-ancestors`; an app lists only the other hosts.
+  `checkApp`'s `embed.frame-ancestors` fails a manifest without `'self'` (spec §5.1). The examples drop their own
+  `'self'`.
+
+## 0.1.0-next.5 (2026-11-21)
+
+- **Registering before configuring**: in production an app with `auth.clegra` but no `registrationId` (or
+  `allowedCompanies`, or with `auth.resolve` but no `auth.resource`) answered every request `500 misconfigured`,
+  the manifest included, so the core could never read the manifest that registering starts from, and registering is
+  what hands out the registration id. The two public documents a core reads to register an app are now served before
+  the production configuration is checked: the manifest (`/.well-known/clegra.json`) and the registration document
+  (`/.well-known/clegra-app.json`: `404 not_configured` until `registrationId` and `challenge` are set, `no-store`).
+  Neither carries or accepts a token. Everything else (MCP, events, views, embed exchanges, `health`, the OAuth
+  metadata) keeps answering `500 misconfigured` until the app is configured (spec §7, «Registration»).
+
+## 0.1.0-next.4 (2026-11-21)
+
+- **Views at the app's own origin** (spec §5.3): a Clegra client frames an app's MCP Apps views from the app itself,
+  never from a sandbox page of its own. New app-only tool `clegra_view { view, origin }` (only for a person's own
+  Clegra app token, never an agent's): a 60-second, single-use, opaque ticket in the app's store for one view and one
+  client origin (`clientOrigins` exactly). `POST <path>/clegra/views/<view path>` with the ticket posted by a form
+  into the frame (`Sec-Fetch-Dest: iframe`, `Origin` the ticket's) answers the view with its declared policy as the
+  header, `frame-ancestors` exactly that origin, `no-store`, `no-referrer`, and `<meta name="clegra-host">`; the SDK's
+  views then post to and hear only that origin. `clientOrigins` takes the desktop app's `app://client`. The examples'
+  embed hosts add `'self'` (a page inside a view now framed at the app's origin).
+- **App events by their time**: `member.removed`, `app.unassigned`, `app.uninstalled` and `company.suspended` refuse
+  what was issued before the event happened (its `at`), no longer before it arrived, and an older event never moves
+  the line back: an event the core's outbox delivered late refused the tokens the core had issued after it (an app
+  removed and added again right after). `testCore().event` takes `at`. A person seen before their tenant's roles
+  were cleared (the app removed and added again) or before being removed is seen again at the next call, so the
+  permissions page lists them (it waited up to an hour).
+- **A DPoP challenge** (RFC 9449 §7.1): an app that takes only Clegra's core's DPoP-bound tokens (no `auth.resolve`,
+  no development sign-in at that address) answers a 401 with `WWW-Authenticate: DPoP algs="EdDSA ES256",
+  resource_metadata="…"` (no error code when no credentials were sent), no longer `Bearer`; an app with its own
+  resolver keeps `Bearer`.
+- `init --ui` adds `@clegra/ui` at `^0.1.0-next.5` (the lockup's larger Faccina in next.4, the apps' accents in next.5;
+  its web libraries unchanged).
+- **The app's accent** (spec §2): `accent` in `defineApp` and the manifest, one name of a closed palette like Apple's
+  apps' tints (`APP_ACCENTS`: `blue`, `indigo`, `purple`, `pink`, `red`, `orange`, `yellow`, `green`, `teal`, `gray`;
+  `DEFAULT_APP_ACCENT` `blue` when absent), in the JSON Schema (an enum: anything else fails `manifest.schema`) and
+  the rules (a wrong name fails at definition time). The SDK knows only the names; the colours are the host's
+  (`@clegra/ui/accents`). Quickstart «Your app's colour», with the palette's swatches (`docs/accents.svg`, shipped).
+
+### Clegra's core as the one trusted issuer (spec §7, «Clegra tokens»)
+
+- **`auth.clegra` replaces `auth.issuers`** (no alias): an app trusts exactly one issuer, Clegra's core, its keys of
+  `use: "app"` at `<issuer>/.well-known/clegra-keys.json` (kept, refreshed every 10 minutes, fetched again on an
+  unknown `kid` at most once a minute). Its app tokens (`typ: clegra-app+jwt`, ≤ 10 minutes) are for `aud` exactly
+  `auth.resource` (a string; an array is refused), the tenant `<company>@<issuer>` from the token, `ctx.person.id`
+  the person's pairwise `sub`. `Issuer`, `HostClaim`, `signAccessToken`, `signConfirmation` and `generateSigningKey`
+  leave the public API; the development authority keeps its own tokens (and the development workspace host, the only
+  installation-level caller now).
+- Config: `issuer`, `jwksUri?`/`jwks?`, `registrationId`, `challenge`, `allowedCompanies` (ids or `"any"`),
+  `clientOrigins`, `companyAdmin` (`"admin"` default, or `"member"`), `events` handlers. `clegraFromEnv()` reads
+  `CLEGRA_ISSUER`, `CLEGRA_REGISTRATION_ID`, `CLEGRA_REGISTRATION_CHALLENGE`, `CLEGRA_ALLOWED_COMPANIES`,
+  `CLEGRA_CLIENT_ORIGINS`. **In production the SDK fails closed** (every request `500 misconfigured`) without
+  `registrationId` and `allowedCompanies`; `auth.resource` is required with `clegra`.
+- **DPoP** (RFC 9449) for every core token: `Authorization: DPoP`, the proof's key the token's `cnf.jkt`, `htm`, `htu`
+  the configured resource (never the request's URL or `Host`), `ath`, `iat` ±60 s, `jti` once in the store;
+  `401` `WWW-Authenticate: DPoP error="use_dpop_nonce"` with a `DPoP-Nonce` on a clock miss, a nonce good 5 minutes.
+- **CORS** with `auth.clegra`: the configured client origins only, `Authorization`, `DPoP`, `Content-Type` allowed,
+  `DPoP-Nonce`, `WWW-Authenticate` exposed, no credentials, preflights answered.
+- **Agents**: delegated and automation run tokens (`act: { sub: "server:<id>" }`, ≤ 60 s, one call; `person_jkt`, or
+  `grant` with the consented `tools`, enforced) and device-agent tokens (`act: { sub: "device-agent:<jkt>" }`);
+  `ctx.actor` names the actor.
+- **Confirmations** of a `confirm: "always"` write called by an agent: `_meta.clegra.confirmation` `{ token, proof }`,
+  the core's `clegra-confirmation+jwt` (`aud`, pairwise `sub`, `company`, `tool`, `args_sha256`, `cnf.jkt` the
+  person's device, `jti` once, ≤ 10 minutes) and the device's `clegra-confirmation-proof+jwt` (`jwk` header, `cth`,
+  `iat`, `jti`). From a Clegra client without an actor the UI asks and sends `_meta.clegra.confirmed: true`.
+- **Roles**: the app's own permissions per pairwise person per tenant (`IdempotencyStore.roles`: `MemoryRoles`,
+  `SqlStore`'s third table `<table>_roles`: re-run `SqlStore.schema()` in a new migration); a company administrator is
+  an app administrator unless `companyAdmin: "member"`; `app.roles` (`list`, `get`, `assign`, `remove`), `ctx.admin`;
+  the read-only tool `clegra_roles` («who has what», manifest `rolesTool`).
+- **Events**: `POST <path>/clegra/events` takes the core's `clegra-event+jwt` (once per `jti`); `member.removed`
+  drops the person's roles and refuses their older tokens and embed sessions, `app.unassigned` and `app.uninstalled`
+  drop the tenant's roles and refuse its older tokens, `company.suspended` refuses them; the lifecycle hook hears
+  `app.installed` / `app.unassigned` / `app.uninstalled` as `enabled` / `disabled` / `uninstalled`. Manifest
+  `events: { url }`.
+- **Registration**: `GET /.well-known/clegra-app.json` = `{ registration_id, challenge, resource, issuer }`.
+  `withClegra` rewrites it and `/clegra/events` too.
+- `ctx.rateLimit(name, { max, seconds, per? })` (error `rate_limited` with `retryAfterSeconds`); the store gains
+  `put`, `get` and `hit`.
+- Settings from `_meta.clegra.settings` count only from the development workspace host: an app's settings live in
+  the app. The protected-resource metadata names only the app's own authorization servers (default none).
+- `@clegra/sdk/testing`: `testCore({ resource })` (keys, app, delegated, automation and device-agent tokens,
+  confirmations, events, `client()`), `deviceKey()`, and `testClient`'s `dpop` and `origin` options.
+- The examples trust Clegra's core (`CLEGRA_*`) instead of `CLEGRA_ISSUERS`, with the roles table in a new migration
+  (CRM `0006_clegra_store_roles.sql`, warehouse `007_clegra_roles.sql`).
+- **Conformance for an app in the trusted-issuer mode** (spec §8): `checkApp({ url, clegra: { token, proof,
+  confirmation? } })` checks as a Clegra caller (`Authorization: DPoP`, a proof per request for the app's resource,
+  once more with its `DPoP-Nonce`); what is hidden from plain clients is a person's to see, so `mcp.tools` no longer
+  counts it. `auth.mcp` takes protected-resource metadata without an authorization server for an app that trusts
+  only Clegra's core (it declares `events` and no `auth.authorizationServers`). New check `mcp.confirm`: a sensitive
+  write called by a Clegra caller without a confirmation answers `confirmation_required` and runs nothing; with an
+  agent's `confirmation` (the core's token and the device's proof), one of other arguments is refused and one of its
+  own arguments runs once.
+- **Notification recipients** are person ids or `"admins"` (the company's administrators): `to: { permission }` is
+  gone (Clegra keeps no app's permissions: an app names the holders it wants from `app.roles.list`).
+
+## 0.1.0-next.3 (unreleased)
+
+- **Fragments are artifacts.** Every name of the concept changes, with no alias (each `Fragment…`/`fragment…` name becomes `Artifact…`/`artifact…`): `defineApp({ artifacts })`,
+  `ArtifactDef`, `ArtifactInstance`, `ManifestArtifact`, `artifactSchema`, `app.artifactUri`, the manifest's
+  `artifacts` (JSON Schema and conformance), a dashboard page's `artifacts`, the resolve tool's `want: "artifact"`,
+  the resolved result's `artifact` and its view kind `"artifact"`, a dashboard's `structuredContent.artifacts`, and
+  the docs (spec, quickstart, AI guide, kinds). A record or template shown outside its app is an artifact
+  («artefatto» in Italian), like Claude's Artifacts.
+- `init --ui` adds `@clegra/ui` at `^0.1.0-next.3` with its web libraries as that version declares them (the
+  `@dnd-kit/*` three of the shell's reorderable lists added).
 - The examples' public demos are gone: the CRM and warehouse READMEs drop their «Public demo» sections, the warehouse
   its Vercel deploy steps, and `examples/deploy.sh` is deleted. The examples run locally.
 

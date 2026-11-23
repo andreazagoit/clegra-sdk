@@ -96,20 +96,6 @@ function refused(error: unknown, ctx: Context, closed?: { en: string; it: string
 
 // ------------------------------------------------------------------ the app
 
-/**
- * Who may frame the CRM's embedded pages (/embed/*, spec §5.1): Clegra's web client, ChatGPT and Claude with the
- * sandbox origins their MCP Apps views run on, and any local port while developing. Every frame up to the top
- * must be one of them; a sign-in ticket is issued only for a frame of one of them.
- */
-export const EMBED_HOSTS = [
-  "https://app.clegra.com",
-  "https://chatgpt.com",
-  "https://*.web-sandbox.oaiusercontent.com",
-  "https://claude.ai",
-  "https://*.claudemcpcontent.com",
-  ...(process.env.NODE_ENV === "production" ? [] : ["http://localhost:*", "http://127.0.0.1:*"]),
-]
-
 export type CrmAppOptions = {
   /** Who may call: the app's own users (`resolve`: better-auth access tokens, clegra/auth.ts) and workspace hosts (`issuers`). */
   auth: AuthOptions
@@ -127,9 +113,10 @@ export function createCrmApp({ auth, store = new SqlStore((text, params) => data
     instructions: "A CRM. Use search or the *_list tools to find records, *_get for one record, open_pipeline for the overview. Changes need the person's confirmation.",
     auth,
     store,
-    // The board (app/embed/pipeline) framed by hosts, signed in with a one-minute ticket. Its key is derived from the
-    // CRM's one secret (the SDK's HKDF keeps the uses apart).
-    embed: { frameAncestors: EMBED_HOSTS, secret: process.env.BETTER_AUTH_SECRET },
+    // The CRM's own pages are its site in a Clegra client (spec §5.1): framed at the CRM's origin, the person signed in
+    // with a one-minute site ticket. Only with Clegra's core configured (a site needs it). Tickets and sessions are
+    // signed with keys derived from the CRM's one secret (the SDK's HKDF keeps the uses apart).
+    ...(auth.clegra ? { site: { secret: process.env.BETTER_AUTH_SECRET } } : {}),
     // Deal owners are person ids: their names, so a host never shows an id.
     people: async (ids, ctx) => personNames(await tenant(ctx), ids),
 
@@ -281,8 +268,8 @@ export function createCrmApp({ auth, store = new SqlStore((text, params) => data
       },
     },
 
-    fragments: {
-      // The deals page's badge (a stat fragment: its value is the count).
+    artifacts: {
+      // The deals page's badge (a stat artifact: its value is the count).
       open_deals: {
         title: { en: "Open deals", it: "Trattative aperte" },
         description: { en: "How many deals are open", it: "Quante trattative sono aperte" },
@@ -363,19 +350,11 @@ export function createCrmApp({ auth, store = new SqlStore((text, params) => data
         permission: "deals.values",
         view: { html: () => import("./forecast-view").then((m) => m.forecastHtml) },
       },
-      // A page of the CRM itself (app/embed/pipeline), framed by hosts at the app's own address with a sign-in ticket.
-      board: {
-        title: { en: "Board", it: "Bacheca" },
-        icon: "kanban",
-        description: { en: "The pipeline board, by stage", it: "La bacheca delle trattative, per fase" },
-        permission: "deals.view",
-        url: "/embed/pipeline",
-      },
     },
   
     // The host's navigation: selling first, then the people and companies we sell to.
     nav: [
-      { section: { en: "Sales", it: "Vendite" }, pages: ["pipeline", "deals", "board", "forecast"] },
+      { section: { en: "Sales", it: "Vendite" }, pages: ["pipeline", "deals", "forecast"] },
       { section: { en: "Customers", it: "Clienti" }, pages: ["companies", "contacts"] },
     ],
 

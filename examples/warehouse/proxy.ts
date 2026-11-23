@@ -1,12 +1,13 @@
-import { embedProxy } from "@clegra/sdk/next"
+import { siteProxy } from "@clegra/sdk/next"
 
 import { warehouseApp } from "@/lib/app"
 
 /**
- * The embedded pages (/embed/*, spec §5.1): `POST /embed/_ticket` exchanges a host's sign-in ticket for the page's
- * partitioned session cookie, and every /embed response says who may frame it (frame-ancestors: the hosts declared in
- * lib/clegra.ts). Every other page may not be framed at all (next.config.ts).
+ * The warehouse's own pages are its site in a Clegra client (spec §5.1). In front of every page: a page opened in a
+ * Clegra client's session may be framed by that client only; a Clegra frame whose session ended gets the signed-out
+ * page (the client opens the site again); anything else may not be framed at all (`frame-ancestors 'none'`), so
+ * sign-in and consent can't be clickjacked. The SDK's own paths (/mcp, /clegra/*, /.well-known/*) keep their own headers.
  */
-export const proxy = embedProxy(warehouseApp)
+export const proxy = siteProxy(warehouseApp)
 
-export const config = { matcher: "/embed/:path*" }
+export const config = { matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"] }

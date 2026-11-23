@@ -1,5 +1,5 @@
 import { PROPERTY_TYPES } from "../spec/src/kinds"
-import { EXPORT_TOOL, DELETE_TOOL, INSTALLATION_TOOL, LATER_TOOL, MANIFEST_PATH, SCHEMA_ID, SPEC_VERSION, uriPrefix } from "../spec/src/protocol"
+import { APP_ACCENTS, DEFAULT_APP_ACCENT, EXPORT_TOOL, DELETE_TOOL, INSTALLATION_TOOL, LATER_TOOL, MANIFEST_PATH, SCHEMA_ID, SPEC_VERSION, uriPrefix } from "../spec/src/protocol"
 import { LIMITS } from "../spec/src/rules"
 import { z } from "zod"
 
@@ -104,13 +104,12 @@ export const pageSchema = z.object({
   sections: z.array(z.object({ title: labelMap, fields: z.array(z.string()) })).optional(),
   tool: toolRef.describe("What opens the page with its params (record pages: the entity's get tool)"),
   view: z.string().optional().describe("The ui:// view that draws it when the host doesn't draw it natively (dashboard, custom, or an override)"),
-  url: z.string().optional().describe("custom: the developer's own site, shown in an isolated frame"),
   derived: z.boolean().optional(),
   actions: z.array(z.string()).max(LIMITS.pageActions).optional().describe("Global actions offered on the page, in order: the first is the page's primary. Page params prefill the inputs of the same name"),
-  badge: z.string().optional().describe("A `stat` fragment type without required params: its data.value is the page's count in the navigation"),
+  badge: z.string().optional().describe("A `stat` artifact type without required params: its data.value is the page's count in the navigation"),
 })
 
-export const fragmentSchema = z.object({
+export const artifactSchema = z.object({
   type: ident,
   title: labelMap,
   description: labelMap.optional(),
@@ -156,6 +155,10 @@ export const manifestSchema = z.object({
   version: z.string(),
   description: labelMap.optional(),
   icons: z.array(z.object({ src: z.string(), mimeType: z.string().optional(), sizes: z.array(z.string()).optional() })).optional(),
+  accent: z
+    .enum(APP_ACCENTS)
+    .optional()
+    .describe(`The app's tint, like an Apple app's: one name of the palette, never a free colour. Absent: "${DEFAULT_APP_ACCENT}"`),
   publisher: z
     .object({ name: z.string().min(1).max(LIMITS.publisherName), url: z.string().max(LIMITS.publisherUrl).describe("The publisher's web address: an absolute https URL") })
     .strict()
@@ -169,16 +172,15 @@ export const manifestSchema = z.object({
       authorizationServers: z.array(z.string()),
     })
     .describe("MCP authorization: the server's own address (the token audience) and who issues tokens"),
-  view: z.string().describe("The generated ui:// view for lists, records, dashboards and fragments"),
-  resolveTool: z.string().describe("Hosts resolve record and fragment URIs with this tool"),
-  embed: z
+  view: z.string().describe("The generated ui:// view for lists, records, dashboards and artifacts"),
+  resolveTool: z.string().describe("Hosts resolve record and artifact URIs with this tool"),
+  site: z
     .object({
-      tool: toolRef.describe("The tool a host asks for an embed ticket with (spec §5.1)"),
-      path: z.string().describe("Where the embed pages live; tickets are posted to <path>/_ticket"),
-      frameAncestors: z.array(z.string()).min(1).describe("The hosts that may frame the embed pages (CSP frame-ancestors sources)"),
+      start: z.string().describe("The path the site opens at"),
+      tool: toolRef.describe("The tool a Clegra client asks for a site ticket with (spec §5.1)"),
     })
     .optional()
-    .describe("Same-site url pages, framed by hosts with a sign-in ticket"),
+    .describe("The app's own website, shown as it is in Clegra's clients (spec §5.1)"),
   searchTool: z.string().optional(),
   kinds: z
     .record(z.string(), z.object({ label: labelMap, properties: z.record(z.string(), z.object({ type: z.enum(PROPERTY_TYPES), many: z.boolean().optional(), key: z.boolean().optional() })) }))
@@ -187,7 +189,7 @@ export const manifestSchema = z.object({
   entities: z.array(entitySchema),
   actions: z.array(actionSchema),
   pages: z.array(pageSchema),
-  fragments: z.array(fragmentSchema),
+  artifacts: z.array(artifactSchema),
   agents: z.array(z.object({ name: ident, title: labelMap, description: labelMap, instructions: z.string(), tools: z.array(z.string()), tier: z.enum(["fast", "standard", "strong"]), starters: z.array(labelMap).optional() })),
   permissions: z.array(z.object({ id: z.string(), label: labelMap, description: labelMap.optional(), default: z.boolean() })),
   settings: z.array(z.object({ id: z.string().regex(/^[a-z][a-z0-9_]{1,39}$/), label: labelMap, description: labelMap.optional(), type: z.enum(["text", "number", "boolean"]), required: z.boolean(), default: z.union([z.string(), z.number(), z.boolean()]).optional() })),
@@ -195,6 +197,12 @@ export const manifestSchema = z.object({
   schedules: z.array(scheduleSchema).max(LIMITS.schedules + 1).optional().describe(`Actions a workspace host runs as the installation, with no person; the SDK adds \`${LATER_TOOL}\` for later runs`),
   notifications: z.array(notificationTypeSchema).optional().describe("The notification types the app sends; without them its notifications are untyped"),
   lifecycle: lifecycleSchema.optional(),
+  events: z
+    .object({ url: z.string().describe("On the app's own origin, relative to it") })
+    .strict()
+    .optional()
+    .describe("Where Clegra's core posts its signed events (clegra-event+jwt): member.removed, app.unassigned, company.suspended, app.installed, app.uninstalled"),
+  rolesTool: z.string().optional().describe("The read-only tool that says who has what inside the app, for a company administrator"),
 })
 
 export type Manifest = z.infer<typeof manifestSchema>
@@ -202,7 +210,7 @@ export type ManifestField = z.infer<typeof fieldSchema>
 export type ManifestEntity = z.infer<typeof entitySchema>
 export type ManifestAction = z.infer<typeof actionSchema>
 export type ManifestPage = z.infer<typeof pageSchema>
-export type ManifestFragment = z.infer<typeof fragmentSchema>
+export type ManifestArtifact = z.infer<typeof artifactSchema>
 export type ManifestTarget = z.infer<typeof targetSchema>
 export type ManifestSchedule = z.infer<typeof scheduleSchema>
 export type ManifestNotificationType = z.infer<typeof notificationTypeSchema>

@@ -1,6 +1,7 @@
 import type { App } from "../define"
-import type { EmbedCaller } from "../embed"
+import type { SiteCaller } from "../site"
 import type { NextConfig } from "next"
+import type { ReactElement } from "react"
 
 /**
  * `@clegra/sdk/next`: a Clegra app (a `defineApp` object) inside a Next.js app.
@@ -9,8 +10,8 @@ import type { NextConfig } from "next"
  * - `withClegra(nextConfig)` → the rewrites that put MCP and the manifest where hosts and clients look for
  *   them: `/mcp` and `/.well-known/…` at the root of the site, served by that one route.
  *
- * - `embedProxy(app)` → proxy.ts for the embedded pages (`/embed/*`, spec §5.1): the ticket exchange and the
- *   `frame-ancestors` of every embed response. `getEmbedCaller(app, page)` → who looks at an embedded page.
+ * - The app's own site in Clegra (spec §5.1): `siteProxy(app)` → proxy.ts (who may frame each page, the signed-out
+ *   page); `getClegraCaller(app)` → who looks at a page from a Clegra client; `<ClegraSite />` → the bridge.
  *
  * Only types are imported from the core: next.config loads this module and stays light. `next` is an optional
  * peer dependency: types here, and `next/server` / `next/headers` loaded only when the proxy or a page runs.
@@ -19,11 +20,16 @@ import type { NextConfig } from "next"
 /** Where the catch-all route lives by default (`app/api/clegra/[...path]/route.ts`). */
 export const DEFAULT_MOUNT = "/api/clegra"
 
-/** The paths rewritten to the route: MCP, the manifest and the OAuth metadata (RFC 9728, RFC 8414, OpenID discovery). */
+/** The paths rewritten to the route: MCP, the manifest, Clegra's registration document, events and views, the OAuth metadata (RFC 9728, RFC 8414, OpenID discovery). */
 const PUBLIC_PATHS = [
   "/mcp",
-  // MANIFEST_PATH (a test keeps the two equal; not imported so that next.config does not load the SDK).
+  // MANIFEST_PATH, REGISTRATION_PATH, EVENTS_PATH and VIEWS_PATH (a test keeps them equal; not imported so that next.config does not load the SDK).
   "/.well-known/clegra.json",
+  "/.well-known/clegra-app.json",
+  "/clegra/events",
+  "/clegra/views/:path*",
+  "/clegra/site",
+  "/clegra/site/:path*",
   "/.well-known/oauth-protected-resource/:path*",
   "/.well-known/oauth-authorization-server/:path*",
   "/.well-known/openid-configuration/:path*",
@@ -95,7 +101,7 @@ export function toNextHandlers(app: App, options: NextHandlerOptions = {}): Next
     const url = new URL(request.url)
     let path = url.pathname
     if (path === mount || path.startsWith(`${mount}/`)) path = path.slice(mount.length) || "/"
-    else if (path !== "/mcp" && !path.startsWith("/.well-known/")) {
+    else if (path !== "/mcp" && path !== "/clegra/events" && !path.startsWith("/clegra/views/") && path !== "/clegra/site" && !path.startsWith("/clegra/site/") && !path.startsWith("/.well-known/")) {
       // The route file is somewhere else than `mount` says: a configuration error, said instead of guessed around.
       return new Response(JSON.stringify({ error: "misconfigured", error_description: `@clegra/sdk/next: request for ${path} reached the clegra route, but its mount is ${mount} (set the same mount in toNextHandlers and withClegra)` }), {
         status: 500,
@@ -129,58 +135,84 @@ function publicHeaders(given: Headers, fixedOrigin: URL | null): Headers {
   return headers
 }
 
-// ------------------------------------------------------------ embedded pages (spec §5.1)
+// ------------------------------------------------------------ the app's own site (spec §5.1)
 
 /** The app, or how to get it (an app made on first use, as the examples do). */
 export type AppSource = App | (() => App | Promise<App>)
 
-const embedOf = async (source: AppSource, where: string) => {
+/** The app's site; null for an app that declares none (one without Clegra configured: nothing of it is shown in Clegra). */
+const siteOf = async (source: AppSource) => {
   const app = typeof source === "function" ? await source() : source
-  if (!app.embed) throw new Error(`${where}: the app declares no \`embed\` (defineApp({ embed: { frameAncestors, … } }), spec §5.1)`)
-  return app.embed
+  return app.site
 }
 
+/** The SDK's own paths: the clegra route answers them with their own headers. */
+const OWN = /^\/(?:mcp$|clegra\/|\.well-known\/|api\/clegra(?:\/|$))/
+
 /**
- * proxy.ts for the embedded pages (spec §5.1), with the matcher on the embed path:
+ * proxy.ts for the app's own site (spec §5.1 step 7), in front of every page:
  *
  * ```ts
- * export const proxy = embedProxy(app)
- * export const config = { matcher: "/embed/:path*" }
+ * export const proxy = siteProxy(app)
+ * export const config = { matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"] }
  * ```
  *
- * `POST /embed/_ticket` exchanges a host's ticket for the page's partitioned session cookie and redirects (303) to
- * the page; every other embed request goes on to the page with `Content-Security-Policy: frame-ancestors <the
- * declared hosts>` and `Referrer-Policy: no-referrer`. Options: `publicUrl` as in `toNextHandlers`.
+ * A page opened in a Clegra client with a session gets `Content-Security-Policy: frame-ancestors 'self' <the
+ * client's origin>`; a frame of a Clegra client's partition whose session is gone gets the signed-out page (the
+ * client opens the site again); anything else gets `otherwise` (default `frame-ancestors 'none'`: the site's own
+ * sign-in, consent and settings are never framed). The SDK's own paths are left to the clegra route. An app that
+ * declares no site (Clegra not configured) gets `otherwise` everywhere. Options:
+ * `publicUrl` as in `toNextHandlers`; `otherwise`: the CSP of a page outside a Clegra session (null: none set).
  */
-export function embedProxy(source: AppSource, options: { publicUrl?: string } = {}): (request: Request) => Promise<Response> {
+export function siteProxy(source: AppSource, options: { publicUrl?: string; otherwise?: string | null } = {}): (request: Request) => Promise<Response> {
   const fixedOrigin = options.publicUrl !== undefined ? publicOrigin(options.publicUrl, "publicUrl") : publicOrigin(process.env.CLEGRA_PUBLIC_URL, "CLEGRA_PUBLIC_URL")
+  const otherwise = options.otherwise === undefined ? "frame-ancestors 'none'" : options.otherwise
   return async (request) => {
-    const embed = await embedOf(source, "embedProxy")
-    const { pathname } = new URL(request.url)
-    if (pathname === embed.exchangePath) {
-      const hasBody = request.method !== "GET" && request.method !== "HEAD" && request.body !== null
-      const init: RequestInit & { duplex?: "half" } = { method: request.method, headers: publicHeaders(request.headers, fixedOrigin), ...(hasBody ? { body: request.body, duplex: "half" } : {}) }
-      return embed.exchange(new Request(request.url, init))
-    }
     const { NextResponse } = await import("next/server")
-    const response = NextResponse.next()
-    if (pathname === embed.path || pathname.startsWith(`${embed.path}/`)) for (const [k, v] of Object.entries(embed.headers())) response.headers.set(k, v)
-    return response
+    const { pathname } = new URL(request.url)
+    if (OWN.test(pathname)) return NextResponse.next()
+    const site = await siteOf(source)
+    const { headers, response } = site ? await site.guard(new Request(request.url, { headers: publicHeaders(request.headers, fixedOrigin) })) : { headers: null, response: null }
+    if (response) return response
+    const next = NextResponse.next()
+    const policy = headers?.["content-security-policy"] ?? otherwise
+    if (policy) next.headers.set("content-security-policy", policy)
+    return next
   }
 }
 
+/** The headers a page's guard returns for this request, for an app that writes its own proxy (`app.site.guard`). */
+export async function siteGuard(source: AppSource, request: Request, options: { publicUrl?: string } = {}): Promise<{ headers: Record<string, string> | null; response: Response | null }> {
+  const fixedOrigin = options.publicUrl !== undefined ? publicOrigin(options.publicUrl, "publicUrl") : publicOrigin(process.env.CLEGRA_PUBLIC_URL, "CLEGRA_PUBLIC_URL")
+  const site = await siteOf(source)
+  if (!site) return { headers: null, response: null }
+  return site.guard(new Request(request.url, { headers: publicHeaders(request.headers, fixedOrigin) }))
+}
+
 /**
- * Who looks at the embedded page `page` (its name in defineApp's `pages`), in a server component, route handler or
- * server function of that page: the caller its ticket was issued to, from the page's session cookie; null without one
- * (opened outside a host's frame, expired, or a top-level visit). Scope everything by `caller.installation`.
+ * Who looks at this page from a Clegra client (spec §5.1 step 6), in a server component, route handler or server
+ * function: the person the site ticket was issued to, with the tenant (`installation`, as handlers' `ctx`), their
+ * permissions in the app, locale and theme; null outside a Clegra session (the app's own sign-in applies then).
  */
-export async function getEmbedCaller(source: AppSource, page: string, options: { publicUrl?: string } = {}): Promise<EmbedCaller | null> {
+export async function getClegraCaller(source: AppSource, options: { publicUrl?: string } = {}): Promise<SiteCaller | null> {
   const fixedOrigin = options.publicUrl !== undefined ? publicOrigin(options.publicUrl, "publicUrl") : publicOrigin(process.env.CLEGRA_PUBLIC_URL, "CLEGRA_PUBLIC_URL")
   // The request first: it makes the page dynamic before the app (its database, its auth) is touched, never at build time.
   const { headers } = await import("next/headers")
   const given = publicHeaders(new Headers(await headers()), fixedOrigin)
-  const embed = await embedOf(source, "getEmbedCaller")
-  return embed.caller(page, new Request(`http://${given.get("host") ?? "localhost"}${embed.path}`, { headers: given }))
+  if (!given.get("cookie")?.includes("clegra-site=")) return null
+  const site = await siteOf(source)
+  if (!site) return null
+  const proto = given.get("x-forwarded-proto") ?? "http"
+  return site.caller(new Request(`${proto}://${given.get("x-forwarded-host") ?? given.get("host") ?? "localhost"}/`, { headers: given }))
+}
+
+/**
+ * The bridge between a page of the site and the Clegra client that frames it (spec §5.1 step 8): put it once in the
+ * root layout. It does nothing outside a Clegra session. Without React: `<script src="/clegra/site/bridge.js" async>`.
+ */
+export async function ClegraSite(): Promise<ReactElement> {
+  const { createElement } = await import("react")
+  return createElement("script", { src: "/clegra/site/bridge.js", async: true })
 }
 
 // ------------------------------------------------------------ next.config

@@ -15,6 +15,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           <nav className="flex flex-wrap gap-1">
             <NavLink href="/">Dashboard</NavLink>
             <NavLink href="/products">Products</NavLink>
+            <NavLink href="/stock">Stock board</NavLink>
             <NavLink href="/movements">Movements</NavLink>
             {viewer.can("orders.view") ? <NavLink href="/orders">Orders</NavLink> : null}
           </nav>
@@ -22,9 +23,12 @@ export default async function AppLayout({ children }: { children: React.ReactNod
             <span className="text-stone-600">
               {viewer.name} <span className="text-stone-400">· {viewer.role}</span>
             </span>
-            <button type="submit" className="text-stone-500 hover:text-stone-900">
-              Sign out
-            </button>
+            {/* Shown by a Clegra client, the person signs in and out there. */}
+            {viewer.via === "warehouse" ? (
+              <button type="submit" className="text-stone-500 hover:text-stone-900">
+                Sign out
+              </button>
+            ) : null}
           </form>
         </div>
       </header>

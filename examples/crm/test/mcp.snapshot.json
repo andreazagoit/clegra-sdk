@@ -582,40 +582,9 @@
       }
     },
     {
-      "name": "clegra_embed",
-      "title": "Embed ticket",
-      "description": "For hosts and the app's views: a one-minute, single-use ticket that signs the viewer in to one of the app's embedded pages, framed by a document of the given origin.",
-      "annotations": {
-        "title": "Embed ticket",
-        "readOnlyHint": true,
-        "idempotentHint": false,
-        "destructiveHint": false,
-        "openWorldHint": false
-      },
-      "ui": null,
-      "inputSchema": {
-        "type": "object",
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "properties": {
-          "page": {
-            "type": "string",
-            "description": "The page's name (manifest pages with a same-site url)"
-          },
-          "origin": {
-            "type": "string",
-            "description": "The origin of the document that frames the page and posts the ticket"
-          }
-        },
-        "required": [
-          "page",
-          "origin"
-        ]
-      }
-    },
-    {
       "name": "clegra_resolve",
       "title": "Resolve",
-      "description": "For hosts: fragment and record URIs resolved for the viewer.",
+      "description": "For hosts: artifact and record URIs resolved for the viewer.",
       "annotations": {
         "readOnlyHint": true,
         "idempotentHint": true,
@@ -638,7 +607,7 @@
             "type": "string",
             "enum": [
               "reference",
-              "fragment",
+              "artifact",
               "snapshot"
             ]
           }
@@ -1363,27 +1332,9 @@
       }
     },
     {
-      "name": "open_board",
-      "title": "Board",
-      "description": "Opens the page «Board»: The pipeline board, by stage. Its parameters set the state it opens in.",
-      "annotations": {
-        "title": "Board",
-        "readOnlyHint": true,
-        "idempotentHint": true,
-        "destructiveHint": false,
-        "openWorldHint": false
-      },
-      "ui": "ui://crm/pages/board",
-      "inputSchema": {
-        "type": "object",
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "properties": {}
-      }
-    },
-    {
       "name": "show_open_deals",
       "title": "Open deals",
-      "description": "How many deals are open. Shows it as a live fragment; don't repeat its data in full.",
+      "description": "How many deals are open. Shows it as a live artifact; don't repeat its data in full.",
       "annotations": {
         "title": "Open deals",
         "readOnlyHint": true,
@@ -1401,7 +1352,7 @@
     {
       "name": "show_pipeline_total",
       "title": "Open pipeline",
-      "description": "The total value of open deals. Shows it as a live fragment; don't repeat its data in full.",
+      "description": "The total value of open deals. Shows it as a live artifact; don't repeat its data in full.",
       "annotations": {
         "title": "Open pipeline",
         "readOnlyHint": true,
@@ -1419,7 +1370,7 @@
     {
       "name": "show_deals_by_stage",
       "title": "Deals by stage",
-      "description": "How many deals are in each stage. Shows it as a live fragment; don't repeat its data in full.",
+      "description": "How many deals are in each stage. Shows it as a live artifact; don't repeat its data in full.",
       "annotations": {
         "title": "Deals by stage",
         "readOnlyHint": true,
@@ -1437,7 +1388,7 @@
     {
       "name": "show_closing_soon",
       "title": "Closing soon",
-      "description": "Open deals closing within some days. Shows it as a live fragment; don't repeat its data in full.",
+      "description": "Open deals closing within some days. Shows it as a live artifact; don't repeat its data in full.",
       "annotations": {
         "title": "Closing soon",
         "readOnlyHint": true,
@@ -1476,10 +1427,6 @@
     {
       "uri": "ui://crm/pages/forecast",
       "mimeType": "text/html;profile=mcp-app"
-    },
-    {
-      "uri": "ui://crm/pages/board",
-      "mimeType": "text/html;profile=mcp-app"
     }
   ],
   "manifest": {
@@ -1503,22 +1450,6 @@
     },
     "view": "ui://crm/view",
     "resolveTool": "clegra_resolve",
-    "embed": {
-      "tool": {
-        "name": "clegra_embed",
-        "plain": true
-      },
-      "path": "/embed",
-      "frameAncestors": [
-        "https://app.clegra.com",
-        "https://chatgpt.com",
-        "https://*.web-sandbox.oaiusercontent.com",
-        "https://claude.ai",
-        "https://*.claudemcpcontent.com",
-        "http://localhost:*",
-        "http://127.0.0.1:*"
-      ]
-    },
     "searchTool": "search",
     "entities": [
       {
@@ -2834,26 +2765,6 @@
         "view": "ui://crm/pages/forecast"
       },
       {
-        "name": "board",
-        "kind": "custom",
-        "title": {
-          "en": "Board",
-          "it": "Bacheca"
-        },
-        "icon": "kanban",
-        "permission": "deals.view",
-        "params": {
-          "type": "object",
-          "properties": {}
-        },
-        "tool": {
-          "name": "open_board",
-          "plain": true
-        },
-        "view": "ui://crm/pages/board",
-        "url": "/embed/pipeline"
-      },
-      {
         "name": "company",
         "kind": "record",
         "title": {
@@ -2906,7 +2817,7 @@
         "derived": true
       }
     ],
-    "fragments": [
+    "artifacts": [
       {
         "type": "company",
         "title": {
@@ -3164,7 +3075,6 @@
         "pages": [
           "pipeline",
           "deals",
-          "board",
           "forecast"
         ]
       },

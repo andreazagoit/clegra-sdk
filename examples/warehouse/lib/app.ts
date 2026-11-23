@@ -7,9 +7,9 @@ import { createWarehouseApp } from "./clegra"
 import { clegraAuth } from "./clegra-auth"
 
 /**
- * The warehouse's Clegra app, as the site serves it: the MCP route (app/api/clegra), the embed proxy (proxy.ts) and the
- * embedded pages (app/embed). Made on first use, the database never touched at build time; better-auth is built only
- * when one of its own tokens or metadata requests needs it (clegraAuth takes the getter).
+ * The warehouse's Clegra app, as the site serves it: the MCP route (app/api/clegra), the site's proxy (proxy.ts) and
+ * the pages, for a Clegra client's person (lib/session.ts). Made on first use, the database never touched at build
+ * time; better-auth is built only when one of its own tokens or metadata requests needs it (clegraAuth takes the getter).
  */
 let app: App | undefined
 export const warehouseApp = (): App => (app ??= createWarehouseApp({ auth: clegraAuth(getAuth) }))

@@ -1,9 +1,11 @@
-> **Read-only mirror.** This repository is published from where @clegra/sdk is developed; pull requests are not merged here. Issues are welcome.
-
 # @clegra/sdk
 
+> The public repository, [github.com/andreazagoit/clegra-sdk](https://github.com/andreazagoit/clegra-sdk), is a
+> read-only snapshot of each version, published from where the package is developed: issues are welcome there,
+> pull requests are not merged.
+
 The package Clegra apps are built with. MIT. You write one typed object, `defineApp({ entities, actions, pages,
-fragments, agents, … })`. It becomes a plain, conformant MCP server (tools, MCP Apps views, OAuth) for ChatGPT, Claude
+artifacts, agents, … })`. It becomes a plain, conformant MCP server (tools, MCP Apps views, OAuth) for ChatGPT, Claude
 and any MCP client, and a JSON manifest Clegra reads to draw the app natively in its workspace. Spec: [docs/spec.md](docs/spec.md).
 
 ```sh
@@ -19,11 +21,11 @@ says how the tarball is made, checked and published.
 | Entry | What |
 | --- | --- |
 | `@clegra/sdk` | `defineApp`, `AuthError`, `SqlStore`, `MemoryStore`, types. Framework-agnostic (`app.fetch(request)`) |
-| `@clegra/sdk/next` | `toNextHandlers`, `withClegra`, `clegraRewrites`; `embedProxy`, `getEmbedCaller` for embedded pages (`next` is an optional peer dependency) |
+| `@clegra/sdk/next` | `toNextHandlers`, `withClegra`, `clegraRewrites`; `siteProxy`, `siteGuard`, `getClegraCaller`, `<ClegraSite />` for the app's own site (`next` is an optional peer dependency) |
 | `@clegra/sdk/node` | `listen(app)`: the app on Node's own HTTP server |
 | `@clegra/sdk/testing` | `testClient(app)`: JSON-RPC to `app.fetch` with dev tokens; `installationClient(app)` for schedules, later runs and lifecycle tools |
 | `@clegra/sdk/spec` | `checkApp`, `formatReport`: the conformance checks |
-| `@clegra/sdk/spec/protocol`, `@clegra/sdk/spec/kinds` | For workspace hosts: the protocol's names (manifest path, URI scheme, `_meta` key, token claim, reserved tools, embed exchange) and the kinds vocabulary with its key normalisation (`KINDS`, `keyOf`, `normaliseKey`, `kindOfRecord`, …). No Node built-ins: safe in a browser bundle |
+| `@clegra/sdk/spec/protocol`, `@clegra/sdk/spec/kinds` | For workspace hosts: the protocol's names (manifest path, URI scheme, `_meta` key, token claim, reserved tools, the site's paths and messages) and the kinds vocabulary with its key normalisation (`KINDS`, `keyOf`, `normaliseKey`, `kindOfRecord`, …). No Node built-ins: safe in a browser bundle |
 | CLI | `npx @clegra/sdk init [dir] [--ui] [--dry-run]`; `npx @clegra/sdk check <url> [--token …]` (or `CLEGRA_TOKEN`) |
 
 ## Next.js: `npx @clegra/sdk init`
@@ -85,33 +87,43 @@ export const app = defineApp({
   - Options: `mount` (default `/api/clegra`, the same value in both functions) and `publicUrl`.
   - Leave defineApp's `path` unset: the mount does that job.
 
-## Embedded pages (`/embed/*`)
+## Your own site in Clegra
 
-A page `url: "/embed/board"` is a page of your site that hosts frame. The frame is cross-site, so the viewer is signed
-in with a one-minute, single-use ticket the host asks for (`clegra_embed`) and posts into the frame; the app
-answers with a `Secure; HttpOnly; SameSite=None; Partitioned` cookie for that page's path (spec §5.1).
+An app with a website of its own is shown in Clegra's clients **as that site**: the client frames your real pages at
+your own origin, the person signed in without a word, and draws nothing around them (spec §5.1). The client asks
+your app for a one-minute, single-use ticket with the person's app token (`clegra_site`), posts it into its frame,
+and your app answers with a `Secure; HttpOnly; SameSite=None; Partitioned` session cookie for the whole site and a
+303 to the path. Needs `auth.clegra`.
 
 ```ts
 // clegra.ts
-defineApp({ …, embed: { frameAncestors: ["https://app.clegra.com", "https://chatgpt.com"], secret: process.env.CLEGRA_EMBED_SECRET } })
+defineApp({ …, auth: { …, clegra: clegraFromEnv() }, site: { start: "/", secret: process.env.CLEGRA_SITE_SECRET } })
 
-// proxy.ts
-export const proxy = embedProxy(app)            // POST /embed/_ticket; frame-ancestors on every /embed response
-export const config = { matcher: "/embed/:path*" }
+// proxy.ts: who may frame each page (the session's client only; nobody outside a Clegra session)
+export const proxy = siteProxy(app)
+export const config = { matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"] }
 
-// app/embed/board/page.tsx
-const caller = await getEmbedCaller(app, "board") // null: no ticket, expired, or a top-level visit
+// app/layout.tsx: the client's theme and language on <html>, and the bridge (address, theme, language, renewal)
+const caller = await getClegraCaller(app)
+<html lang={caller?.locale ?? "en"} data-theme={caller?.theme} className={caller?.theme === "dark" ? "dark" : undefined}>
+  <body>{children}<ClegraSite /></body>
+</html>
+
+// any page, server function or route handler: the person as a member of the tenant
+const caller = await getClegraCaller(app) // { installation, person, email, permissions, can(), admin, locale, theme } | null
 ```
 
-`app.embed.exchange(request)` and `app.embed.caller(page, request)` are the same, framework-neutral; `app.fetch`
-answers `POST <path>/_ticket` too (`@clegra/sdk/node`).
+`app.site.caller(request)` and `app.site.guard(request)` are the same, framework-neutral; `app.fetch` answers the
+site's own paths (`POST /clegra/site`, `/clegra/site/bridge.js`, `…/session`, `…/context`, `…/renewed`). Without a
+framework, load the bridge with `<script src="/clegra/site/bridge.js" async></script>`. The SDK's generated views stay
+for apps without a site and for every other host (ChatGPT, Claude).
 
 ## Public URL behind proxies and on Vercel
 
 The public origin is `publicUrl`, else `CLEGRA_PUBLIC_URL` (an origin only, like `https://crm.example.com`), else
 what the request says (`x-forwarded-host` / `x-forwarded-proto`, else `host`). A client can send those headers, so in
 production set `CLEGRA_PUBLIC_URL` and `auth.resource`. Tokens are only accepted for `auth.resource`. Without
-`auth.resource` in production, every request answers `500 misconfigured`. On Vercel, preview deployments have other
+`auth.resource` in production, every request but the manifest answers `500 misconfigured`. On Vercel, preview deployments have other
 hosts: give each environment its own value.
 
 ## Auth: write `auth.resolve` yourself
@@ -126,6 +138,40 @@ The app verifies its own access tokens: those its sign-in (better-auth, Clerk, A
 - `auth.serve(request)` can answer its RFC 8414 metadata at the root.
 
 Recipes for better-auth, Clerk, Auth0 and WorkOS: [docs/auth.md](docs/auth.md).
+
+## Clegra's people: `auth.clegra`
+
+An app that Clegra companies use trusts Clegra's core as its one issuer (spec §7, «Clegra tokens»), beside its own
+sign-in or alone:
+
+```ts
+import { clegraFromEnv } from "@clegra/sdk"
+
+auth: {
+  resource: "https://crm.example.com/mcp",   // required: the only audience, and what DPoP proofs must name
+  clegra: clegraFromEnv()!,                  // CLEGRA_ISSUER, CLEGRA_REGISTRATION_ID, CLEGRA_REGISTRATION_CHALLENGE,
+                                             // CLEGRA_ALLOWED_COMPANIES (any | ids), CLEGRA_CLIENT_ORIGINS
+}
+```
+
+- The SDK verifies the core's app tokens itself: its `use: "app"` keys, `aud` exactly `resource`, DPoP-bound (with
+  nonce retry and replay in the store), the tenant `<company>@<issuer>`, `ctx.person.id` the person's pairwise id,
+  `ctx.actor` the agent acting for them (Clegra's on a server, or one on their device).
+- Who may do what is the app's own: a company administrator has every permission (`companyAdmin: "member"` to say
+  otherwise), others what an administrator assigned (`app.roles.assign(tenant, sub, { permissions })`, `ctx.admin`)
+  or the declared defaults. `clegra_roles` tells the administrator who has what. The store keeps it (`SqlStore`'s
+  third table: re-run `SqlStore.schema()` in a migration).
+- Sensitive writes (`confirm: "always"`) called by an agent need the person's confirmation from their device;
+  from a Clegra client, the UI asks and sends `_meta.clegra.confirmed: true`.
+- The core's signed events reach `/clegra/events` (`auth.clegra.events` handlers; roles dropped and older tokens
+  refused on `member.removed`, `app.unassigned`, `app.uninstalled`, `company.suspended`), and
+  `/.well-known/clegra-app.json` answers the registration challenge.
+- CORS answers the client origins only. `ctx.rateLimit(name, { max, seconds })` limits per person or tenant.
+- In production, without `registrationId` and `allowedCompanies` every request answers `500 misconfigured`, except
+  the manifest and `/.well-known/clegra-app.json`: registering at the core, which hands out the registration id,
+  reads them first (spec §7, «Registration»).
+- Tests: `testCore({ resource })` from `@clegra/sdk/testing` is a core (keys, app tokens, confirmations, events) and
+  `core.client(app, { company, sub, role })` a Clegra client with DPoP.
 
 Dev sign-in (`auth.dev`) answers loopback callers only. A Next route handler can't know the caller's address:
 `x-forwarded-for` is whatever the client sent. So `toNextHandlers` refuses an app with `auth.dev`. Locally,
@@ -158,13 +204,13 @@ defineApp({
 - **Page `actions`**: global actions shown on the page, the first one as its primary. Page params fill in the
   action's inputs that have the same names. The generated view draws them as buttons that open the action's form.
   The page's `view` carries them, and the app's `nav` too.
-- **`badge`**: a `stat` fragment with no required params. Its `value` is the page's count in the navigation.
-- **`visibility: "app"`** on an entity, action or fragment: its tools are for views and the host's own UI only.
+- **`badge`**: a `stat` artifact with no required params. Its `value` is the page's count in the navigation.
+- **`visibility: "app"`** on an entity, action or artifact: its tools are for views and the host's own UI only.
   They carry MCP Apps `_meta.ui.visibility: ["app"]`, `search`/`fetch` leave the records out, and agents can't use it.
 - **`schedules`**: the workspace host calls the action as the installation, with no person and
   `_meta.clegra.schedule`. Handlers see `ctx.schedule`.
 - **`ctx.notify({ type, title, to })`**: once the app declares `notifications`, every notification names one of
-  them. `to` takes person ids or `{ permission }`. A call with no person must say `to`.
+  them. `to` takes person ids or `"admins"` (the company's administrators). A call with no person must say `to`.
 - **`targets`** on a global action: offered on an email (`mail.message`) or a record of a kind
   (`record:organization`). The input template is filled from the fields the target `needs` (`{subject}`,
   `{from.address}`, `{uri}`, `{title}`).
@@ -213,7 +259,7 @@ await host.schedule("digest"); await host.runLater(); const { file } = await hos
 
 ## Your own UI: `@clegra/ui`
 
-An app's own pages and views can use Clegra's design system, the package `@clegra/ui` (its own repository, version
+An app's own pages and views can use Clegra's design system, the package `@clegra/ui` (a separate package on npm, with its own version
 and guide): components for React and React Native, the theme (light and dark), tokens and `<ClegraProvider>` (an
 MCP Apps view that takes the host's look). The view `@clegra/sdk` generates is plain HTML and needs none of it.
 
@@ -234,14 +280,14 @@ import { ClegraProvider } from "@clegra/ui/frame"
 
 ## This repository
 
-The package is the repository's root, so it is published from here (`npm publish --tag next`, [docs/RELEASE.md](docs/RELEASE.md)).
+The package is the repository's root; `.github/workflows/publish.yml` publishes each new version to npm with provenance ([docs/RELEASE.md](docs/RELEASE.md)).
 
 | Path | What | In the tarball |
 | --- | --- | --- |
 | `src/` | `@clegra/sdk`, `@clegra/sdk/next`, `@clegra/sdk/node`, `@clegra/sdk/testing` | built, as `dist/src` |
 | `spec/` | `@clegra/sdk/spec` (conformance checks), the CLI (`clegra`: `init`, `check`), the manifest's JSON Schema, `kinds.json` | built, as `dist/spec` |
 | `docs/` | The specification, quickstart, guides, release steps | `docs/spec.md` and `docs/quickstart.md` only |
-| `examples/` | `crm` and `warehouse` (Next.js), `shipments` (Node): npm workspaces of this repository using `@clegra/sdk` as `file:../..` (its TypeScript source, no build step), run locally | no |
+| `examples/` | `crm` and `warehouse` (Next.js), `shipments` (Node): npm workspaces of this repository using `@clegra/sdk` as `file:..` (its TypeScript source, no build step), run locally | no |
 | `test/` | The real Next.js test (`test/fixture`) | no |
 | `scripts/` | The build, `prepack`/`postpack`, the pack check, the JSON Schema writer | no |
 | `vendor/` | (git-ignored) the `@clegra/ui` tarball the pack check installs beside this package | no |
@@ -251,7 +297,7 @@ npm ci              # the package's tooling and the examples' dependencies (one 
 npm run typecheck   # src, spec, scripts; typecheck:all adds the examples
 npm test            # core, @clegra/sdk/next, clegra init (fixture projects in temp folders), the conformance checks
 npm run test:examples   # the three examples' tests (the Next.js ones on an embedded Postgres, PGlite)
-npm run test:next   # test/fixture with next dev (port 3942), then next build + next start (3943); clegra check through the rewrites; the embedded page in Chromium (Playwright)
+npm run test:next   # test/fixture with next dev (port 3942), then next build + next start (3943); clegra check through the rewrites; the app's own site framed by a Clegra client harness in Chromium (Playwright)
 npm run build       # dist/ (git-ignored): what the tarball ships; npm pack builds it itself
 npm run pack:check  # slow: npm pack, the publish guard, a Node-only app (no React), a fresh Next.js app, and one with @clegra/ui too (vendor/)
 ```

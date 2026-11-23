@@ -5,7 +5,7 @@ import { demoSignInAction, signInAction } from "@/app/actions"
 import { ActionForm } from "@/components/action-form"
 import { oauthQueryHolds, oauthQueryOf, restartable, restartAuthorization, TOO_OLD_MESSAGE } from "@/lib/auth-http"
 import { COMPANIES, DEMO_USERS } from "@/lib/demo"
-import { getViewer } from "@/lib/session"
+import { sessionViewer } from "@/lib/session"
 
 export const metadata: Metadata = { title: "Sign in" }
 
@@ -21,7 +21,7 @@ export default async function SignInPage({ searchParams }: { searchParams: Promi
     oauthQuery = null
     tooOld = true
   }
-  if (!oauthQuery && !tooOld && (await getViewer())) redirect("/")
+  if (!oauthQuery && !tooOld && (await sessionViewer())) redirect("/")
   const demo = process.env.DEMO_SIGNIN === "1"
   const carry = oauthQuery ? <input type="hidden" name="oauth_query" value={oauthQuery} /> : null
   return (

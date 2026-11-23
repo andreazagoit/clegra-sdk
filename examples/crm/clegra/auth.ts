@@ -1,8 +1,8 @@
 // Who may call the CRM's MCP server: its own users, with access tokens from better-auth (the CRM's OAuth
-// authorization server, lib/auth-options.ts), and workspace hosts such as a Clegra node (CLEGRA_ISSUERS).
+// authorization server, lib/auth-options.ts), and Clegra's people through Clegra's core (CLEGRA_ISSUER and the rest of CLEGRA_*).
 import { oauthProviderAuthServerMetadata, oauthProviderOpenIdConfigMetadata } from "@better-auth/oauth-provider"
 import { createLocalJWKSet, decodeProtectedHeader, errors, jwtVerify, type JWK } from "jose"
-import { AuthError, type AuthOptions, type CallerResolver, type Issuer } from "@clegra/sdk"
+import { AuthError, clegraFromEnv, type AuthOptions, type CallerResolver } from "@clegra/sdk"
 
 import { auth, membership } from "@/lib/auth"
 import { CLEGRA_SCOPE, ORG_CLAIM } from "@/lib/auth-options"
@@ -68,25 +68,15 @@ async function serveMetadata(request: Request): Promise<Response | null> {
   return which === "oauth" ? oauthProviderAuthServerMetadata(auth())(request) : oauthProviderOpenIdConfigMetadata(auth())(request)
 }
 
-// ------------------------------------------------------------------ workspace hosts
+// ------------------------------------------------------------------ the CRM's users and Clegra's
 
 /**
- * Workspace hosts whose tokens (with the `clegra` claim) are accepted: CLEGRA_ISSUERS, `issuer|jwksUri`,
- * comma-separated. Their tenant is `<installation>@<issuer>`, an installation of that host, never an organization.
+ * The MCP server's authorization, for the one public address (CLEGRA_PUBLIC_URL): the CRM's own users, and with
+ * CLEGRA_ISSUER the people of Clegra companies through Clegra's core (the SDK verifies those tokens itself; their
+ * tenant is `<company>@<issuer>`, never an organization of the CRM). The rest of the Clegra configuration comes from
+ * CLEGRA_REGISTRATION_ID, CLEGRA_REGISTRATION_CHALLENGE, CLEGRA_ALLOWED_COMPANIES and CLEGRA_CLIENT_ORIGINS.
  */
-export function issuersFromEnv(env: Record<string, string | undefined> = process.env): Issuer[] {
-  return (env.CLEGRA_ISSUERS ?? "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .map((entry) => {
-      const [issuer, jwksUri] = entry.split("|").map((s) => s.trim())
-      if (!issuer) throw new Error(`CLEGRA_ISSUERS: "${entry}" has no issuer`)
-      return { issuer, ...(jwksUri ? { jwksUri } : {}) }
-    })
-}
-
-/** The MCP server's authorization: the CRM's users and the configured hosts, for the one public address (CLEGRA_PUBLIC_URL). */
 export function crmAuth(env: Record<string, string | undefined> = process.env): AuthOptions {
-  return { resolve: resolveUser, serve: serveMetadata, authorizationServers: [authIssuer(env)], resource: mcpResource(env), issuers: issuersFromEnv(env) }
+  const clegra = clegraFromEnv(env)
+  return { resolve: resolveUser, serve: serveMetadata, authorizationServers: [authIssuer(env)], resource: mcpResource(env), ...(clegra ? { clegra } : {}) }
 }

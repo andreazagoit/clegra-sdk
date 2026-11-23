@@ -3,16 +3,18 @@ import { createHash, randomUUID } from "node:crypto"
 
 import { createMcpHandler, inputRequired, inputResponse, McpServer, type CallToolResult, type Icon, type ServerContext } from "@modelcontextprotocol/server"
 import { entityKindProblems, keyOf, kindNameProblem, kindDefinitionProblems, kindOfRecord, kindSentence, kindsOf, normaliseKey, type KindDef, type KindField, type Normalisation } from "../spec/src/kinds"
-import { DELETE_TOOL, EMBED_TOOL, EXPORT_TOOL, INSTALLATION_TOOL, INSTALLATION_TOOLS, LATER_TOOL, META_KEY, OAUTH_SCOPE, PROTOCOL_ID, RESOLVE_TOOL, URI_SCHEME, uriPrefix } from "../spec/src/protocol"
+import { DELETE_TOOL, type AppAccent, EXPORT_TOOL, INSTALLATION_TOOL, INSTALLATION_TOOLS, EVENTS_PATH, LATER_TOOL, META_KEY, OAUTH_SCOPE, PROTOCOL_ID, REGISTRATION_PATH, RESOLVE_TOOL, ROLES_TOOL, SITE_BRIDGE_PATH, SITE_CONTEXT_PATH, SITE_PATH, SITE_RENEWED_PATH, SITE_SESSION_PATH, SITE_TOOL, URI_SCHEME, uriPrefix, VIEW_TOOL, VIEWS_PATH } from "../spec/src/protocol"
+import { viewPath, viewPolicy, ViewError, ViewTickets, withHost, type ViewDocument } from "./views"
 import { LIMITS, manifestRuleProblems } from "../spec/src/rules"
 import { z } from "zod"
 
 import { argsHash, AuthError, canonicalJson, DEV_ISSUER, DevAuthority, INSTALLATION, isLoopback, laterDeadline, signConfirmation, tenantOf, TokenVerifier, type AuthOptions, type Caller, type Person, type RequestTrust } from "./auth"
-import { EmbedAuthority, EmbedError, type EmbedCaller, type EmbedOptions } from "./embed"
+import { ClegraAuthority, DpopError, type ClegraEvent } from "./clegra"
+import { SITE_BRIDGE_SCRIPT, SiteAuthority, SiteError, siteLocaleOf, siteThemeOf, type SiteCaller, type SiteClaim, type SiteOptions } from "./site"
 import { MANIFEST_PATH, manifestUri, SPEC_VERSION, type Manifest, type ManifestField } from "./manifest"
 import { isLabel, labelMap, localize, type Label } from "./labels"
 import { fieldsOf, jsonSchemaOf, kindRef, localRef, plainSchema, type FieldInfo } from "./meaning"
-import { MemoryStore, type IdempotencyStore, type LaterOutcome, type LaterRun } from "./store"
+import { MemoryStore, type Grant, type IdempotencyStore, type LaterOutcome, type LaterRun } from "./store"
 import type {
   ActionConfig,
   ActionHandle,
@@ -23,8 +25,8 @@ import type {
   EntityConfig,
   EntityHandle,
   Filter,
-  FragmentConfig,
-  FragmentInstance,
+  ArtifactConfig,
+  ArtifactInstance,
   KindConfig,
   LaterInfo,
   LifecycleConfig,
@@ -40,12 +42,12 @@ import type {
   Template,
   ViewSource,
 } from "./types"
-import { MCP_APP_MIME_TYPE, urlPageHtml, viewHtml } from "./view"
+import { MCP_APP_MIME_TYPE, viewHtml } from "./view"
 
 /**
  * THE CLEGRA APP SERVER, v1 (docs/spec.md): an MCP server
  * (official SDK, Streamable HTTP, stateless) whose declarations — entities,
- * actions, pages, fragments, agents, permissions, settings — become plain MCP
+ * actions, pages, artifacts, agents, permissions, settings — become plain MCP
  * tools and MCP Apps views for any host, and a manifest hosts read to mount
  * the app natively. Internal: authors use defineApp (define.ts).
  *
@@ -65,6 +67,9 @@ export type RequestInfo = {
   origin?: string
 }
 
+/** The DPoP proof algorithms the SDK verifies (`algs` of its DPoP challenge, RFC 9449 §7.1). */
+const DPOP_ALGS = "EdDSA ES256"
+
 /** The issuer name of callers named by the app's own `auth.resolve`. */
 export const OWN_ISSUER = "app"
 
@@ -75,6 +80,8 @@ export type ServerOptions = {
   version: string
   description?: Label
   icons?: Icon[]
+  /** The app's tint (spec §2), one of `APP_ACCENTS`, like an Apple app's: its buttons, selection and links in Clegra. Default `blue`. */
+  accent?: AppAccent
   /**
    * Who publishes the app (spec §2): a name and the publisher's web address (https). A claim, granting nothing: a
    * store or host may verify it against the address's domain and show it as verified.
@@ -97,25 +104,25 @@ export type ServerOptions = {
   mcp?: (server: McpServer, caller: Caller | null) => void
   /** The names of people of the installation by their ids (the values of `person` fields): what a host shows in place of an id. */
   people?: PeopleResolver
-  /** Pages on the app's own site framed by hosts (spec §5.1): who may frame them, the ticket's signing secret. Required with a same-site `url` page. */
-  embed?: EmbedOptions
+  /** The app's own website, shown as it is in Clegra's clients (spec §5.1): where it opens, the tickets' signing secret. Needs `auth.clegra`. */
+  site?: SiteOptions
 }
 
 /**
- * The app's embedded pages (spec §5.1), for the route in front of them (`@clegra/sdk/next`'s `embedProxy`, or any
- * server): the ticket exchange, the headers of every embed response, and the caller of a page from its cookie.
+ * The app's own site (spec §5.1), for whatever serves its pages (`@clegra/sdk/next`'s `siteProxy` and
+ * `getClegraCaller`, or any server): who calls a page, and what a page request answers in front of the app.
  */
-export type AppEmbed = {
-  /** Where the embed pages live (`/embed`). */
-  readonly path: string
-  /** Where tickets are posted (`/embed/_ticket`). */
-  readonly exchangePath: string
-  /** The headers every embed response carries: `Content-Security-Policy: frame-ancestors <declared hosts>`, `Referrer-Policy: no-referrer`. */
-  headers(): Record<string, string>
-  /** `POST <path>/_ticket`: the ticket for the page's session cookie and a 303 to the page; a refusal page otherwise. */
-  exchange(request: Request): Promise<Response>
-  /** The caller of the embed page `page` for this request (its session cookie), or null. */
-  caller(page: string, request: Request): Promise<EmbedCaller | null>
+export type AppSite = {
+  /** Where the site opens (`/`). */
+  readonly start: string
+  /** The caller of a site request (its session cookie), or null: none, expired, a top-level visit, revoked. */
+  caller(request: Request): Promise<SiteCaller | null>
+  /**
+   * In front of a page of the site (spec §5.1 step 7): with a session, the headers that let its client frame it
+   * (`frame-ancestors 'self' <origin>`); a frame of a Clegra client's partition without one, the signed-out page
+   * (`response`); anything else, nothing (`headers` null: the app's own policy).
+   */
+  guard(request: Request): Promise<{ headers: Record<string, string> | null; response: Response | null }>
 }
 
 /** Names by person id, for the ids it knows (spec §3, «People»). An id it leaves out is shown as an unknown person, never as the id. */
@@ -123,13 +130,13 @@ export type PeopleResolver = (ids: string[], ctx: Context) => Record<string, str
 
 /** The one `_meta` key of the host protocol (spec §7): `{ call, confirmation, settings }` on requests, `{ notifications, untrusted, l10n }` on results. */
 export { META_KEY }
-type HostMeta = { call?: unknown; confirmation?: unknown; settings?: unknown; schedule?: unknown }
+type HostMeta = { call?: unknown; confirmation?: unknown; confirmed?: unknown; settings?: unknown; schedule?: unknown }
 const hostMeta = (meta: Record<string, unknown> | undefined): HostMeta => {
   const m = meta?.[META_KEY]
   return m && typeof m === "object" && !Array.isArray(m) ? (m as HostMeta) : {}
 }
 
-export type ErrorCode = "unauthorized" | "permission_denied" | "not_found" | "invalid_input" | "confirmation_required" | "conflict" | "internal"
+export type ErrorCode = "unauthorized" | "permission_denied" | "not_found" | "invalid_input" | "confirmation_required" | "conflict" | "rate_limited" | "internal"
 
 /** A failure a handler may throw on purpose: it reaches the caller as `{ error: { code, message } }`. */
 export class AppError extends Error {
@@ -162,17 +169,17 @@ type ActionRecord = {
 /** A schedule as the server runs it: the SDK's own `clegra_later` has no action. */
 type ScheduleRecord = { name: string; action?: ActionRecord; tool: string; every: number; maxSeconds: number }
 /** A notification as a result carries it (`_meta.clegra.notifications`): its texts in the caller's language, its recipients said. */
-export type SentNotification = { type?: string; title: string; body?: string; uri?: string; to: string[] | { permission: string } }
+export type SentNotification = { type?: string; title: string; body?: string; uri?: string; to: string[] | "admins" }
 /** What one pass over the due later runs did: each run's outcome, and the notifications for the host to deliver. */
 export type LaterReport = { runs: { id: string; tool: string; at: string; status: LaterOutcome["status"]; message: string }[]; notifications: SentNotification[] }
 type PageRecord = { name: string; config: PageConfig; derived?: boolean; tool: ToolName }
-type FragmentRecord = { type: string; config: FragmentConfig<z.ZodObject, Template>; tool: ToolName }
+type ArtifactRecord = { type: string; config: ArtifactConfig<z.ZodObject, Template>; tool: ToolName }
 
 const NAME = /^[a-z][a-z0-9-]{1,39}$/
 const IDENT = /^[a-z][a-z0-9_]{0,39}$/
 const PERMISSION = /^[a-z][a-z0-9_-]{0,39}\.[a-z][a-z0-9_-]{0,39}$/
 const RESERVED_PARAMS = new Set(["query", "sort", "dir", "cursor", "limit", "id"])
-const RESERVED_TOOLS = new Set(["search", "fetch", RESOLVE_TOOL, EMBED_TOOL, ...INSTALLATION_TOOLS])
+const RESERVED_TOOLS = new Set(["search", "fetch", RESOLVE_TOOL, SITE_TOOL, VIEW_TOOL, ROLES_TOOL, ...INSTALLATION_TOOLS])
 /** How far in the past a later run's `at` may be when it is confirmed, and how far ahead. */
 const LATER_PAST_MS = 5 * 60_000
 const LATER_AHEAD_MS = 366 * 24 * 3600_000
@@ -266,7 +273,8 @@ function say(label: Label | undefined, locale: string | undefined, fallback: str
   const notes = shownLabels.getStore()
   if (notes && label && typeof label === "object" && shown) {
     for (const [l, value] of Object.entries(label)) {
-      if (typeof value !== "string" || value === shown) continue
+      // Every locale, the shown one too (as itself): a reader in the shown language must not fall back to another.
+      if (typeof value !== "string") continue
       let d = notes.get(l)
       if (!d) notes.set(l, (d = {}))
       d[shown] ??= value
@@ -315,12 +323,13 @@ export class AppServer {
   readonly options: ServerOptions
   readonly locale: string
   readonly #verifier: TokenVerifier
+  readonly #clegra: ClegraAuthority | null
   readonly #dev: DevAuthority | null
   readonly #store: IdempotencyStore
   readonly #entities = new Map<string, EntityRecord>()
   readonly #actions = new Map<string, ActionRecord>()
   readonly #pages = new Map<string, PageRecord>()
-  readonly #fragments = new Map<string, FragmentRecord>()
+  readonly #artifacts = new Map<string, ArtifactRecord>()
   readonly #agents = new Map<string, AgentConfig>()
   readonly #permissions = new Map<string, PermissionConfig>()
   readonly #settings = new Map<string, SettingConfig>()
@@ -332,7 +341,8 @@ export class AppServer {
   #manifest: Manifest | null = null
   #devReady: Promise<void> | null = null
   readonly #path: string
-  readonly #embed: EmbedAuthority | null
+  readonly #site: SiteAuthority | null
+  readonly #viewTickets: ViewTickets | null
   #warnedStore = false
   readonly #handler = createMcpHandler(
     (ctx) => {
@@ -358,17 +368,17 @@ export class AppServer {
     this.#path = path
     this.#store = options.store ?? new MemoryStore()
     this.#verifier = new TokenVerifier(auth, (key, ttlMs) => this.#store.once(key, ttlMs))
+    if (auth.clegra && !auth.resource) throw new Error("auth.resource: with auth.clegra, give this app's public MCP address (https://…/mcp): the only audience of the core's tokens, and what DPoP proofs must name")
+    if (auth.clegra && !this.#store.roles) throw new Error("store: auth.clegra keeps the app's roles in the store's `roles` (MemoryStore and SqlStore have it)")
+    this.#clegra = auth.clegra ? new ClegraAuthority(auth.clegra, auth.resource!, this.#store) : null
     this.#dev = auth.dev ? new DevAuthority(auth.dev === true ? {} : auth.dev, { name: this.name, title: localize(options.title, this.locale, this.locale), allPermissions: () => [...this.#permissions.keys()] }) : null
     if (this.#dev) this.#verifier.useDev(this.#dev)
-    this.#embed = options.embed ? new EmbedAuthority(options.embed, this.#store, () => this.#embedPages()) : null
+    if (options.site && !auth.clegra) throw new Error("site: an app's own site is shown in Clegra's clients, signed in with Clegra's tokens, so it needs auth.clegra (clegraFromEnv())")
+    this.#site = options.site ? new SiteAuthority(options.site, this.#store, () => this.#clegra?.options.clientOrigins ?? []) : null
+    this.#viewTickets = this.#clegra ? new ViewTickets(this.#store, () => this.#clegra?.options.clientOrigins ?? []) : null
   }
 
-  // ------------------------------------------------------------ embedded pages (spec §5.1)
-
-  /** The same-site `url` pages: the ones a ticket opens. */
-  #embedPages(): { name: string; path: string }[] {
-    return [...this.#pages.values()].flatMap((p) => (p.config.kind === "custom" && "url" in p.config && p.config.url.startsWith("/") ? [{ name: p.name, path: p.config.url.split(/[?#]/)[0]! }] : []))
-  }
+  // ------------------------------------------------------------ the app's own site (spec §5.1)
 
   /** The app's origin for tickets and sessions: its configured public address, else the one the request reached. */
   #appOrigin(requestOrigin: string): string {
@@ -376,32 +386,51 @@ export class AppServer {
     return resource ? new URL(resource).origin : requestOrigin
   }
 
-  /** The embedded pages' side for the route in front of them: null when the app declares no `embed`. */
-  get embed(): AppEmbed | null {
-    const e = this.#embed
-    if (!e) return null
+  /** Whether a site session is still good: the person still in the company, the app still installed. */
+  async #siteLive(s: { claim: SiteClaim; sub?: string; iat: number }): Promise<boolean> {
+    return !(this.#clegra && (await this.#clegra.revoked(s.claim.installation, s.sub ?? s.claim.person?.id ?? null, s.iat)))
+  }
+
+  /** The site's side for whatever serves its pages: null when the app declares no `site`. */
+  get site(): AppSite | null {
+    const site = this.#site
+    if (!site) return null
     return {
-      path: e.path,
-      exchangePath: e.exchangePath,
-      headers: () => e.headers(),
-      exchange: async (request) => {
-        const problem = this.#productionProblem()
-        if (problem) return e.refusal(new EmbedError(500, "misconfigured", problem))
-        return e.exchange(request, this.#appOrigin(this.#origin(request)))
+      start: site.start,
+      caller: async (request) => {
+        // The session is for frames: a top-level visit (Sec-Fetch-Dest: document) is the app's own sign-in's.
+        if (request.headers.get("sec-fetch-dest") === "document") return null
+        const s = await site.session(request, this.#appOrigin(this.#origin(request)))
+        return s && (await this.#siteLive(s)) ? site.callerOf(s) : null
       },
-      caller: async (page, request) => {
-        const header = request.headers.get("cookie") ?? ""
-        const name = e.cookieName(page)
-        const value = header.split(/;\s*/).find((c) => c.startsWith(`${name}=`))?.slice(name.length + 1)
-        return e.session(page, value, request.headers.get("sec-fetch-dest"), this.#appOrigin(this.#origin(request)))
+      guard: async (request) => {
+        const dest = request.headers.get("sec-fetch-dest")
+        if (dest === "document") return { headers: null, response: null }
+        const s = await site.session(request, this.#appOrigin(this.#origin(request)))
+        if (s && (await this.#siteLive(s))) return { headers: { "content-security-policy": site.framing(s.origin) }, response: null }
+        // No session (or one revoked since) in a frame of a Clegra client's partition: say so to the client, never the app's own sign-in.
+        const marker = dest === "iframe" ? (s?.origin ?? site.marker(request)) : null
+        return { headers: null, response: marker ? site.signedOut(marker) : null }
       },
     }
+  }
+
+  /** `<path>/clegra/site…`: the exchange, the bridge, its session, context and renewal pages. */
+  async #serveSite(request: Request, path: string): Promise<Response> {
+    const site = this.#site!
+    const appOrigin = this.#appOrigin(this.#origin(request))
+    if (path === SITE_PATH) return site.exchange(request, appOrigin)
+    if (path === SITE_BRIDGE_PATH) return new Response(SITE_BRIDGE_SCRIPT, { headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "public, max-age=300", "x-content-type-options": "nosniff" } })
+    if (path === SITE_SESSION_PATH) return site.sessionInfo(request, appOrigin, (s) => this.#siteLive(s as { claim: SiteClaim; sub: string; iat: number }))
+    if (path === SITE_CONTEXT_PATH) return site.context(request, appOrigin)
+    if (path === SITE_RENEWED_PATH) return site.renewed(request, appOrigin)
+    return new Response("Not found", { status: 404, headers: { ...site.headers(null), "content-type": "text/plain; charset=utf-8" } })
   }
 
   // ------------------------------------------------------------ registration
 
   #taken(name: string): void {
-    if (this.#entities.has(name) || this.#fragments.has(name)) throw new Error(`"${name}" is already an entity or a fragment type (they share one namespace)`)
+    if (this.#entities.has(name) || this.#artifacts.has(name)) throw new Error(`"${name}" is already an entity or an artifact type (they share one namespace)`)
   }
 
   #changed() {
@@ -482,14 +511,6 @@ export class AppServer {
       for (const c of config.columns) if (!fields.some((f) => f.name === c)) throw new Error(`page "${name}": column "${c}" is not a field of ${config.entity.name}`)
       if (config.params && !config.query) throw new Error(`page "${name}": with params, give query(params) too`)
     }
-    if (config.kind === "custom" && "url" in config && !/^https:\/\//.test(config.url) && !/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?\//.test(config.url) && !/^\/(?!\/)[^\s\\]*$/.test(config.url))
-      throw new Error(`page "${name}": url must be https, or a path on the app's own site (/embed/…)`)
-    if (config.kind === "custom" && "url" in config && config.url.startsWith("/")) {
-      if (!this.#embed) throw new Error(`page "${name}": a page on the app's own site (${config.url}) is framed by hosts on other sites, so it needs \`embed\` in defineApp (frameAncestors and a signing secret, spec §5.1)`)
-      const path = config.url.split(/[?#]/)[0]!
-      if (!path.startsWith(`${this.#embed.path}/`) || path === this.#embed.exchangePath || !/^(\/[a-z0-9][a-z0-9._~-]*)+$/.test(path)) throw new Error(`page "${name}": url ${config.url} must be a page under ${this.#embed.path}/ (embed.path)`)
-      if (config.url !== path) throw new Error(`page "${name}": url ${config.url}: a same-site embed page is a path without query or fragment`)
-    }
     const tool = config.kind === "record" ? this.#entities.get(config.entity.name)!.tools.get : { name: config.expose?.tool ?? `open_${name}`, plain: config.expose?.plain !== false }
     if (config.kind !== "record") this.#claimTools(tool.name)
     this.#pages.set(name, { name, config: config as unknown as PageConfig, tool })
@@ -497,16 +518,16 @@ export class AppServer {
     return { kind: "page", name }
   }
 
-  /** A fragment type (spec §7): params, live data, a native template or an MCP Apps view. */
-  registerFragment<P extends z.ZodObject, T extends Template>(type: string, config: FragmentConfig<P, T>): { readonly kind: "fragment"; readonly type: string } {
-    if (!IDENT.test(type)) throw new Error(`fragment "${type}": lowercase letters, digits and _`)
+  /** An artifact type (spec §7): params, live data, a native template or an MCP Apps view. */
+  registerArtifact<P extends z.ZodObject, T extends Template>(type: string, config: ArtifactConfig<P, T>): { readonly kind: "artifact"; readonly type: string } {
+    if (!IDENT.test(type)) throw new Error(`artifact "${type}": lowercase letters, digits and _`)
     this.#taken(type)
-    if (!config.template && !config.view) throw new Error(`fragment "${type}": give a template or a view`)
+    if (!config.template && !config.view) throw new Error(`artifact "${type}": give a template or a view`)
     const tool = { name: config.expose?.tool ?? `show_${type}`, plain: config.expose?.plain !== false }
     this.#claimTools(tool.name)
-    this.#fragments.set(type, { type, config: config as never, tool })
+    this.#artifacts.set(type, { type, config: config as never, tool })
     this.#changed()
-    return { kind: "fragment", type }
+    return { kind: "artifact", type }
   }
 
   /** An agent (spec §8): run by the host's model, with these tools. */
@@ -573,8 +594,8 @@ export class AppServer {
     return `${uriPrefix(this.name)}/${typeof type === "string" ? type : type.name}/${encodeURIComponent(key)}`
   }
 
-  /** A fragment instance's URI: the record id for record cards, base64url of the sorted params' JSON otherwise. */
-  fragmentUri(instance: FragmentInstance): string {
+  /** An artifact instance's URI: the record id for record cards, base64url of the sorted params' JSON otherwise. */
+  artifactUri(instance: ArtifactInstance): string {
     if (this.#entities.has(instance.type)) return this.uri(instance.type, String(instance.params.id ?? ""))
     return this.uri(instance.type, b64url(sortedJson(instance.params)))
   }
@@ -591,7 +612,7 @@ export class AppServer {
       return null
     }
     if (this.#entities.has(type)) return { type, key, params: { id: key } }
-    if (this.#fragments.has(type)) {
+    if (this.#artifacts.has(type)) {
       try {
         const params = JSON.parse(unb64url(key)) as unknown
         if (params && typeof params === "object" && !Array.isArray(params)) return { type, key, params: params as Record<string, unknown> }
@@ -604,6 +625,111 @@ export class AppServer {
 
   #allPermissions(): string[] {
     return [...this.#permissions.keys()]
+  }
+
+  /** Whether the caller administers the app (only Clegra callers have app administrators). */
+  #isAdmin(caller: Caller): boolean {
+    return caller.clegra?.admin === true
+  }
+
+  /**
+   * The app's own permissions of a Clegra caller (M1): a company administrator is an app administrator (every
+   * permission) unless `companyAdmin: "member"`; anyone else has what an administrator assigned, or the declared
+   * defaults (`default: true`) until then.
+   */
+  async #grantOf(tenant: string, sub: string, companyRole: "admin" | "member"): Promise<{ admin: boolean; permissions: Set<string> }> {
+    const grant = await this.#store.roles!.get(tenant, sub)
+    const admin = (companyRole === "admin" && this.options.auth?.clegra?.companyAdmin !== "member") || (grant?.assigned === true && grant.admin)
+    const known = this.#allPermissions()
+    if (admin) return { admin, permissions: new Set(known) }
+    if (grant?.assigned) return { admin, permissions: new Set(grant.permissions.filter((p) => known.includes(p))) }
+    return { admin, permissions: new Set([...this.#permissions.entries()].filter(([, p]) => p.default === true).map(([id]) => id)) }
+  }
+
+  /** «Who has what» in a tenant: every person the app knows (assigned or seen), with what they have here now. */
+  async whoHasWhat(tenant: string): Promise<(Omit<Grant, "permissions" | "admin"> & { admin: boolean; permissions: string[]; source: "company-admin" | "assigned" | "default" })[]> {
+    if (!this.#store.roles) throw new Error("store: roles are kept in the store's `roles` (MemoryStore and SqlStore have it)")
+    const out = []
+    for (const g of await this.#store.roles.list(tenant)) {
+      const now = await this.#grantOf(tenant, g.sub, g.companyRole ?? "member")
+      const source = g.companyRole === "admin" && this.options.auth?.clegra?.companyAdmin !== "member" ? ("company-admin" as const) : g.assigned ? ("assigned" as const) : ("default" as const)
+      out.push({ ...g, admin: now.admin, permissions: [...now.permissions].sort(), source })
+    }
+    return out
+  }
+
+  /**
+   * The app's roles (spec §7, «Roles»), for its own permissions page: who has what in a tenant, and what an
+   * administrator assigns. `sub` is the person's pairwise id (`ctx.person.id` of a Clegra caller).
+   */
+  get roles() {
+    const store = () => {
+      if (!this.#store.roles) throw new Error("store: roles are kept in the store's `roles` (MemoryStore and SqlStore have it)")
+      return this.#store.roles
+    }
+    return {
+      list: (tenant: string) => this.whoHasWhat(tenant),
+      get: (tenant: string, sub: string) => store().get(tenant, sub),
+      /** Assigns a person's permissions (only declared ones) or makes them an administrator. Check `ctx.admin` before calling it from a handler. */
+      assign: async (tenant: string, sub: string, grant: { admin?: boolean; permissions?: string[] }) => {
+        const known = new Set(this.#allPermissions())
+        const unknown = (grant.permissions ?? []).filter((p) => !known.has(p))
+        if (unknown.length) throw new AppError("invalid_input", `Not permissions of this app: ${unknown.join(", ")}.`)
+        await store().assign(tenant, sub, { admin: grant.admin === true, permissions: grant.permissions ?? [] })
+      },
+      remove: (tenant: string, sub: string) => store().remove(tenant, sub),
+    }
+  }
+
+  /**
+   * One event from Clegra's core (spec §7, «Events»): what the SDK does itself, then the app's handler. member.removed
+   * drops the person's roles and refuses what was issued to them; app.unassigned and app.uninstalled drop the tenant's
+   * roles and refuse what was issued for it; company.suspended refuses what was issued for it. The lifecycle hook
+   * (`lifecycle.installation`) hears app.installed (`enabled`), app.unassigned (`disabled`), app.uninstalled (`uninstalled`).
+   */
+  async #onEvent(event: ClegraEvent): Promise<void> {
+    const clegra = this.#clegra!
+    const roles = this.#store.roles!
+    // What the event refuses is what was issued before it happened (its `at`), not before it arrived.
+    const at = new Date(event.at)
+    if (event.kind === "member.removed" && event.sub) {
+      await clegra.revokePerson(event.tenant, event.sub, at)
+      await roles.remove(event.tenant, event.sub)
+    }
+    if (event.kind === "app.unassigned" || event.kind === "app.uninstalled" || event.kind === "company.suspended") await clegra.closeTenant(event.tenant, at)
+    if (event.kind === "app.unassigned" || event.kind === "app.uninstalled") await roles.clear(event.tenant)
+    const state = event.kind === "app.installed" ? "enabled" : event.kind === "app.unassigned" ? "disabled" : event.kind === "app.uninstalled" ? "uninstalled" : null
+    if (state && this.#lifecycle.installation) {
+      const caller: Caller = { installation: event.tenant, installationId: event.company, person: null, permissions: new Set(this.#allPermissions()), host: "workspace", issuer: clegra.issuer, subject: `company:${event.company}` }
+      await this.#lifecycle.installation(state, this.#context(caller, undefined, []))
+    }
+    await this.options.auth?.clegra?.events?.[event.kind]?.(event)
+  }
+
+  /** `POST <path>/events`: one event the core signed (`application/jwt`), handled once by its id (a retry of a handled one answers 204 again). */
+  async #events(request: Request): Promise<Response> {
+    const plain = (status: number, body?: unknown) => new Response(body === undefined ? null : JSON.stringify(body), { status, headers: body === undefined ? {} : { "content-type": "application/json" } })
+    if (request.method !== "POST") return new Response(null, { status: 405, headers: { allow: "POST" } })
+    const text = await request.text()
+    if (text.length > 16_384) return plain(413, { error: "too_large" })
+    let event: ClegraEvent
+    try {
+      event = await this.#clegra!.verifyEvent(text.trim())
+    } catch (error) {
+      return plain(401, { error: "invalid_event", error_description: error instanceof AuthError ? error.message : "not a valid event" })
+    }
+    const key = `clegra:event:${event.id}`
+    const existing = await this.#store.begin(key, event.kind, 3600_000)
+    if (existing) return existing.result === undefined ? plain(409, { error: "in_progress" }) : plain(204)
+    try {
+      await this.#onEvent(event)
+    } catch (error) {
+      await this.#store.abandon(key)
+      console.error(`[${PROTOCOL_ID}] event ${event.kind} ${event.id}`, error)
+      return plain(500, { error: "handler_failed" })
+    }
+    await this.#store.finish(key, { args: event.kind, result: true }, 24 * 3600_000)
+    return plain(204)
   }
 
   /** The actions with `later`. */
@@ -651,7 +777,7 @@ export class AppServer {
       if (!caller.person) throw new Error("ctx.notify: this call has no person (a schedule, the installation itself): say who receives it in to")
     } else if (Array.isArray(to)) {
       if (!to.every((id) => typeof id === "string" && id)) throw new Error("ctx.notify: to is a list of person ids")
-    } else if (!to || typeof to !== "object" || typeof to.permission !== "string" || !this.#permissions.has(to.permission)) throw new Error(`ctx.notify: to is person ids or { permission } naming a declared permission${to && typeof to === "object" && "permission" in to ? ` ("${String(to.permission)}" is not one)` : ""}`)
+    } else if (to !== "admins") throw new Error(`ctx.notify: to is a list of person ids or "admins" (the company's administrators), not ${JSON.stringify(to)}`)
   }
 
   /** Notifications as a result carries them, in the caller's language; `to` said (default: the person of `caller`). */
@@ -673,7 +799,8 @@ export class AppServer {
     const locale = caller.locale ?? this.locale
     const host = hostMeta(meta)
     // Settings are the installation's, set by its administrator: only its workspace host says them (also when it runs a later run). A plain client gets the defaults.
-    const sent = ((caller.host === "workspace" || run) && host.settings && typeof host.settings === "object" && !Array.isArray(host.settings) ? host.settings : {}) as Record<string, unknown>
+    // A Clegra caller (the core's token) never says them: an app's settings live in the app (H5).
+    const sent = (((caller.host === "workspace" && !caller.clegra) || run) && host.settings && typeof host.settings === "object" && !Array.isArray(host.settings) ? host.settings : {}) as Record<string, unknown>
     const settings: Record<string, unknown> = {}
     for (const [id, s] of this.#settings) {
       const v = sent[id]
@@ -690,11 +817,20 @@ export class AppServer {
       can: (p) => caller.permissions.has(p),
       locale,
       host: caller.host,
+      actor: caller.clegra?.actor ?? null,
+      admin: this.#isAdmin(caller),
       settings,
       call,
       schedule,
       later: run?.later ?? null,
       cancelLater: async (id) => (this.#store.later ? this.#store.later.cancel(String(id), caller.installation) : false),
+      rateLimit: async (name, limit) => {
+        if (!/^[A-Za-z0-9._:-]{1,64}$/.test(name)) throw new Error("ctx.rateLimit: name is letters, digits, . _ : -; at most 64")
+        if (!Number.isInteger(limit.max) || limit.max < 1 || !Number.isInteger(limit.seconds) || limit.seconds < 1) throw new Error("ctx.rateLimit: max and seconds are whole numbers from 1")
+        const who = limit.per === "tenant" ? "" : `:${caller.issuer}:${caller.subject}`
+        const count = await this.#store.hit(`rate:${name}:${caller.installation}${who}`, limit.seconds * 1000)
+        if (count > limit.max) throw new AppError("rate_limited", `Too many requests: at most ${limit.max} every ${limit.seconds} seconds. Try again later.`, { retryAfterSeconds: limit.seconds })
+      },
       t: (label) => say(label, locale, this.locale),
       notify: (n) => {
         this.#checkNotification(n, caller)
@@ -718,13 +854,13 @@ export class AppServer {
     return caller.host !== "plain" || entity.tools.get.plain
   }
 
-  /** The same for a fragment type. */
-  #canShow(f: FragmentRecord, caller: Caller): boolean {
+  /** The same for an artifact type. */
+  #canShow(f: ArtifactRecord, caller: Caller): boolean {
     if (f.config.permission && !caller.permissions.has(f.config.permission)) return false
     return caller.host !== "plain" || f.tool.plain
   }
 
-  /** Whether a URI inside a fragment's data points to something this caller reaches (a URI of another app is not ours to judge). */
+  /** Whether a URI inside an artifact's data points to something this caller reaches (a URI of another app is not ours to judge). */
   #uriVisible(uri: unknown, caller: Caller): boolean {
     if (typeof uri !== "string") return true
     const parsed = this.parseUri(uri)
@@ -867,12 +1003,12 @@ export class AppServer {
     return out
   }
 
-  /** A resolved fragment's data as a model reads it (a record's untrusted fields; every text of a fragment declared `untrusted`). */
-  #markResolved(r: { fragment: { type: string }; state: string; data?: unknown }, base: string, pointers: string[]): unknown {
+  /** A resolved artifact's data as a model reads it (a record's untrusted fields; every text of an artifact declared `untrusted`). */
+  #markResolved(r: { artifact: { type: string }; state: string; data?: unknown }, base: string, pointers: string[]): unknown {
     if (r.state !== "ok" || !r.data || typeof r.data !== "object") return r.data
-    const entity = this.#entities.get(r.fragment.type)
+    const entity = this.#entities.get(r.artifact.type)
     if (entity) return this.#markRow(entity, r.data as Record<string, unknown>, `${base}/data`, pointers)
-    return this.#fragments.get(r.fragment.type)?.config.untrusted ? markAll(r.data, `${base}/data`, pointers, TEMPLATE_KEYS) : r.data
+    return this.#artifacts.get(r.artifact.type)?.config.untrusted ? markAll(r.data, `${base}/data`, pointers, TEMPLATE_KEYS) : r.data
   }
 
   #marks(pointers: string[]) {
@@ -1089,18 +1225,18 @@ export class AppServer {
     }
   }
 
-  /** One fragment instance as this caller may see it now. */
-  async #resolve(instance: FragmentInstance, caller: Caller, ctx: Context) {
-    const uri = this.fragmentUri(instance)
-    const fragment = { app: this.name, type: instance.type, params: instance.params }
+  /** One artifact instance as this caller may see it now. */
+  async #resolve(instance: ArtifactInstance, caller: Caller, ctx: Context) {
+    const uri = this.artifactUri(instance)
+    const artifact = { app: this.name, type: instance.type, params: instance.params }
     const entity = this.#entities.get(instance.type)
     if (entity) {
-      if (!this.#canSee(entity, caller)) return { fragment, uri, state: "no-access" as const }
+      if (!this.#canSee(entity, caller)) return { artifact, uri, state: "no-access" as const }
       const row = await entity.config.get(String(instance.params.id ?? ""), ctx)
-      if (!row) return { fragment, uri, state: "gone" as const }
+      if (!row) return { artifact, uri, state: "gone" as const }
       const data = this.#strip(entity, row as Record<string, unknown>, caller)
       return {
-        fragment,
+        artifact,
         uri,
         state: "ok" as const,
         template: "record" as const,
@@ -1111,18 +1247,18 @@ export class AppServer {
         view: { kind: "record", tool: entity.tools.get.name, fields: this.#visibleFields(entity, caller).map((f) => this.#column(f, caller)), actions: this.#recordActions(entity, caller) },
       }
     }
-    const f = this.#fragments.get(instance.type)
-    if (!f) return { fragment, uri, state: "gone" as const }
-    if (!this.#canShow(f, caller)) return { fragment, uri, state: "no-access" as const }
+    const f = this.#artifacts.get(instance.type)
+    if (!f) return { artifact, uri, state: "gone" as const }
+    if (!this.#canShow(f, caller)) return { artifact, uri, state: "no-access" as const }
     const parsed = f.config.params.safeParse(instance.params)
-    if (!parsed.success) return { fragment, uri, state: "gone" as const }
+    if (!parsed.success) return { artifact, uri, state: "gone" as const }
     let data = (await f.config.data(parsed.data as never, ctx)) as Record<string, unknown> | null
-    if (!data) return { fragment, uri, state: "gone" as const }
+    if (!data) return { artifact, uri, state: "gone" as const }
     // What a template links to is shown only to who reaches it: a card of a record out of reach is no access, such items leave a list.
-    if (f.config.template === "card" && !this.#uriVisible(data.uri, caller)) return { fragment, uri, state: "no-access" as const }
+    if (f.config.template === "card" && !this.#uriVisible(data.uri, caller)) return { artifact, uri, state: "no-access" as const }
     if (f.config.template === "list" && Array.isArray(data.items)) data = { ...data, items: (data.items as { uri?: unknown }[]).filter((i) => this.#uriVisible(i?.uri, caller)) }
     const actions = (f.config.actions ?? []).map((h) => this.#actions.get(h.tool)).filter((a): a is ActionRecord => Boolean(a && this.#mayUse(a, caller))).map((a) => this.#actionInfo(a, caller))
-    return { fragment, uri, state: "ok" as const, template: f.config.template ?? "view", title: this.#t(caller, f.config.title), data, ...(actions.length ? { actions } : {}) }
+    return { artifact, uri, state: "ok" as const, template: f.config.template ?? "view", title: this.#t(caller, f.config.title), data, ...(actions.length ? { actions } : {}) }
   }
 
   // ------------------------------------------------------------ calls
@@ -1185,17 +1321,30 @@ export class AppServer {
     try {
       if (laterRefused) return laterRefused
       let proven: { proof: string; iat: number } | null = null
-      if (a.write && a.confirm === "always" && caller.host === "workspace") {
+      const confirmRequired = (why: string) => {
+        const card = a.entity && record ? this.#recordCard(a.entity, this.#strip(a.entity, record, caller), caller) : null
+        return failure("confirmation_required", `${this.#t(caller, a.config.title)} needs the person's confirmation (${why}).`, {
+          confirm: { tool: a.tool, title: this.#t(caller, a.config.title), ...(a.entity && record ? { record: { uri: this.uri(a.entity.name, String(record.id)), ...card } } : {}), input: received, ...(a.later && until !== undefined ? { later: { at: received[a.later.at], until } } : {}) },
+        })
+      }
+      if (a.write && a.confirm === "always" && caller.clegra) {
+        const c = caller.clegra
+        if (c.actor) {
+          // An agent (Clegra's on a server, or one on the person's device): the person confirmed on their device, the core minted it, the device signed over it.
+          try {
+            await this.#clegra!.checkConfirmation(hostMeta(meta).confirmation, { sub: caller.subject, company: c.company, tool: a.tool, args: received, deviceJkt: c.actor.kind === "device-agent" ? c.actor.id : c.personJkt })
+          } catch (error) {
+            return confirmRequired(error instanceof AuthError ? error.message : "no valid confirmation")
+          }
+        } else if (hostMeta(meta).confirmed !== true) {
+          // The person, from a Clegra client: the UI that sends the call (the app's own view, or the client drawing the app's form) asked them first and says so.
+          return confirmRequired("ask the person, then call again with _meta.clegra.confirmed: true")
+        }
+      } else if (a.write && a.confirm === "always" && caller.host === "workspace") {
         const proof = hostMeta(meta).confirmation
         const checked = typeof proof === "string" ? await this.#verifier.checkConfirmation(proof, { issuer: caller.issuer, subject: caller.subject, installation: caller.installationId, tool: a.tool, args: received, call: ctx.call, ...(until !== undefined ? { until } : {}) }, request.trust) : { ok: false as const, why: "no proof" }
         if (checked.ok) proven = { proof: proof as string, iat: checked.iat }
-        const why = checked.ok ? null : checked.why
-        if (why) {
-          const card = a.entity && record ? this.#recordCard(a.entity, this.#strip(a.entity, record, caller), caller) : null
-          return failure("confirmation_required", `${this.#t(caller, a.config.title)} needs the person's confirmation (${why}).`, {
-            confirm: { tool: a.tool, title: this.#t(caller, a.config.title), ...(a.entity && record ? { record: { uri: this.uri(a.entity.name, String(record.id)), ...card } } : {}), input: received, ...(a.later && until !== undefined ? { later: { at: received[a.later.at], until } } : {}) },
-          })
-        }
+        if (!checked.ok) return confirmRequired(checked.why)
       }
       // A plain client that can elicit (MCP 2026-07-28 input requests) is asked to confirm an `always` write; others rely on the tool's destructiveHint.
       if (a.write && a.confirm === "always" && caller.host === "plain" && mctx && elicits(mctx)) {
@@ -1362,8 +1511,8 @@ export class AppServer {
     return `ui://${this.name}/entities/${entity}`
   }
 
-  #fragmentViewUri(type: string): string {
-    return `ui://${this.name}/fragments/${type}`
+  #artifactViewUri(type: string): string {
+    return `ui://${this.name}/artifacts/${type}`
   }
 
   /** A tool's view; `appOnly`: the tool of an app-only item, which no model is given (MCP Apps `visibility: ["app"]`, ChatGPT `openai/visibility: private`). */
@@ -1396,7 +1545,7 @@ export class AppServer {
         pages: s.pages.flatMap((name) => {
           const p = this.#pages.get(name)
           if (!p || !this.#canOpen(p, caller) || p.config.kind === "record") return []
-          const badge = p.config.badge ? this.#fragments.get(p.config.badge) : undefined
+          const badge = p.config.badge ? this.#artifacts.get(p.config.badge) : undefined
           return [{ name, title: this.#t(caller, p.config.title), tool: p.tool.name, ...(badge && this.#canShow(badge, caller) ? { badge: badge.tool.name } : {}) }]
         }),
       }))
@@ -1440,6 +1589,31 @@ export class AppServer {
     return z.object({})
   }
 
+  /**
+   * Every view the app declares (the SDK's generated view, page, entity and artifact views), by URI: what
+   * `resources/read` returns and what `<path>/clegra/views/…` serves (spec §5.3).
+   */
+  #viewDocuments(): Map<string, ViewDocument> {
+    const o = this.options
+    const t = (l: Label | undefined) => say(l, this.locale, this.locale)
+    const views = new Map<string, ViewDocument>()
+    const view = (uri: string, title: string, html: () => string | Promise<string>, src?: ViewSource) => {
+      const csp = src?.csp ?? {}
+      const ui = { csp, ...(src && "prefersBorder" in src && src.prefersBorder !== undefined ? { prefersBorder: src.prefersBorder } : {}) }
+      views.set(uri, { title, html, ui })
+    }
+    view(this.#viewUri(), `${t(o.title)} view`, () => viewHtml(t(o.title)))
+    for (const p of this.#allPages()) {
+      const c = p.config
+      if (c.kind !== "custom" && c.view) view(this.#pageViewUri(p.name), t(c.title ?? p.name), () => (typeof c.view!.html === "function" ? c.view!.html() : c.view!.html), c.view)
+      else if (c.kind === "dashboard") view(this.#pageViewUri(p.name), t(c.title), () => viewHtml(t(c.title), { tool: p.tool.name }))
+      if (c.kind === "custom" && "view" in c) view(this.#pageViewUri(p.name), t(c.title), () => (typeof c.view.html === "function" ? c.view.html() : c.view.html), c.view)
+    }
+    for (const e of this.#entities.values()) if (e.config.view) view(this.#entityViewUri(e.name), t(e.config.label), () => (typeof e.config.view!.html === "function" ? e.config.view!.html() : e.config.view!.html), e.config.view)
+    for (const f of this.#artifacts.values()) if (f.config.view) view(this.#artifactViewUri(f.type), t(f.config.title), () => (typeof f.config.view!.html === "function" ? f.config.view!.html() : f.config.view!.html), f.config.view)
+    return views
+  }
+
   /** A fresh McpServer for one request, for this caller (null: manifest and views only). `request`: what `fetch` knows of the HTTP request. */
   createMcpServer(caller: Caller | null, era: "legacy" | "modern" = "legacy", request: RequestInfo = { trust: { dev: Boolean(this.#dev), requestResource: null }, received: new Map() }): McpServer {
     void era
@@ -1450,32 +1624,14 @@ export class AppServer {
       { name: o.name, version: o.version, title: t(o.title), ...(o.description ? { description: t(o.description) } : {}), ...(o.icons ? { icons: o.icons } : {}), ...(o.websiteUrl ? { websiteUrl: o.websiteUrl } : {}) },
       { ...(o.instructions ? { instructions: o.instructions } : {}) },
     )
-    // Resources: the manifest, the SDK's view, page, entity and fragment views.
+    // Resources: the manifest, the SDK's view, page, entity and artifact views.
     s.registerResource("manifest", manifestUri(this.name), { mimeType: "application/json", description: "The app's manifest (what hosts read to mount the app)" }, async () => ({
       contents: [{ uri: manifestUri(this.name), mimeType: "application/json", text: JSON.stringify(this.manifest()) }],
     }))
-    const view = (uri: string, title: string, html: () => string | Promise<string>, src?: ViewSource | { url: string }) => {
-      const csp = src && "url" in src ? { frameDomains: [new URL(src.url).origin] } : src && "csp" in src && src.csp ? src.csp : {}
-      const ui = { csp, ...(src && "prefersBorder" in src && src.prefersBorder !== undefined ? { prefersBorder: src.prefersBorder } : {}) }
-      s.registerResource(title, uri, { mimeType: MCP_APP_MIME_TYPE, _meta: { ui } }, async () => ({ contents: [{ uri, mimeType: MCP_APP_MIME_TYPE, text: await html(), _meta: { ui } }] }))
+    for (const [uri, v] of this.#viewDocuments()) {
+      const ui = v.ui
+      s.registerResource(v.title, uri, { mimeType: MCP_APP_MIME_TYPE, _meta: { ui } }, async () => ({ contents: [{ uri, mimeType: MCP_APP_MIME_TYPE, text: await v.html(), _meta: { ui } }] }))
     }
-    view(this.#viewUri(), `${t(o.title)} view`, () => viewHtml(t(o.title)))
-    // A page on the app's own site (`/embed/…`) is framed at the address the request reached (or the configured one).
-    const origin = request.origin ?? (o.auth?.resource ? new URL(o.auth.resource).origin : null)
-    const absolute = (url: string) => (url.startsWith("/") ? (origin ? new URL(url, origin).href : null) : url)
-    for (const p of this.#allPages()) {
-      const c = p.config
-      if (c.kind !== "custom" && c.view) view(this.#pageViewUri(p.name), t(c.title ?? p.name), () => (typeof c.view!.html === "function" ? c.view!.html() : c.view!.html), c.view)
-      else if (c.kind === "dashboard") view(this.#pageViewUri(p.name), t(c.title), () => viewHtml(t(c.title), { tool: p.tool.name }))
-      if (c.kind === "custom" && "url" in c) {
-        const url = absolute(c.url)
-        // A same-site page signs the viewer in with a ticket (spec §5.1); a page on another site is framed as it is.
-        if (url) view(this.#pageViewUri(p.name), t(c.title), () => urlPageHtml(t(c.title), url, c.url.startsWith("/") ? { tool: EMBED_TOOL, page: p.name } : null), { url })
-      }
-      if (c.kind === "custom" && "view" in c) view(this.#pageViewUri(p.name), t(c.title), () => (typeof c.view.html === "function" ? c.view.html() : c.view.html), c.view)
-    }
-    for (const e of this.#entities.values()) if (e.config.view) view(this.#entityViewUri(e.name), t(e.config.label), () => (typeof e.config.view!.html === "function" ? e.config.view!.html() : e.config.view!.html), e.config.view)
-    for (const f of this.#fragments.values()) if (f.config.view) view(this.#fragmentViewUri(f.type), t(f.config.title), () => (typeof f.config.view!.html === "function" ? f.config.view!.html() : f.config.view!.html), f.config.view)
 
     if (!caller) {
       this.options.mcp?.(s, null)
@@ -1488,6 +1644,9 @@ export class AppServer {
       // A schedule's run is the installation's, of that schedule's own tool: anything else naming a schedule is refused.
       const scheduleWhy = this.#scheduleProblem(name, caller, ctx.mcpReq._meta as Record<string, unknown> | undefined)
       if (scheduleWhy) return failure("permission_denied", `Not a run of this schedule: ${scheduleWhy}.`)
+      // An automation's run token names the tools the person consented to: no other.
+      const tools = caller.clegra?.grant?.tools
+      if (tools && !tools.includes(name)) return failure("permission_denied", `This automation may not call ${name}: the person consented to ${tools.join(", ")}.`)
       try {
         return withL10n(await shownLabels.run(notes, () => fn(args ?? {}, ctx)), notes)
       } catch (error) {
@@ -1616,7 +1775,7 @@ export class AppServer {
         guard("fetch", async (args, mctx) => {
           const ctx = ctxOf(mctx)
           const parsed = this.parseUri(String(args.id))
-          const hidden = parsed && (this.#entities.get(parsed.type)?.config.visibility === "app" || this.#fragments.get(parsed.type)?.config.visibility === "app")
+          const hidden = parsed && (this.#entities.get(parsed.type)?.config.visibility === "app" || this.#artifacts.get(parsed.type)?.config.visibility === "app")
           if (!parsed || hidden) return failure("not_found", "Unknown id.")
           const r = await this.#resolve({ type: parsed.type, params: parsed.params }, caller, ctx)
           if (r.state !== "ok") return failure(r.state === "no-access" ? "permission_denied" : "not_found", r.state === "no-access" ? "No access." : "Not found.")
@@ -1629,44 +1788,86 @@ export class AppServer {
           const kind = entity ? kindOfRecord(entity.config.kind, record) : null
           return {
             content: text(JSON.stringify({ id: r.uri, title: entity ? this.#markCard(entity, { title }, "", []).title : title, text: JSON.stringify(marked), url: r.uri, metadata: { type: parsed.type, ...(kind ? { kind } : {}) } })),
-            structuredContent: entity ? { entity: entity.name, uri: r.uri, record, refs, view: r.template === "record" ? { ...("view" in r ? r.view : {}), title: this.#t(caller, entity.config.label) } : undefined } : { ...r, view: { kind: "fragment", title } },
+            structuredContent: entity ? { entity: entity.name, uri: r.uri, record, refs, view: r.template === "record" ? { ...("view" in r ? r.view : {}), title: this.#t(caller, entity.config.label) } : undefined } : { ...r, view: { kind: "artifact", title } },
             ...this.#marks(pointers),
           }
         }),
       )
     }
 
-    // Embed tickets (spec §5.1): for hosts and the app's own url-page views, hidden from models.
-    const embed = this.#embed
-    if (embed) {
-      const pages = new Map(this.#embedPages().map((e) => [e.name, e]))
+    // Site tickets (spec §5.1): a Clegra client frames the app's own site. Only a person's own app token from a client
+    // (no agent acting for them), hidden from models.
+    const site = this.#site
+    if (site && caller.clegra && !caller.clegra.actor) {
+      const clegra = caller.clegra
       reg(
-        EMBED_TOOL,
+        SITE_TOOL,
         {
-          title: "Embed ticket",
-          description: "For hosts and the app's views: a one-minute, single-use ticket that signs the viewer in to one of the app's embedded pages, framed by a document of the given origin.",
-          inputSchema: z.object({ page: z.string().describe("The page's name (manifest pages with a same-site url)"), origin: z.string().describe("The origin of the document that frames the page and posts the ticket") }),
-          annotations: { title: "Embed ticket", readOnlyHint: true, idempotentHint: false, destructiveHint: false, openWorldHint: false },
-          _meta: { ui: { visibility: ["app"] }, "openai/visibility": "private", "openai/widgetAccessible": true },
+          title: "Site ticket",
+          description: "For Clegra clients: a one-minute, single-use ticket that signs the person in to the app's own site at a path, framed by a document of the given origin.",
+          inputSchema: z.object({
+            path: z.string().max(2048).optional().describe("The path on the app's own site (default: where the site starts)"),
+            origin: z.string().describe("The origin of the document that frames the site and posts the ticket"),
+            theme: z.enum(["light", "dark"]).optional().describe("The client's theme now"),
+            locale: z.string().max(35).optional().describe("The client's language now"),
+            renew: z.boolean().optional().describe("Only renew the session (the ticket lands on the SDK's renewal page)"),
+          }),
+          annotations: { title: "Site ticket", readOnlyHint: true, idempotentHint: false, destructiveHint: false, openWorldHint: false },
+          _meta: APP_ONLY_META,
         },
-        guard(EMBED_TOOL, async (args) => {
-          const name = String(args.page)
-          const page = this.#pages.get(name)
-          // The same gates as the page's own tool (open_<page>): a page the caller can't open has no ticket either.
-          if (!page || !pages.has(name) || (plainCaller && !page.tool.plain)) return failure("not_found", `No embedded page "${name}".`)
-          if (page.config.permission && !caller.permissions.has(page.config.permission)) return failure("permission_denied", `You may not open ${this.#t(caller, page.config.title)}.`)
+        guard(SITE_TOOL, async (args) => {
+          const appOrigin = this.#appOrigin(request.origin ?? "")
+          if (!appOrigin) return failure("internal", "The app's public origin is unknown (set auth.resource).")
+          const theme = siteThemeOf(args.theme)
+          const locale = siteLocaleOf(args.locale) ?? caller.locale
+          const claim: SiteClaim = {
+            installation: caller.installation,
+            person: caller.person,
+            email: clegra.email,
+            permissions: [...caller.permissions],
+            admin: clegra.admin,
+            ...(locale ? { locale } : {}),
+            ...(theme ? { theme } : {}),
+          }
           try {
-            const appOrigin = this.#appOrigin(request.origin ?? "")
-            if (!appOrigin) return failure("internal", "The app's public origin is unknown (set auth.resource).")
-            const ticket = await embed.issue(caller, name, String(args.origin), appOrigin)
-            return { content: text(`A ticket for «${this.#t(caller, page.config.title)}», valid until ${ticket.expiresAt}.`), structuredContent: ticket }
+            const ticket = await site.issue(claim, { path: args.path, origin: args.origin, renew: args.renew === true, subject: caller.subject }, appOrigin, `${appOrigin}${this.#path}${SITE_PATH}`)
+            return { content: text(`A ticket for ${ticket.path}, valid until ${ticket.expiresAt}.`), structuredContent: ticket }
           } catch (error) {
-            if (!(error instanceof EmbedError)) throw error
+            if (!(error instanceof SiteError)) throw error
             if (error.code === "misconfigured") {
               console.error(`[${PROTOCOL_ID}] ${error.message}`)
-              return failure("internal", "The app can't issue embed tickets (misconfigured).")
+              return failure("internal", "The app can't issue site tickets (misconfigured).")
             }
-            return failure(error.code === "not_found" ? "not_found" : error.status === 403 ? "permission_denied" : "invalid_input", error.message, error.code === "wrong_origin" ? { fields: { origin: error.message } } : undefined)
+            return error.code === "wrong_origin" ? failure("permission_denied", error.message, { fields: { origin: error.message } }) : failure("invalid_input", error.message, { fields: { path: error.message } })
+          }
+        }),
+      )
+    }
+
+    // View tickets (spec §5.3): a Clegra client frames the app's views from the app itself. Only a person's own app
+    // token from a client (no agent acting for them), hidden from models.
+    const tickets = this.#viewTickets
+    if (tickets && caller.clegra && !caller.clegra.actor) {
+      reg(
+        VIEW_TOOL,
+        {
+          title: "View ticket",
+          description: "For Clegra clients: a one-minute, single-use ticket that opens one of the app's views at the app's own address, framed by a document of the given origin.",
+          inputSchema: z.object({ view: z.string().describe("The view's URI (ui://…)"), origin: z.string().describe("The origin of the document that frames the view and posts the ticket") }),
+          annotations: { title: "View ticket", readOnlyHint: true, idempotentHint: false, destructiveHint: false, openWorldHint: false },
+          _meta: APP_ONLY_META,
+        },
+        guard(VIEW_TOOL, async (args) => {
+          const uri = String(args.view)
+          const path = viewPath(uri, this.name)
+          const appOrigin = this.#appOrigin(request.origin ?? "")
+          if (!path || !this.#viewDocuments().has(uri)) return failure("not_found", `No view ${uri}.`)
+          try {
+            const ticket = await tickets.issue({ view: uri, origin: String(args.origin), tenant: caller.installation, sub: caller.subject, action: `${appOrigin}${this.#path}${path}` })
+            return { content: text(`A ticket for the view ${uri}, valid until ${ticket.expiresAt}.`), structuredContent: ticket }
+          } catch (error) {
+            if (!(error instanceof ViewError)) throw error
+            return failure("permission_denied", error.message, { fields: { origin: error.message } })
           }
         }),
       )
@@ -1677,8 +1878,8 @@ export class AppServer {
       RESOLVE_TOOL,
       {
         title: "Resolve",
-        description: "For hosts: fragment and record URIs resolved for the viewer.",
-        inputSchema: z.object({ uris: z.array(z.string()).max(50), want: z.enum(["reference", "fragment", "snapshot"]).optional() }),
+        description: "For hosts: artifact and record URIs resolved for the viewer.",
+        inputSchema: z.object({ uris: z.array(z.string()).max(50), want: z.enum(["reference", "artifact", "snapshot"]).optional() }),
         annotations: { ...read },
         _meta: { ui: { visibility: ["app"] }, "openai/visibility": "private", "openai/widgetAccessible": true },
       },
@@ -1709,7 +1910,7 @@ export class AppServer {
             const entity = this.#entities.get(parsed.type)
             if (entity && "title" in r) this.#markCard(entity, { title: String(r.title), ...("subtitle" in r && typeof r.subtitle === "string" ? { subtitle: r.subtitle } : {}) }, at, pointers)
             if (args.want !== "reference") this.#markResolved(r, at, pointers)
-            const { fragment: _f, view, ...rest } = r as typeof r & { view?: { actions?: { tool: string }[] } }
+            const { artifact: _f, view, ...rest } = r as typeof r & { view?: { actions?: { tool: string }[] } }
             const actions = view?.actions ? { actions: view.actions.map((a) => a.tool) } : "actions" in rest && Array.isArray(rest.actions) ? { actions: (rest.actions as { tool: string }[]).map((a) => a.tool) } : {}
             results.push(args.want === "reference" ? { uri, state: "ok", title: "title" in rest ? rest.title : "", ...("subtitle" in rest ? { subtitle: rest.subtitle } : {}), ...("status" in rest ? { status: rest.status } : {}) } : { ...rest, ...actions, uri })
           }
@@ -1786,13 +1987,13 @@ export class AppServer {
             }
           }
           if (c.kind === "dashboard") {
-            const instances = typeof c.fragments === "function" ? await c.fragments(pageParams as never, ctx) : c.fragments
-            const fragments = []
-            for (const i of instances) fragments.push({ ...(await this.#resolve(i, caller, ctx)), ...(i.size ? { size: i.size } : {}) })
+            const instances = typeof c.artifacts === "function" ? await c.artifacts(pageParams as never, ctx) : c.artifacts
+            const artifacts = []
+            for (const i of instances) artifacts.push({ ...(await this.#resolve(i, caller, ctx)), ...(i.size ? { size: i.size } : {}) })
             const pointers: string[] = []
             return {
-              content: text(JSON.stringify({ page: p.name, fragments: fragments.map((f, i) => ({ uri: f.uri, state: f.state, ...("data" in f ? { data: this.#markResolved(f, `/fragments/${i}`, pointers) } : {}) })) })),
-              structuredContent: { page: p.name, params: pageParams, fragments, view: { kind: "dashboard", title: this.#t(caller, c.title), tool: p.tool.name, args: pageParams, ...this.#pageExtras(p, caller, pageParams) } },
+              content: text(JSON.stringify({ page: p.name, artifacts: artifacts.map((f, i) => ({ uri: f.uri, state: f.state, ...("data" in f ? { data: this.#markResolved(f, `/artifacts/${i}`, pointers) } : {}) })) })),
+              structuredContent: { page: p.name, params: pageParams, artifacts, view: { kind: "dashboard", title: this.#t(caller, c.title), tool: p.tool.name, args: pageParams, ...this.#pageExtras(p, caller, pageParams) } },
               ...this.#marks(pointers),
             }
           }
@@ -1801,29 +2002,46 @@ export class AppServer {
       )
     }
 
-    // Custom fragment types: show_<type>.
-    for (const f of this.#fragments.values()) {
+    // Custom artifact types: show_<type>.
+    for (const f of this.#artifacts.values()) {
       if (!this.#canShow(f, caller)) continue
       const title = t(f.config.title)
       reg(
         f.tool.name,
         {
           title,
-          description: `${t(f.config.description).replace(/[.\s]*$/, "")}. Shows it as a live fragment; don't repeat its data in full.`,
+          description: `${t(f.config.description).replace(/[.\s]*$/, "")}. Shows it as a live artifact; don't repeat its data in full.`,
           inputSchema: f.config.params,
           annotations: { title, ...read },
-          _meta: this.#ui(f.config.view ? this.#fragmentViewUri(f.type) : this.#viewUri(), f.config.visibility === "app"),
+          _meta: this.#ui(f.config.view ? this.#artifactViewUri(f.type) : this.#viewUri(), f.config.visibility === "app"),
         },
         guard(f.tool.name, async (args, mctx) => {
           const r = await this.#resolve({ type: f.type, params: args }, caller, ctxOf(mctx))
           if (r.state !== "ok") return failure(r.state === "no-access" ? "permission_denied" : "not_found", r.state === "no-access" ? "No access." : "Not available.")
           const pointers: string[] = []
-          return { content: text(JSON.stringify({ uri: r.uri, data: this.#markResolved(r, "", pointers) })), structuredContent: { ...r, view: { kind: "fragment", title: this.#t(caller, f.config.title) } }, ...this.#marks(pointers) }
+          return { content: text(JSON.stringify({ uri: r.uri, data: this.#markResolved(r, "", pointers) })), structuredContent: { ...r, view: { kind: "artifact", title: this.#t(caller, f.config.title) } }, ...this.#marks(pointers) }
         }),
       )
     }
     // The installation's own tools: listed only to the installation-level caller (a workspace host, no person).
     if (this.#isInstallation(caller)) this.#installationTools(caller, reg, guard, request)
+    // «Who has what» (M1): for the app's administrators (a company administrator is one unless the app says otherwise).
+    if (caller.clegra && this.#isAdmin(caller)) {
+      reg(
+        ROLES_TOOL,
+        {
+          title: this.#t(caller, { en: "Who has what", it: "Chi ha cosa" }),
+          description: "Read-only: every person of this company the app knows, with their role in the company and the app's permissions they have here (for the company's administrator).",
+          inputSchema: z.object({}),
+          annotations: { title: this.#t(caller, { en: "Who has what", it: "Chi ha cosa" }), ...read },
+        },
+        guard(ROLES_TOOL, async () => {
+          const people = await this.whoHasWhat(caller.installation)
+          const lines = people.map((p) => `${p.name ?? p.sub}: ${p.admin ? "administrator" : p.permissions.join(", ") || "nothing"}`)
+          return { content: text(lines.join("\n") || "Nobody yet."), structuredContent: { people, permissions: [...this.#permissions.entries()].map(([id, p]) => ({ id, label: this.#t(caller, p.label), default: p.default === true })) } }
+        }),
+      )
+    }
     this.options.mcp?.(s, caller)
     return s
   }
@@ -2056,12 +2274,12 @@ export class AppServer {
         return { ...base, entity: c.entity.name, tool: p.tool, ...override, ...(c.sections ? { sections: c.sections.map((s) => ({ title: L(s.title)!, fields: s.fields })) } : {}), ...(p.derived ? { derived: true } : {}) }
       }
       if (c.kind === "dashboard") return { ...base, tool: p.tool, view: this.#pageViewUri(p.name) }
-      return { ...base, tool: p.tool, view: this.#pageViewUri(p.name), ...("url" in c ? { url: c.url } : {}) }
+      return { ...base, tool: p.tool, view: this.#pageViewUri(p.name) }
     })
-    const fragments = [
+    const artifacts = [
       ...[...this.#entities.values()].map((e) => ({ type: e.name, title: L(e.config.label)!, entity: e.name, template: "record" as const, params: { type: "object", properties: { id: { type: "string" } }, required: ["id"] }, tool: e.tools.get, ...(e.config.view ? { view: this.#entityViewUri(e.name) } : {}), ...perm(e.config.permission, `entity "${e.name}"`) })),
-      ...[...this.#fragments.values()].map((f) => {
-        for (const h of f.config.actions ?? []) if (!this.#actions.has(h.tool)) throw new Error(`fragment "${f.type}": action ${h.tool} is not registered`)
+      ...[...this.#artifacts.values()].map((f) => {
+        for (const h of f.config.actions ?? []) if (!this.#actions.has(h.tool)) throw new Error(`artifact "${f.type}": action ${h.tool} is not registered`)
         return {
           type: f.type,
           title: L(f.config.title)!,
@@ -2069,9 +2287,9 @@ export class AppServer {
           ...(f.config.icon ? { icon: f.config.icon } : {}),
           params: plainSchema(jsonSchemaOf(f.config.params, "input")) as Record<string, unknown>,
           ...(f.config.template ? { template: f.config.template } : {}),
-          ...(f.config.view ? { view: this.#fragmentViewUri(f.type) } : {}),
+          ...(f.config.view ? { view: this.#artifactViewUri(f.type) } : {}),
           tool: f.tool,
-          ...perm(f.config.permission, `fragment "${f.type}"`),
+          ...perm(f.config.permission, `artifact "${f.type}"`),
           ...(f.config.actions?.length ? { actions: f.config.actions.map((h) => h.name) } : {}),
           ...(f.config.size ? { size: f.config.size } : {}),
           ...(f.config.untrusted ? { untrusted: true } : {}),
@@ -2107,20 +2325,21 @@ export class AppServer {
       version: this.options.version,
       ...(this.options.description ? { description: L(this.options.description) } : {}),
       ...(this.options.icons ? { icons: this.options.icons } : {}),
+      ...(this.options.accent !== undefined ? { accent: this.options.accent } : {}),
       ...(this.options.publisher ? { publisher: { name: this.options.publisher.name, url: this.options.publisher.url } } : {}),
       locale: this.locale,
       mcp: { url: `${this.#path}/mcp` },
       // The server's own address is what its tokens are for (never a name an app could claim): a host installs the app from it or not at all.
-      auth: { ...(auth.resource ? { resource: auth.resource } : {}), authorizationServers: auth.authorizationServers ?? (auth.issuers ?? []).map((i) => i.issuer) },
+      auth: { ...(auth.resource ? { resource: auth.resource } : {}), authorizationServers: auth.authorizationServers ?? [] },
       view: this.#viewUri(),
       resolveTool: RESOLVE_TOOL,
-      ...(this.#embed ? { embed: { tool: { name: EMBED_TOOL, plain: true }, path: this.#embed.path, frameAncestors: [...this.#embed.frameAncestors] } } : {}),
+      ...(this.#site ? { site: { start: this.#site.start, tool: { name: SITE_TOOL, plain: false } } } : {}),
       ...([...this.#entities.values()].some((e) => e.fields.some((f) => f.search)) ? { searchTool: "search" } : {}),
       ...(Object.keys(this.#kinds).length ? { kinds: Object.fromEntries(Object.entries(this.#kinds).map(([k, d]) => [k, { label: L(d.label)!, properties: d.properties }])) } : {}),
       entities,
       actions,
       pages,
-      fragments,
+      artifacts,
       agents,
       permissions: [...this.#permissions.entries()].map(([id, p]) => ({ id, label: L(p.label)!, ...(p.description ? { description: L(p.description) } : {}), default: p.default === true })),
       settings: [...this.#settings.entries()].map(([id, s]) => ({
@@ -2135,6 +2354,8 @@ export class AppServer {
       ...(this.#allSchedules().length ? { schedules: this.#allSchedules().map((s) => ({ name: s.name, ...(s.name !== LATER_TOOL ? { action: s.action?.name ?? s.tool } : {}), tool: s.tool, every: s.every, maxSeconds: s.maxSeconds })) } : {}),
       ...(notifications.length ? { notifications } : {}),
       ...(Object.keys(lifecycle).length ? { lifecycle } : {}),
+      // Where Clegra's core posts its signed events (H3, M4), and the «who has what» tool (M1).
+      ...(this.#clegra ? { events: { url: `${this.#path}${EVENTS_PATH}` }, rolesTool: ROLES_TOOL } : {}),
     }
     // The rules beyond the schema (spec/src/rules.ts, the same the conformance checks run): a wrong name fails here, at definition time.
     const problems = manifestRuleProblems(this.#manifest)
@@ -2184,21 +2405,54 @@ export class AppServer {
     return `${proto}://${host}`
   }
 
-  async #caller(request: Request, resource: string, trust: RequestTrust): Promise<Caller | Response> {
+  async #caller(request: Request, resource: string, trust: RequestTrust, cors: Record<string, string>): Promise<Caller | Response> {
     const auth = this.options.auth ?? {}
-    const bearer = /^Bearer\s+(.+)$/i.exec(request.headers.get("authorization") ?? "")?.[1]?.trim()
+    const authorization = request.headers.get("authorization") ?? ""
+    const bearer = /^Bearer\s+(.+)$/i.exec(authorization)?.[1]?.trim()
+    const dpopToken = /^DPoP\s+(.+)$/i.exec(authorization)?.[1]?.trim()
     const metadata = `${new URL(resource).origin}/.well-known/oauth-protected-resource${new URL(resource).pathname}`
-    const challenge = (reason: string) =>
+    const quote = (reason: string) => reason.replace(/["\\]/g, "'")
+    // RFC 9449 §7.1: an app that takes only Clegra's DPoP-bound tokens (no resolver of its own, no dev sign-in here)
+    // challenges with the DPoP scheme and the algorithms it takes; one that also takes bearer tokens, with Bearer.
+    const dpopOnly = Boolean(this.#clegra) && !auth.resolve && !trust.dev
+    const scheme = dpopOnly ? `DPoP algs="${DPOP_ALGS}", resource_metadata="${metadata}"` : `Bearer resource_metadata="${metadata}"`
+    const challenge = (reason: string, { credentials = true }: { credentials?: boolean } = {}) =>
       new Response(JSON.stringify({ error: "invalid_token", error_description: reason }), {
         status: 401,
-        headers: { "content-type": "application/json", "www-authenticate": `Bearer resource_metadata="${metadata}", error="invalid_token", error_description="${reason.replace(/"/g, "'")}"`, ...CORS },
+        // RFC 6750 §3.1: a request without any credentials gets no error code.
+        headers: { "content-type": "application/json", "www-authenticate": credentials || !dpopOnly ? `${scheme}, error="invalid_token", error_description="${quote(reason)}"` : `${scheme}, error_description="${quote(reason)}"`, ...cors },
       })
+    if (dpopToken) {
+      // Clegra's core's tokens are bound to the caller's key: `Authorization: DPoP <token>` with a `DPoP` proof.
+      const clegra = this.#clegra
+      if (!clegra) return challenge("this app accepts DPoP-bound tokens only from Clegra's core, and does not trust it (auth.clegra)")
+      try {
+        if (!clegra.issues(dpopToken)) throw new AuthError("the token is not from Clegra's core (its iss)")
+        const v = await clegra.verify(dpopToken, { method: request.method, dpop: request.headers.get("dpop") })
+        const grant = await this.#grantOf(v.tenant, v.sub, v.caller.companyRole)
+        // What a permissions page shows beside the pairwise id: written at most once an hour per person, and again
+        // after the tenant's roles were cleared (an app removed and added again) or the person removed and added again.
+        if (await this.#store.once(`clegra:seen:${v.tenant}:${v.sub}:${await clegra.lifeOf(v.tenant, v.sub)}`, 3600_000)) await this.#store.roles!.seen(v.tenant, v.sub, { name: v.name || null, email: v.caller.email, companyRole: v.caller.companyRole })
+        const locale = typeof v.claims.locale === "string" ? v.claims.locale : undefined
+        return { installation: v.tenant, installationId: v.caller.company, person: { id: v.sub, name: v.name }, permissions: grant.permissions, ...(locale ? { locale } : {}), host: "workspace", issuer: clegra.issuer, subject: v.sub, clegra: { ...v.caller, admin: grant.admin } }
+      } catch (error) {
+        if (!(error instanceof AuthError)) console.error(`[${PROTOCOL_ID}] auth`, error)
+        const reason = error instanceof AuthError ? error.message : "invalid token"
+        const nonce = error instanceof DpopError ? error.nonce : null
+        const code = nonce ? "use_dpop_nonce" : error instanceof DpopError ? "invalid_dpop_proof" : "invalid_token"
+        return new Response(JSON.stringify({ error: code, error_description: reason }), {
+          status: 401,
+          headers: { "content-type": "application/json", "www-authenticate": `DPoP algs="${DPOP_ALGS}", resource_metadata="${metadata}", error="${code}", error_description="${quote(reason)}"`, ...(nonce ? { "dpop-nonce": nonce } : {}), "cache-control": "no-store", ...cors },
+        })
+      }
+    }
+    if (bearer && this.#clegra?.issues(bearer)) return challenge("a token of Clegra's core is bound to a key: send it as Authorization: DPoP <token> with its DPoP proof")
     if (!bearer) {
       if (auth.anonymous) {
         const a = auth.anonymous
         return { installation: tenantOf(a.installation, "anonymous"), installationId: a.installation, person: a.person ?? null, permissions: new Set(a.permissions === "all" ? this.#allPermissions() : a.permissions), ...(a.locale ? { locale: a.locale } : {}), host: "plain", issuer: "anonymous", subject: a.person?.id ?? "anonymous" }
       }
-      return challenge("sign in first")
+      return challenge("sign in first", { credentials: false })
     }
     if (trust.dev) await this.#devStarted()
     try {
@@ -2238,7 +2492,8 @@ export class AppServer {
     this.manifest()
     if (this.#dev) await this.#devStarted()
     const auth = this.options.auth ?? {}
-    if (!this.#dev && !auth.issuers?.length && !auth.resolve && !auth.anonymous) console.warn(`[${PROTOCOL_ID}] nobody can sign in: give auth.resolve (the app's own tokens) or auth.issuers (workspace hosts), or turn on auth.dev while developing`)
+    if (!this.#dev && !auth.clegra && !auth.resolve && !auth.anonymous) console.warn(`[${PROTOCOL_ID}] nobody can sign in: give auth.resolve (the app's own tokens) or auth.clegra (Clegra's core), or turn on auth.dev while developing`)
+    if (auth.clegra && auth.clegra.allowedCompanies === undefined && process.env.NODE_ENV !== "production") console.warn(`[${PROTOCOL_ID}] auth.clegra.allowedCompanies is not set: every company is allowed here; production refuses to start without it`)
     return { devCode: this.#dev?.code ?? null }
   }
 
@@ -2246,8 +2501,8 @@ export class AppServer {
   #productionProblem(): string | null {
     if (process.env.NODE_ENV !== "production") return null
     const auth = this.options.auth ?? {}
-    if ((auth.resolve || auth.issuers?.length) && !auth.resource) return "auth.resource is required in production: this server's public MCP address (https://…/mcp), the only audience its tokens are accepted for"
-    return null
+    if (auth.resolve && !auth.resource) return "auth.resource is required in production: this server's public MCP address (https://…/mcp), the only audience its tokens are accepted for"
+    return this.#clegra?.productionProblem() ?? null
   }
 
   /**
@@ -2259,13 +2514,23 @@ export class AppServer {
     const url = new URL(request.url)
     const origin = this.#origin(request)
     const auth = this.options.auth ?? {}
-    const json = (body: unknown, status = 200, headers: Record<string, string> = {}) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", ...CORS, ...headers } })
+    // With Clegra: exact client origins only, never credentials (H4). Without: any origin, as an open MCP server.
+    const cors = this.#clegra ? this.#clegra.cors(request.headers.get("origin")) : CORS
+    const json = (body: unknown, status = 200, headers: Record<string, string> = {}) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", ...cors, ...headers } })
+    const base = this.#path
+    const path = this.#local(url.pathname)
+    // What a core reads to register the app (spec §7, «Registration») is public and needs no configuration: the manifest, then the
+    // registration document. It comes before the production check, since registering is what gives the app its
+    // registration id; everything else (tokens, events, views, the site, MCP) keeps refusing until the app is configured.
+    if (path === MANIFEST_PATH) return json(this.manifest(), 200, { "cache-control": "public, max-age=30" })
+    if (path === REGISTRATION_PATH && this.#clegra) {
+      // The registration challenge (C2): the core reads it back here to know this URL is the app's.
+      const c = this.#clegra.options
+      if (!c.registrationId || !c.challenge) return json({ error: "not_configured", error_description: "auth.clegra.registrationId and auth.clegra.challenge (CLEGRA_REGISTRATION_ID, CLEGRA_REGISTRATION_CHALLENGE) are not set" }, 404, { "cache-control": "no-store" })
+      return json({ registration_id: c.registrationId, challenge: c.challenge, resource: this.#clegra.resource, issuer: this.#clegra.issuer }, 200, { "cache-control": "no-store" })
+    }
     const problem = this.#productionProblem()
     if (problem) return json({ error: "misconfigured", error_description: problem }, 500)
-    const base = this.#path
-    // The embed ticket exchange (spec §5.1), for a server that hands every request here (@clegra/sdk/node); Next's proxy
-    // answers it before the route (embedProxy).
-    if (this.#embed && url.pathname === this.#embed.exchangePath) return this.embed!.exchange(request)
     const devHere = Boolean(this.#dev) && isLoopback(info.remoteAddress)
     // In dev the server is whatever address the caller reached it by (a tunnel); otherwise only its configured one.
     const requestResource = `${origin}${base}/mcp`
@@ -2273,18 +2538,20 @@ export class AppServer {
     const trust: RequestTrust = { dev: devHere, requestResource: devHere ? requestResource : null }
     // Preflight: the headers the browser asks for are allowed as asked (MCP 2026-07-28 clients send mcp-method, mcp-name, Mcp-Param-*; no cookies are ever used).
     if (request.method === "OPTIONS") {
+      if (this.#clegra) return new Response(null, { status: 204, headers: cors })
       const asked = request.headers.get("access-control-request-headers")
       return new Response(null, { status: 204, headers: { ...CORS, ...(asked && /^[\w\-, ]{1,2000}$/.test(asked) ? { "access-control-allow-headers": asked } : {}), "access-control-max-age": "600", vary: "access-control-request-headers" } })
     }
-    const path = this.#local(url.pathname)
     const notHere = () => new Response(`${localize(this.options.title, this.locale, this.locale)}: MCP at ${base}/mcp, manifest at ${MANIFEST_PATH}`, { status: 404, headers: { "content-type": "text/plain; charset=utf-8" } })
     if (path === null) return notHere()
-    if (path === MANIFEST_PATH) return json(this.manifest(), 200, { "cache-control": "public, max-age=30" })
     if (path === "/" && request.method === "GET" && (request.headers.get("accept") ?? "").includes("application/json")) return json({ name: this.name, manifest: MANIFEST_PATH, mcp: `${base}/mcp` })
     if (path === "/health") return json({ ok: true, name: this.name, version: this.options.version })
+    if (path === EVENTS_PATH && this.#clegra) return this.#events(request)
+    if (path.startsWith(`${VIEWS_PATH}/`) && this.#viewTickets) return this.#serveView(request, path)
+    if ((path === SITE_PATH || path.startsWith(`${SITE_PATH}/`)) && this.#site) return this.#serveSite(request, path)
     if (path === "/.well-known/oauth-protected-resource" || path === `/.well-known/oauth-protected-resource${base}/mcp`) {
-      // Where a client signs a person in. With dev sign-in on it is this server alone: trusted issuers that are hosts sign their own tokens, a client has nothing to ask them.
-      const servers = auth.authorizationServers ?? (devHere ? [`${origin}${base}`] : (auth.issuers ?? []).map((i) => i.issuer))
+      // Where a client signs a person in: the app's own authorization server (with dev sign-in on, this server). Never Clegra's core: its tokens come from Clegra, not by OAuth (M3).
+      const servers = auth.authorizationServers ?? (devHere ? [`${origin}${base}`] : [])
       return json({ resource, authorization_servers: servers, bearer_methods_supported: ["header"], scopes_supported: [OAUTH_SCOPE], resource_name: localize(this.options.title, this.locale, this.locale) })
     }
     if (auth.serve) {
@@ -2300,7 +2567,7 @@ export class AppServer {
       if (answered) return answered
     }
     if (path !== "/mcp") return notHere()
-    const caller = await this.#caller(request, resource, trust)
+    const caller = await this.#caller(request, this.#clegra && !devHere ? this.#clegra.resource : resource, trust, cors)
     if (caller instanceof Response) return caller
     if (!this.options.store && !this.#warnedStore && process.env.NODE_ENV === "production") {
       this.#warnedStore = true
@@ -2319,8 +2586,41 @@ export class AppServer {
     }
     const response = await this.#handler.fetch(request, { authInfo: { token: "verified", clientId: caller.issuer, scopes: [], extra: { caller, request: { trust, received, origin } satisfies RequestInfo } } })
     const headers = new Headers(response.headers)
-    for (const [k, v] of Object.entries(CORS)) headers.set(k, v)
+    for (const [k, v] of Object.entries(cors)) headers.set(k, v)
     return new Response(response.body, { status: response.status, headers })
+  }
+
+  /**
+   * `POST <path>/clegra/views/<view>` with a view ticket (spec §5.3): the view's document, at the app's own origin,
+   * framed only by the client origin the ticket was for. Anything else: a plain refusal, framable by no one.
+   */
+  async #serveView(request: Request, path: string): Promise<Response> {
+    const refuse = (status: number, reason: string) =>
+      new Response(reason, { status, headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store", "content-security-policy": "default-src 'none'; frame-ancestors 'none'", "x-content-type-options": "nosniff", ...(status === 405 ? { allow: "POST" } : {}) } })
+    const uri = `ui://${this.name}/${path.slice(VIEWS_PATH.length + 1)}`
+    const view = viewPath(uri, this.name) === path ? this.#viewDocuments().get(uri) : undefined
+    if (!view) return refuse(404, "no such view")
+    let opened: Awaited<ReturnType<ViewTickets["redeem"]>>
+    try {
+      opened = await this.#viewTickets!.redeem(request, uri)
+    } catch (error) {
+      if (error instanceof ViewError) return refuse(error.status, error.message)
+      throw error
+    }
+    // A person removed, or the app taken from the company, since the ticket: no view either.
+    if (this.#clegra && (await this.#clegra.revoked(opened.tenant, opened.sub, opened.issuedAt))) return refuse(403, "no longer allowed")
+    return new Response(withHost(await view.html(), opened.origin), {
+      status: 200,
+      headers: {
+        "content-type": "text/html; charset=utf-8",
+        "content-security-policy": viewPolicy(view.ui.csp, opened.origin),
+        // same-origin: the view's own requests to the app keep their Origin (under no-referrer a form's is "null");
+        // requests to other origins carry no referrer.
+        "referrer-policy": "same-origin",
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+      },
+    })
   }
 
   /** Whether dev sign-in is on (it then answers loopback callers only). */

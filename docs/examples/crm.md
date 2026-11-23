@@ -20,11 +20,11 @@ verified caller, the permissions, the confirmations and the MCP surface.
 | `lib/crm.ts` | The app's functions: `listDeals(orgId, query)` (filters, search, sort, paging in SQL), `markWon`, `setStage`, `logCall`, `createDeal`, pipeline totals, workspace provisioning |
 | `lib/auth-options.ts`, `lib/auth.ts` | better-auth: email + password, organizations, and the OAuth server for MCP clients (`jwt` + `mcp` + `cimd`) |
 | `lib/site.ts` | The one public address, `CLEGRA_PUBLIC_URL`: the issuer `<origin>/api/auth` and the MCP resource `<origin>/mcp` |
-| `lib/session.ts`, `lib/permissions.ts` | The signed-in member of the active organization; role → permissions |
-| `app/(crm)/…`, `app/embed/pipeline` | Pages and server actions; the board page made to be framed, signed in with a host's ticket (`getEmbedCaller`; `proxy.ts`: `embedProxy`, spec §5.1) |
+| `lib/session.ts`, `lib/permissions.ts` | Who looks: the signed-in member of the active organization, or a Clegra client's person (`getClegraCaller`: the installation as tenant, the caller's permissions); role → permissions |
+| `app/(crm)/…`, `app/layout.tsx`, `proxy.ts` | Pages (pipeline, board, deals, companies, contacts) and server actions: also the CRM's site in a Clegra client (spec §5.1). The root layout loads the bridge (`<ClegraSite />`) and takes the caller's theme and language; `proxy.ts` (`siteProxy`) says who may frame each page |
 | `app/sign-in`, `app/oauth/consent` | better-auth's login and consent pages; they also continue an OAuth authorization |
 | `clegra/app.ts`, `clegra/index.ts` | The app definition, `createCrmApp({ auth, store })`, and the app as served |
-| `clegra/auth.ts` | The app's own `resolve` for better-auth access tokens, the issuer metadata, workspace hosts (`CLEGRA_ISSUERS`) |
+| `clegra/auth.ts` | The app's own `resolve` for better-auth access tokens, the issuer metadata, Clegra's core (`CLEGRA_*`, `clegraFromEnv`) |
 | `app/api/clegra/[...path]/route.ts`, `next.config.ts` | `toNextHandlers` and `withClegra`: MCP at `/mcp`, metadata under `/.well-known/` |
 | `test/` | The lib on PGlite, the MCP surface (`mcp.snapshot.json`), real OAuth tokens (`oauth.test.ts`) |
 
@@ -36,8 +36,9 @@ verified caller, the permissions, the confirmations and the MCP surface.
 | `settings` | `follow_up_days` (number, default 7) |
 | `entities` | `company` (kind `organization`: VAT number as `vatID`, a key filter compared upper-cased without spaces; website as `url`; `erpCustomer`, a `ref.kind("organization")` URI to the same company in another app), `contact` (kind `person`: email as `email`, a key filter compared lower-cased; `ref("company")` as `worksFor`; last call, last note — **untrusted**), `deal` (no kind: the CRM's own; stage as `status`, value as `amount` behind `deals.values`, owner as `person`) |
 | `actions` | `mark_won` (confirm always, notifies), `set_stage` (`"optional"`), `log_call`, `link_erp_customer` (takes a record URI of kind `organization`, stores it, never calls the other app), `create_deal`. All `expose: { plain: true }` |
-| `pages` | `deals`, `companies`, `contacts`, `deal` (record), `pipeline` (dashboard), `forecast` (custom MCP Apps view), `board` (`url: "/embed/pipeline"`: a real page of the app, framed by hosts) |
-| `fragments` | `pipeline_total` (stat), `deals_by_stage` (chart), `closing_soon` (list) |
+| `pages` | `deals`, `companies`, `contacts`, `deal` (record), `pipeline` (dashboard), `forecast` (custom MCP Apps view) |
+| `site` | With Clegra's core only (`auth.clegra`): the CRM's own pages are its site in a Clegra client, tickets and sessions signed with keys derived from `BETTER_AUTH_SECRET` |
+| `artifacts` | `pipeline_total` (stat), `deals_by_stage` (chart), `closing_soon` (list) |
 | `agents` | `sales_assistant` |
 
 ## Handlers are thin
@@ -67,10 +68,11 @@ over MCP.
 
 - **The app's own users** (the app's own `auth.resolve` for better-auth's tokens, see below): the installation is the
   organization id, the person the user id. Names come from the organization's members.
-- **A workspace host** (e.g. a Clegra node, `CLEGRA_ISSUERS`): the installation is
-  `<installation>@<issuer>`, never an organization. On its first call it gets its own copy of the demo
-  data (`provisionWorkspace`: one transaction, idempotent). Its people are named from their tokens and
-  remembered in `people` once they own a deal.
+- **A Clegra company** (Clegra's core, `CLEGRA_ISSUER`): the installation is `<company>@<issuer>`, never an
+  organization. On its first call it gets its own copy of the demo data (`provisionWorkspace`: one transaction,
+  idempotent). Its people are named from their tokens and remembered in `people` once they own a deal; what they may
+  do is the CRM's own roles (a company administrator everything, a member the defaults until assigned more; the
+  `clegra_store_roles` table, migration `0006_clegra_store_roles.sql`).
 
 Both are just values of `org_id`; `tenants` records which kind each one is.
 
@@ -124,8 +126,8 @@ these hold:
 
 Then the membership and role are read live, so a role change or a removed member takes effect on the next call. It
 returns `{ installation: orgId, person, permissions: permissionsForRole(role) }`. `crmAuth()` puts it next to
-`serve` (better-auth's RFC 8414 / OIDC metadata at the root), `authorizationServers`, `resource` and the
-workspace-host `issuers`.
+`serve` (better-auth's RFC 8414 / OIDC metadata at the root), `authorizationServers`, `resource` and, with
+`CLEGRA_ISSUER`, `clegra` (Clegra's core).
 
 ```sh
 T=$(CLEGRA_OAUTH_EMAIL=alice@orbit.example CLEGRA_OAUTH_PASSWORD=… npm run --silent token -- http://localhost:3920)

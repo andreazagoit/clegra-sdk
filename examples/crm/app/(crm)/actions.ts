@@ -8,7 +8,7 @@ import { revalidatePath } from "next/cache"
 import { auth } from "@/lib/auth"
 import { createDeal, CrmError, logCall, markWon, setStage, type Stage } from "@/lib/crm"
 import { STAGE_LABELS } from "@/lib/format"
-import { requirePermission } from "@/lib/session"
+import { ownerOf, requirePermission } from "@/lib/session"
 
 const MOVABLE = ["lead", "qualified", "proposal", "lost"] as const satisfies readonly Exclude<Stage, "won">[]
 
@@ -91,7 +91,7 @@ export async function createDealAction(form: FormData) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(closeDate) || Number.isNaN(Date.parse(closeDate))) redirect(withMessage("/deals", "error", "Pick a close date."))
   let id: string
   try {
-    id = (await createDeal(member.orgId, { id: member.user.id }, { name, company, value, closeDate })).id
+    id = (await createDeal(member.orgId, ownerOf(member), { name, company, value, closeDate })).id
   } catch (error) {
     redirect(withMessage("/deals", "error", reason(error)))
   }

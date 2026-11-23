@@ -77,7 +77,7 @@ function makeApp(deals: Deal[]) {
         },
       },
     },
-    fragments: {
+    artifacts: {
       open_deals: { title: "Open deals", description: "How many deals are open", params: z.object({}), template: "stat", data: () => ({ label: "Open", value: deals.filter((d) => d.stage === "open").length }) },
     },
     pages: {

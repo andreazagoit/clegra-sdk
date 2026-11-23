@@ -2,6 +2,7 @@ import type { z } from "zod"
 
 import type { EntityKind, PropertyDef } from "../spec/src/kinds"
 import type { Caller, Person } from "./auth"
+import type { Actor } from "./clegra"
 import type { Label } from "./labels"
 import type { FieldInfo } from "./meaning"
 
@@ -15,7 +16,15 @@ export type Context = {
   can(permission: string): boolean
   readonly locale: string
   readonly host: Caller["host"]
-  /** The installation's settings (spec §2), as its workspace host sent them, defaults filled in. A plain client's are the defaults. */
+  /**
+   * Who acts for the person (spec §7, «Clegra tokens»): Clegra's agent on a server (`{ kind: "server", id }`, a
+   * delegated or automation call) or an agent on the person's device (`{ kind: "device-agent", id }`); null when the
+   * person calls themselves.
+   */
+  readonly actor: Actor | null
+  /** Whether the caller administers the app (a Clegra company administrator unless `companyAdmin: "member"`, or granted it): who may assign roles. */
+  readonly admin: boolean
+  /** The installation's settings (spec §2), as a dev workspace host sent them, defaults filled in. Clegra callers and plain clients get the defaults: an app's settings live in the app. */
   readonly settings: Readonly<Record<string, unknown>>
   /** The call id (`_meta.clegra.call`), when the host sent one. */
   readonly call: string | null
@@ -25,6 +34,11 @@ export type Context = {
   readonly later: LaterInfo | null
   /** Cancels a pending later run of this tenant: false when there is none with this id, or it already ran or started. */
   cancelLater(id: string): Promise<boolean>
+  /**
+   * Counts this call against a limit named `name`: at most `max` every `seconds`, per person (default) or per tenant
+   * (`per: "tenant"`). Past it, throws an AppError `rate_limited` (the caller sees it, with `retryAfterSeconds`).
+   */
+  rateLimit(name: string, limit: { max: number; seconds: number; per?: "person" | "tenant" }): Promise<void>
   /** A label in the caller's language. */
   t(label: Label | undefined): string
   /**
@@ -38,15 +52,16 @@ export type Context = {
 }
 
 /**
- * `to`: person ids, or everyone of the installation who holds a declared permission (default: the caller's person).
+ * `to`: person ids, or `"admins"`: the company's administrators (default: the caller's person). Who holds what inside
+ * the app is the app's to know: to reach the holders of a permission, the app names them.
  * `type`: one of the app's declared notification types (people mute a type per app).
  */
-export type Notification = { type?: string; title: Label; body?: Label; uri?: string; to?: string[] | { permission: string } }
+export type Notification = { type?: string; title: Label; body?: Label; uri?: string; to?: string[] | "admins" }
 
 /** A later run, as its handler sees it (`ctx.later`): `at` as the person gave it, `until` and `confirmedAt` in epoch seconds. */
 export type LaterInfo = { id: string; at: string; until: number; confirmedAt: number }
 
-/** Who sees an entity, action or fragment: `"app"` keeps it from every model (only views and the host's own UI use it). */
+/** Who sees an entity, action or artifact: `"app"` keeps it from every model (only views and the host's own UI use it). */
 export type Visibility = "app"
 
 /** What a host offers a global action on: an email, or a record of a kind in any app of the workspace. */
@@ -163,7 +178,7 @@ export type ActionHandle = { readonly kind: "action"; readonly name: string; rea
 
 export type Exposure = { plain?: boolean; tool?: string }
 
-export type FragmentInstance = { type: string; params: Record<string, unknown>; size?: "small" | "medium" | "large" }
+export type ArtifactInstance = { type: string; params: Record<string, unknown>; size?: "small" | "medium" | "large" }
 
 type PageBase<P extends z.ZodObject> = {
   title: Label
@@ -174,7 +189,7 @@ type PageBase<P extends z.ZodObject> = {
   expose?: Exposure
   /** Global actions offered on the page; the first is its primary. Page params prefill inputs of the same name. */
   actions?: ActionHandle[]
-  /** A `stat` fragment type without required params: its value is the page's count in the navigation. */
+  /** A `stat` artifact type without required params: its value is the page's count in the navigation. */
   badge?: string
 }
 
@@ -189,9 +204,8 @@ export type PageConfig<P extends z.ZodObject = z.ZodObject> =
       view?: ViewSource
     })
   | (Omit<PageBase<P>, "params" | "title" | "actions" | "badge"> & { kind: "record"; entity: EntityHandle; title?: Label; sections?: { title: Label; fields: string[] }[]; view?: ViewSource })
-  | (PageBase<P> & { kind: "dashboard"; fragments: FragmentInstance[] | ((params: z.infer<P>, ctx: Context) => FragmentInstance[] | Promise<FragmentInstance[]>); view?: ViewSource })
+  | (PageBase<P> & { kind: "dashboard"; artifacts: ArtifactInstance[] | ((params: z.infer<P>, ctx: Context) => ArtifactInstance[] | Promise<ArtifactInstance[]>); view?: ViewSource })
   | (PageBase<P> & { kind: "custom"; view: ViewSource })
-  | (PageBase<P> & { kind: "custom"; url: string })
 
 /** An MCP Apps view's document, with the origins it may reach (MCP Apps CSP). */
 export type ViewSource = { html: string | (() => string | Promise<string>); csp?: { connectDomains?: string[]; resourceDomains?: string[]; frameDomains?: string[] }; prefersBorder?: boolean }
@@ -205,7 +219,7 @@ export type TemplateData = {
   chart: { kind: "bar" | "line" | "pie"; points: { label: string; value: number }[]; format?: "number" | "money"; currency?: string }
 }
 
-export type FragmentConfig<P extends z.ZodObject, T extends Template> = {
+export type ArtifactConfig<P extends z.ZodObject, T extends Template> = {
   title: Label
   description: Label
   icon?: string

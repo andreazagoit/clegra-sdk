@@ -334,19 +334,20 @@ export const appAuth: AuthOptions = {
 The gaps: no permissions in the token, so there is one lookup per call (cache it). Not confirmed: whether the
 metadata announces CIMD once it is on, and which SDK call returns the person's name.
 
-## Embedded pages: no second sign-in either
+## Your own site in Clegra: no second sign-in either
 
-A page of your app framed by a host (`url: "/embed/…"`, spec §5.1) never sees your session cookie: the frame is on
-another site, and browsers block that cookie there. You don't add a sign-in for it. The host, which already holds the
-viewer's token, asks your app for a one-minute ticket (`clegra_embed`); your app checks the token with the same
-`resolve` as every call, and the ticket carries exactly the caller `resolve` returned (installation, person,
-permissions). The frame posts it to `/embed/_ticket` and gets a partitioned cookie for that page only.
+Your site framed by a Clegra client (spec §5.1) never sees your session cookie: the frame is on another site, and
+browsers block that cookie there. You don't add a sign-in for it. The client, which already holds the person's app
+token, asks your app for a one-minute ticket (`clegra_site`); the ticket carries exactly the caller the token names
+(installation, person, email, the app's own permissions, admin, locale, theme). The frame posts it to `/clegra/site`
+and gets a partitioned cookie for the whole site.
 
-- Your part: `embed: { frameAncestors, secret }` in `defineApp`, `embedProxy(app)` in `proxy.ts`,
-  `getEmbedCaller(app, "<page>")` in the page. The secret signs tickets and sessions (HKDF-derived keys: your one
-  app secret, e.g. better-auth's, may be reused). Without it the tool and the exchange answer `misconfigured`.
-- The page's permissions are the ticket's for the session's life (10 minutes by default, `embed.sessionSeconds`):
-  re-read anything live (membership, role) in the page when that matters.
+- Your part: `site: { secret }` in `defineApp` (with `auth.clegra`), `siteProxy(app)` in `proxy.ts`, `<ClegraSite />`
+  in the root layout, `getClegraCaller(app)` wherever you read who is signed in (accept it as a member beside your
+  own session). The secret signs tickets and sessions (HKDF-derived keys: your one app secret, e.g. better-auth's, may
+  be reused). Without it the tool and the exchange answer `misconfigured`.
+- The permissions are the ticket's for the session's life (10 minutes by default, `site.sessionSeconds`; the client
+  renews it before it ends): a person removed from the company loses it at once (the core's events).
 - Used tickets are kept in the app's `store` (`SqlStore`'s `clegra_store` table): no new table.
 
 ## Locally, before any of this
@@ -355,3 +356,12 @@ permissions). The frame posts it to `/embed/_ticket` and gets a partitioned cook
 refused whenever `NODE_ENV` is `production`, which `next build`, `next start` and every deployment set. Use it to see
 the app in the Inspector on day one, and keep it as you plug in one of the recipes above. The
 [quickstart](quickstart.md) has the details.
+
+## Clegra's people beside your own
+
+Your sign-in and Clegra's core can sit side by side: `auth: { resource, resolve, authorizationServers, clegra:
+clegraFromEnv()! }`. Your `resolve` keeps seeing only your own tokens; a token of Clegra's core (sent as
+`Authorization: DPoP …`) is verified by the SDK and never reaches it. Your protected-resource metadata keeps naming
+your own authorization server: Clegra's core is not one (spec §7, «Clegra tokens»). A Clegra company is a tenant of
+its own (`<company>@<issuer>`, never one of your organizations), and what its people may do is your app's roles
+(`app.roles`), not your sign-in's.

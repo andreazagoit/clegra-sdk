@@ -8,6 +8,7 @@ import { signOutAction } from "./actions"
 
 const NAV = [
   { href: "/", label: "Pipeline" },
+  { href: "/board", label: "Board" },
   { href: "/deals", label: "Deals" },
   { href: "/companies", label: "Companies" },
   { href: "/contacts", label: "Contacts" },
@@ -33,9 +34,12 @@ export default async function CrmLayout({ children }: { children: ReactNode }) {
             <span className="text-zinc-600">
               {member.user.name} <span className="text-zinc-400">({member.role})</span>
             </span>
-            <form action={signOutAction}>
-              <button type="submit" className={secondaryButtonClass}>Sign out</button>
-            </form>
+            {/* Shown by a Clegra client, the person signs in and out there. */}
+            {member.via === "crm" ? (
+              <form action={signOutAction}>
+                <button type="submit" className={secondaryButtonClass}>Sign out</button>
+              </form>
+            ) : null}
           </div>
         </div>
       </header>

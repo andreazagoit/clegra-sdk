@@ -5,17 +5,16 @@ import { test } from "node:test"
 
 import "./setup"
 
-import { embedProxy } from "@clegra/sdk/next"
-import { installationClient, testClient } from "@clegra/sdk/testing"
+import { deviceKey, installationClient, testClient, testCore } from "@clegra/sdk/testing"
 import { checkApp, formatReport } from "@clegra/sdk/spec"
 import { and, eq } from "drizzle-orm"
 
 import { deals } from "../db/schema"
-import { provisionWorkspace } from "../lib/crm"
+import { boardDeals, provisionWorkspace } from "../lib/crm"
 import { db } from "../lib/db"
 import { PERMISSIONS } from "../lib/permissions"
 import { createCrmApp } from "../clegra/app"
-import { crmAuth, issuersFromEnv } from "../clegra/auth"
+import { crmAuth } from "../clegra/auth"
 
 // Workspace-host callers, signed by the SDK's dev authority (tests only: the app itself has no dev sign-in).
 const app = createCrmApp({
@@ -34,14 +33,12 @@ const app = createCrmApp({
 // Each test its own installation of the dev host: its own fresh copy of the demo data.
 const tenantOf = (installation: string) => `${installation}@clegra-dev`
 const SITE = "http://127.0.0.1:3920"
-// proxy.ts in front of the embedded pages (spec §5.1); the rest of the site is the clegra route.
-const proxy = embedProxy(app, { publicUrl: SITE })
-const site = (r: Request) => (new URL(r.url).pathname.startsWith("/embed/") ? proxy(r) : app.fetch(r, { remoteAddress: "127.0.0.1" }))
+const site = (r: Request) => app.fetch(r, { remoteAddress: "127.0.0.1" })
 
 test("the manifest lists the CRM", () => {
   const manifest = app.manifest()
   assert.deepEqual(manifest.entities.map((e) => e.name), ["company", "contact", "deal"])
-  assert.deepEqual(manifest.pages.map((p) => p.name).sort(), ["board", "companies", "company", "contact", "contacts", "deal", "deals", "forecast", "pipeline"])
+  assert.deepEqual(manifest.pages.map((p) => p.name).sort(), ["companies", "company", "contact", "contacts", "deal", "deals", "forecast", "pipeline"])
   // The app's roles grant what the manifest declares, nothing else.
   assert.deepEqual((manifest.permissions ?? []).map((p) => p.id).sort(), [...PERMISSIONS].sort())
 })
@@ -72,12 +69,12 @@ test("marking a deal won from a workspace host needs the confirmation", async ()
   assert.equal((closed.structuredContent as { error: { code: string } }).error.code, "conflict")
 })
 
-test("the pipeline dashboard resolves its fragments", async () => {
+test("the pipeline dashboard resolves its artifacts", async () => {
   const c = await testClient(app, { person: "alice", permissions: "all", installation: "dashboard" })
   const r = await c.call("open_pipeline", { days: 365 })
-  const fragments = (r.structuredContent as { fragments: { state: string; template: string; data: Record<string, unknown> }[] }).fragments
-  assert.deepEqual(fragments.map((f) => f.template), ["stat", "chart", "list"])
-  assert.equal(fragments[0]!.data.value, 36500)
+  const artifacts = (r.structuredContent as { artifacts: { state: string; template: string; data: Record<string, unknown> }[] }).artifacts
+  assert.deepEqual(artifacts.map((f) => f.template), ["stat", "chart", "list"])
+  assert.equal(artifacts[0]!.data.value, 36500)
 })
 
 // What ChatGPT, Claude or the MCP Inspector see. The generated MCP surface is part of the app's
@@ -107,7 +104,7 @@ test("pages people use every day: the deals page offers «New deal» prefilled b
   const page = await c.call("open_deals", { company: "co_does_not_matter" })
   const view = (page.structuredContent as { view: { actions?: { tool: string; prefill?: Record<string, unknown> }[]; nav?: { section?: string; pages: { name: string; badge?: string }[] }[] } }).view
   assert.deepEqual(view.actions?.map((a) => [a.tool, a.prefill]), [["create_deal", { company: "co_does_not_matter" }]])
-  assert.deepEqual(view.nav?.map((s) => [s.section, s.pages.map((p) => p.name)]), [["Sales", ["pipeline", "deals", "board", "forecast"]], ["Customers", ["companies", "contacts"]]])
+  assert.deepEqual(view.nav?.map((s) => [s.section, s.pages.map((p) => p.name)]), [["Sales", ["pipeline", "deals", "forecast"]], ["Customers", ["companies", "contacts"]]])
   assert.equal(view.nav?.[0]?.pages.find((p) => p.name === "deals")?.badge, "show_open_deals")
   const badge = await c.call("show_open_deals", {})
   assert.equal(typeof (badge.structuredContent as { data?: { value?: unknown } }).data?.value, "number")
@@ -138,17 +135,30 @@ test("the app passes the conformance checks", async () => {
   const token = await app.devToken({ person: "alice", permissions: "all", installation: "conformance" })
   const report = await checkApp({ url: SITE, token, fetch: site })
   assert.ok(report.ok && report.complete, formatReport(report))
-  assert.ok(report.checks.every((x) => !x.skipped), formatReport(report))
+  // Every check ran, but mcp.confirm and the site's: a Clegra caller's (this is a plain one; this app trusts no core).
+  assert.ok(report.checks.every((x) => !x.skipped || ["mcp.confirm", "site.frame-ancestors", "site.ticket"].includes(x.id)), formatReport(report))
 })
 
-test("hosts come from the environment; one public address names the MCP server and the issuer; no dev sign-in", () => {
-  assert.deepEqual(issuersFromEnv({}), [])
-  assert.deepEqual(issuersFromEnv({ CLEGRA_ISSUERS: "https://node.test|https://node.test/keys" }), [{ issuer: "https://node.test", jwksUri: "https://node.test/keys" }])
-  assert.throws(() => issuersFromEnv({ CLEGRA_ISSUERS: "|https://node.test/keys" }))
+test("as a Clegra company's person the app passes the conformance checks, the site's included", async () => {
+  const RESOURCE = "https://crm.example.com/mcp"
+  const CLIENT = "https://app.clegra.test"
+  const core = await testCore({ resource: RESOURCE })
+  const clegraApp = createCrmApp({ auth: { resource: RESOURCE, clegra: core.options({ clientOrigins: [CLIENT] }) } })
+  const device = await deviceKey()
+  const report = await checkApp({
+    url: "https://crm.example.com",
+    fetch: (r) => clegraApp.fetch(r, { remoteAddress: "203.0.113.7" }),
+    clegra: { token: () => core.appToken({ company: "co-check", sub: "pw-ada", name: "Ada Test", role: "admin", device }), proof: device.proof, clientOrigin: CLIENT },
+  })
+  assert.ok(report.ok, formatReport(report))
+  for (const id of ["site.frame-ancestors", "site.ticket"]) assert.ok(report.checks.some((c) => c.id === id && c.ok && !c.skipped), `${id} ran: ${formatReport(report)}`)
+})
+
+test("Clegra's core comes from the environment; one public address names the MCP server and the issuer; no dev sign-in", () => {
   const local = crmAuth({})
-  assert.deepEqual([local.resource, local.authorizationServers, "dev" in local], ["http://localhost:3920/mcp", ["http://localhost:3920/api/auth"], false])
-  const site = crmAuth({ CLEGRA_PUBLIC_URL: "https://crm.example.com", CLEGRA_ISSUERS: "https://node.test" })
-  assert.deepEqual([site.resource, site.authorizationServers, site.issuers], ["https://crm.example.com/mcp", ["https://crm.example.com/api/auth"], [{ issuer: "https://node.test" }]])
+  assert.deepEqual([local.resource, local.authorizationServers, "dev" in local, "clegra" in local], ["http://localhost:3920/mcp", ["http://localhost:3920/api/auth"], false, false])
+  const site = crmAuth({ CLEGRA_PUBLIC_URL: "https://crm.example.com", CLEGRA_ISSUER: "https://core.example.com", CLEGRA_REGISTRATION_ID: "r-1", CLEGRA_ALLOWED_COMPANIES: "any", CLEGRA_CLIENT_ORIGINS: "https://app.example.com" })
+  assert.deepEqual([site.resource, site.authorizationServers, site.clegra], ["https://crm.example.com/mcp", ["https://crm.example.com/api/auth"], { issuer: "https://core.example.com", registrationId: "r-1", allowedCompanies: "any", clientOrigins: ["https://app.example.com"] }])
   assert.throws(() => crmAuth({ NODE_ENV: "production" }), /CLEGRA_PUBLIC_URL/)
   assert.throws(() => crmAuth({ CLEGRA_PUBLIC_URL: "https://crm.example.com/app" }), /origin/)
   assert.throws(() => crmAuth({ NODE_ENV: "production", CLEGRA_PUBLIC_URL: "http://crm.example.com" }), /https/)
@@ -207,25 +217,52 @@ test("deal owners reach hosts and models by name, never as person ids", async ()
   assert.deepEqual((seen.structuredContent as { refs: { owner: Record<string, string> } }).refs.owner, { "host-person-9": "Carla Test" })
 })
 
-test("the board is embedded with a sign-in ticket: for one page and frame, once, as the caller resolve named", async () => {
-  const HOST = "https://app.clegra.com"
-  const rep = await testClient(app, { person: "ben", permissions: ["deals.view", "deals.edit", "contacts.edit"], installation: "embed" })
-  const t = (await rep.call("clegra_embed", { page: "board", origin: HOST })).structuredContent as { action: string; field: string; ticket: string }
-  // The proxy at the address the ticket names (the dev host's test client reaches the app at http://127.0.0.1).
-  const at = embedProxy(app, { publicUrl: new URL(t.action).origin })
-  const post = (origin: string) => at(new Request(t.action, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", origin, "sec-fetch-dest": "iframe" }, body: new URLSearchParams({ [t.field]: t.ticket }) }))
-  assert.equal((await post("https://chatgpt.com")).status, 403, "a ticket for Clegra's frame is refused in ChatGPT's")
-  const r = await post(HOST)
+test("the CRM's pages are its site in a Clegra client: a site ticket, exchanged once, signs the person in as a member of the company's installation", async () => {
+  const RESOURCE = "https://crm.example.com/mcp"
+  const ORIGIN = "https://crm.example.com"
+  const CLIENT = "https://app.clegra.test"
+  const core = await testCore({ resource: RESOURCE })
+  const clegraApp = createCrmApp({ auth: { resource: RESOURCE, clegra: core.options({ clientOrigins: [CLIENT] }) } })
+  assert.deepEqual(clegraApp.manifest().site, { start: "/", tool: { name: "clegra_site", plain: false } })
+  assert.equal(app.manifest().site, undefined, "no site without Clegra's core")
+  const member = await core.client(clegraApp, { company: "co-site", sub: "pw-bob", name: "Bob Test", role: "member" })
+  const asked = await member.call("clegra_site", { origin: CLIENT, path: "/board", theme: "dark", locale: "it" })
+  assert.ok(!asked.isError, JSON.stringify(asked.structuredContent))
+  const t = asked.structuredContent as { action: string; field: string; ticket: string; path: string }
+  assert.deepEqual([t.action, t.path], [`${ORIGIN}/clegra/site`, "/board"])
+  assert.equal(((await member.call("clegra_site", { origin: "https://evil.example" })) as { isError?: boolean }).isError, true, "no ticket for another origin")
+  // What the client's frame posts: the ticket in a form, never in the address.
+  const post = (origin: string) => clegraApp.fetch(new Request(t.action, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", origin, "sec-fetch-dest": "iframe" }, body: new URLSearchParams({ [t.field]: t.ticket }) }))
+  assert.equal((await post("https://evil.example")).status, 403, "posted from another origin")
+  const r = await post(CLIENT)
   assert.equal(r.status, 303)
-  assert.equal(r.headers.get("location"), `${new URL(t.action).origin}/embed/pipeline`)
-  const cookie = r.headers.get("set-cookie")!
-  assert.match(cookie, /^__Secure-clegra-embed-board=[^;]+; Path=\/embed\/pipeline; Max-Age=600; Secure; HttpOnly; SameSite=None; Partitioned$/)
-  assert.equal((await post(HOST)).status, 401, "used once")
-  const viewer = await app.embed!.caller("board", new Request(`${new URL(t.action).origin}/embed/pipeline`, { headers: { cookie: cookie.split(";")[0]!, "sec-fetch-dest": "iframe" } }))
-  assert.equal(viewer?.installation, tenantOf("embed"))
-  assert.equal(viewer?.person?.id, "ben")
-  assert.equal(viewer?.can("deals.values"), false, "the rep's permissions, not more")
-  // A caller who may not see deals gets no ticket for the board.
-  const outsider = await testClient(app, { person: "ben", permissions: [], installation: "embed" })
-  assert.equal(((await outsider.call("clegra_embed", { page: "board", origin: HOST })).structuredContent as { error: { code: string } }).error.code, "permission_denied")
+  assert.equal(r.headers.get("location"), `${ORIGIN}/board`)
+  const cookies = r.headers.getSetCookie()
+  assert.ok(cookies.every((c) => /; Path=\/; Max-Age=\d+; Secure; HttpOnly; SameSite=None; Partitioned$/.test(c)), cookies.join("\n"))
+  assert.equal((await post(CLIENT)).status, 401, "used once")
+  // Every page of the site reads the caller (getClegraCaller in lib/session.ts) and is framable by that client only.
+  const page = new Request(`${ORIGIN}/board`, { headers: { cookie: cookies.map((c) => c.split(";")[0]).join("; "), "sec-fetch-dest": "iframe" } })
+  const caller = await clegraApp.site!.caller(page)
+  assert.equal(caller?.installation, "co-site@https://core.test")
+  assert.equal(caller?.person?.name, "Bob Test")
+  assert.deepEqual([caller?.theme, caller?.locale], ["dark", "it"])
+  assert.deepEqual(PERMISSIONS.filter((p) => caller?.can(p)), ["deals.view", "deals.edit", "contacts.edit"], "the member's defaults: no deal values")
+  assert.deepEqual((await clegraApp.site!.guard(page)).headers, { "content-security-policy": `frame-ancestors 'self' ${CLIENT}` })
+  // The tenant is the installation's own copy of the demo data, as the MCP handlers see it.
+  await provisionWorkspace(caller!.installation)
+  assert.ok((await boardDeals(caller!.installation)).length > 0)
+})
+
+test("a person of a Clegra company, through Clegra's core: the company's own copy of the demo data, the CRM's roles", async () => {
+  const RESOURCE = "https://crm.example.com/mcp"
+  const core = await testCore({ resource: RESOURCE })
+  const clegraApp = createCrmApp({ auth: { resource: RESOURCE, clegra: core.options() } })
+  const admin = await core.client(clegraApp, { company: "co-crm", sub: "pw-ada", name: "Ada Test", role: "admin" })
+  const deals = ((await admin.call("deal_list", { sort: "value", dir: "desc" })).structuredContent as { rows: { value?: number }[] }).rows
+  assert.ok(deals.length > 0 && deals[0]!.value !== undefined, "a company administrator is the CRM's administrator: every field")
+  const member = await core.client(clegraApp, { company: "co-crm", sub: "pw-bob", name: "Bob Test", role: "member" })
+  const seen = ((await member.call("deal_list", {})).structuredContent as { rows: Record<string, unknown>[] } | undefined)?.rows ?? []
+  assert.ok(seen.every((r) => !("value" in r)), "a member has the declared defaults until an administrator assigns more")
+  const who = (await admin.call("clegra_roles")).structuredContent as { people: { sub: string }[] }
+  assert.deepEqual(who.people.map((p) => p.sub).sort(), ["pw-ada", "pw-bob"])
 })

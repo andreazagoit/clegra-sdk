@@ -1,7 +1,7 @@
 # Shipments: an example Clegra app
 
 A courier's shipments and pickups as a Clegra app (`@clegra/sdk`): one `defineApp`
-object that the SDK serves as a manifest for workspace hosts (a Clegra node)
+object that the SDK serves as a manifest for Clegra (its people call it through Clegra's core)
 and as a plain MCP server for ChatGPT, Claude and any MCP client. It runs on
 Node's own HTTP server (`@clegra/sdk/node`), has no UI of its own, and keeps its
 invented data **in memory** (`MemoryStore` for writes, `src/courier.ts` for the
@@ -16,7 +16,7 @@ It is also an **in-process fixture for a workspace host's tests** (below).
 |---|---|
 | `src/app.ts` | The app: `defineShipmentsApp({ auth, store?, courier? })` |
 | `src/courier.ts` | The courier's data in memory, one set per tenant, and the list query over it |
-| `src/auth.ts` | Who may call: `SHIPMENTS_PUBLIC_URL` and `CLEGRA_ISSUERS` |
+| `src/auth.ts` | Who may call: `SHIPMENTS_PUBLIC_URL` and the `CLEGRA_*` variables |
 | `src/main.ts` | Runs it (`npm start`, `npm run dev`) |
 | `src/fixture.ts` | The fixture for host tests |
 | `test/app.test.ts` | In-process tests, the conformance checks included |
@@ -48,7 +48,7 @@ the `late_shipments` stat), `pickups` (list, primary action «Book a pickup»),
 a pie, upcoming pickups; primary action «Book a pickup»); the shipment's
 record page in two sections (delivery; parcels and cost).
 
-**Fragments**: `late_shipments` (stat, the badge), `shipping_costs` (stat,
+**Artifacts**: `late_shipments` (stat, the badge), `shipping_costs` (stat,
 money, behind `shipments.prices`), `shipments_by_status` (chart),
 `upcoming_pickups` (list, with «Book a pickup» inside).
 
@@ -63,7 +63,7 @@ names of who booked them as one JSON file; `clegra_delete` deletes them (the
 tenant then stays empty; asking again answers zero counts).
 
 **Agent**: `logistics` (tier `fast`), on the shipments, the pickups, the two
-pickup actions and the four fragments, with three starters.
+pickup actions and the four artifacts, with three starters.
 
 **Permissions**: `shipments.view` (default on), `shipments.prices`,
 `shipments.book`. **Setting**: `depot` (text, required): where the courier
@@ -72,15 +72,20 @@ are English.
 
 ## Who may call
 
-Workspace hosts only, in the trusted-issuer mode (spec §7). A courier hosts one
-server for all its customer companies, so `CLEGRA_ISSUERS` may name several
-nodes; the tenant is `<installation>@<issuer>`, so two nodes never reach each
-other's data, even with the same installation id.
+People of Clegra companies only, through Clegra's core in the trusted-issuer
+mode (spec §7, «Clegra tokens»): app tokens bound to the caller's key (DPoP).
+A courier hosts one server for all its customer companies; the tenant is
+`<company>@<issuer>`, so two companies never reach each other's data, and
+`CLEGRA_ALLOWED_COMPANIES` says which companies it serves.
 
 | Variable | Meaning |
 |---|---|
-| `SHIPMENTS_PUBLIC_URL` | The address the nodes install the app from (required); the MCP address, the only token audience, is `<url>/mcp` |
-| `CLEGRA_ISSUERS` | The trusted nodes, comma-separated, each `issuer` or `issuer\|jwksUri` (required, at least one, each once) |
+| `SHIPMENTS_PUBLIC_URL` | The address the companies connect the app from (required); the MCP address, the only token audience, is `<url>/mcp` |
+| `CLEGRA_ISSUER` | Clegra's core (required) |
+| `CLEGRA_REGISTRATION_ID` | The id the core gave this server when it was registered (required) |
+| `CLEGRA_REGISTRATION_CHALLENGE` | The registration challenge, served at `/.well-known/clegra-app.json` while the core verifies the address |
+| `CLEGRA_ALLOWED_COMPANIES` | The companies it serves, comma-separated, or `any` (required) |
+| `CLEGRA_CLIENT_ORIGINS` | The Clegra clients' origins that call it from a browser (CORS), comma-separated |
 | `SHIPMENTS_PORT` | Default `4319` |
 | `SHIPMENTS_HOST` | Default `0.0.0.0` (`npm start` only) |
 
@@ -92,7 +97,8 @@ From this folder, in the repository (`@clegra/sdk` is the repository's root, a w
 npm run dev      # 127.0.0.1:4319, signed in by the SDK's dev authority; prints a token and the check command
 npx @clegra/sdk check http://127.0.0.1:4319 --token <the printed token>   # Conformant.
 
-SHIPMENTS_PUBLIC_URL=https://shipments.example.com CLEGRA_ISSUERS=https://node.example.com npm start
+SHIPMENTS_PUBLIC_URL=https://shipments.example.com CLEGRA_ISSUER=https://core.example.com \
+  CLEGRA_REGISTRATION_ID=<id> CLEGRA_ALLOWED_COMPANIES=any npm start
 ```
 
 `npm run dev` is refused when `NODE_ENV` is `production` and answers loopback
@@ -114,7 +120,7 @@ this repository's workspace):
 | Export | What it is |
 |---|---|
 | `createShipmentsApp({ courier?, installation? })` | The app in-process, for `app.fetch(request, { remoteAddress: "127.0.0.1" })`: dev authority (`app.devToken()`, `app.devConfirmation()`, the clients of `@clegra/sdk/testing`), `MemoryStore`, data in memory |
-| `shipmentsManifest` | The manifest (`Manifest`, plain JSON) exactly as served at `/.well-known/clegra.json` by a server at `SHIPMENTS_URL` (`https://shipments.example.com`, MCP at `/mcp`) trusting `https://node.example.com`. The dev app's manifest differs only in `auth` |
+| `shipmentsManifest` | The manifest (`Manifest`, plain JSON) exactly as served at `/.well-known/clegra.json` by a server at `SHIPMENTS_URL` (`https://shipments.example.com`, MCP at `/mcp`) trusting Clegra's core `https://core.example.com`. The dev app's manifest differs only in `auth`, `events` and `rolesTool` |
 | `SHIPMENTS_PEOPLE` | `ada` (all permissions, «Ada Rossi»), `bruno` (`shipments.view`, «Bruno Verdi») |
 | `SHIPMENTS_INSTALLATION` | `"test"`, the dev tokens' default installation |
 | `SHIPMENTS_SETTINGS` | `{ depot: "North depot" }`: what a host sends as `_meta.clegra.settings` (booking needs it) |

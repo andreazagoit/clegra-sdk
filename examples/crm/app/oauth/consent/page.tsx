@@ -4,7 +4,7 @@ import { redirect } from "next/navigation"
 
 import { auth } from "@/lib/auth"
 import { oauthQueryOf, restartable, restartAuthorization, TOO_OLD_MESSAGE } from "@/lib/oauth-pages"
-import { currentMember } from "@/lib/session"
+import { sessionMember } from "@/lib/session"
 
 import { buttonClass, Card, secondaryButtonClass } from "../../_components/ui"
 import { consentAction } from "./actions"
@@ -30,7 +30,7 @@ export default async function ConsentPage({ searchParams }: { searchParams: Prom
     if (!restartable(oauthQuery)) return <Message title="This page is too old">{TOO_OLD_MESSAGE}</Message>
     redirect(restartAuthorization(oauthQuery, { signedIn: false }))
   }
-  const member = await currentMember()
+  const member = await sessionMember()
   if (!member) redirect(`/sign-in?${oauthQuery}`)
   const params = new URLSearchParams(oauthQuery)
   const clientId = params.get("client_id") ?? ""

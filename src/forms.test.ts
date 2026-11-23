@@ -77,7 +77,7 @@ function makeApp() {
         run: (input) => ({ message: `Created ${input.title}` }),
       },
     },
-    fragments: { board: { title: "Board", description: "The board", params: z.object({}), template: "stat", actions: ["create"], data: () => ({ label: "tasks", value: tasks.length }) } },
+    artifacts: { board: { title: "Board", description: "The board", params: z.object({}), template: "stat", actions: ["create"], data: () => ({ label: "tasks", value: tasks.length }) } },
     pages: {
       tasks: { list: "task", title: "Tasks", columns: ["title", "project", "cost", "due"] },
       urgent: { list: "task", title: "Urgent", columns: ["title", "due"], params: z.object({ days: z.number().optional() }), query: () => ({ sort: { field: "due", dir: "asc" as const } }) },

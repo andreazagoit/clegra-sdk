@@ -150,3 +150,24 @@ export const clegraStoreLater = pgTable(
   },
   (t) => [index("clegra_store_later_due").on(t.tenant, t.dueAt).where(sql`status = 'pending'`)],
 )
+
+/**
+ * The app's roles for people of Clegra companies (who may do what in the CRM, per pairwise person per tenant): the
+ * third table of `SqlStore.schema()` (@clegra/sdk), column for column.
+ */
+export const clegraStoreRoles = pgTable(
+  "clegra_store_roles",
+  {
+    tenant: text("tenant").notNull(),
+    sub: text("sub").notNull(),
+    admin: boolean("admin").default(false).notNull(),
+    permissions: jsonb("permissions").default(sql`'[]'::jsonb`).notNull(),
+    name: text("name"),
+    email: text("email"),
+    companyRole: text("company_role"),
+    seenAt: timestamp("seen_at", { withTimezone: true }),
+    assigned: boolean("assigned").default(false).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.tenant, t.sub] })],
+)

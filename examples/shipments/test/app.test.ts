@@ -102,9 +102,10 @@ describe("the manifest", () => {
     const { app } = fresh()
     const served = (await (await app.fetch(new Request("http://127.0.0.1/.well-known/clegra.json"), { remoteAddress: "127.0.0.1" })).json()) as Record<string, unknown>
     const { auth: servedAuth, ...rest } = served
-    const { auth, ...fixture } = shipmentsManifest
+    const { auth, events, rolesTool, ...fixture } = shipmentsManifest
     assert.deepEqual(rest, JSON.parse(JSON.stringify(fixture)))
-    assert.deepEqual(auth, { resource: `${SHIPMENTS_URL}/mcp`, authorizationServers: ["https://node.example.com"] })
+    // Clegra's core is never an authorization server of the app (its tokens come from Clegra); it adds the events endpoint and «who has what».
+    assert.deepEqual([auth, events, rolesTool], [{ resource: `${SHIPMENTS_URL}/mcp`, authorizationServers: [] }, { url: "/clegra/events" }, "clegra_roles"])
     assert.ok(servedAuth)
   })
 })
@@ -116,8 +117,8 @@ describe("conformance", () => {
     const report = await checkApp({ url: "http://127.0.0.1:4319", token, fetch: (request: Request) => app.fetch(request, { remoteAddress: "127.0.0.1" }) })
     assert.ok(report.ok && report.complete, formatReport(report))
     const skipped = report.checks.filter((c) => c.skipped).map((c) => c.id)
-    // No same-site pages (no embed), no references to other apps' records.
-    assert.deepEqual(skipped.sort(), ["embed.frame-ancestors", "embed.ticket", "refs.cross"].sort(), formatReport(report))
+    // No site of its own (spec §5.1), no references to other apps' records; mcp.confirm is a Clegra caller's.
+    assert.deepEqual(skipped.sort(), ["site.frame-ancestors", "site.ticket", "mcp.confirm", "refs.cross"].sort(), formatReport(report))
   })
 })
 
@@ -196,7 +197,7 @@ describe("pickups, each confirmed by the person", () => {
 })
 
 describe("the delivery check: a schedule with typed notifications", () => {
-  it("tells whoever sees shipments of each delivery and delay, once", async () => {
+  it("tells the company's administrators of each delivery and delay, once", async () => {
     const { app, courier } = fresh()
     const host = await installationClient(app, { installation: "deliveries", permissions: ["shipments.view"] })
     const quiet = await host.schedule("delivery_check", SHIPMENTS_SETTINGS)
@@ -210,8 +211,8 @@ describe("the delivery check: a schedule with typed notifications", () => {
     assert.deepEqual(
       sent.map((n) => [n.type, n.uri, n.to]),
       [
-        ["delivered", "clegra://shipments/shipment/AC1001", { permission: "shipments.view" }],
-        ["late", "clegra://shipments/shipment/AC1004", { permission: "shipments.view" }],
+        ["delivered", "clegra://shipments/shipment/AC1001", "admins"],
+        ["late", "clegra://shipments/shipment/AC1004", "admins"],
       ],
     )
     const again = await host.schedule("delivery_check", SHIPMENTS_SETTINGS)
@@ -227,7 +228,7 @@ describe("the delivery check: a schedule with typed notifications", () => {
   })
 })
 
-describe("pages and fragments", () => {
+describe("pages and artifacts", () => {
   it("the shipments page's badge counts the late ones; the dashboards draw; the pickups page offers «Book a pickup»", async () => {
     const { app } = fresh()
     const c = await testClient(app, { person: "ada", permissions: "all", host: "workspace", installation: "pages", locale: "it" })
@@ -269,15 +270,17 @@ describe("the lifecycle", () => {
 })
 
 describe("who may call", () => {
-  it("one public address and one or more nodes, each named once", () => {
-    assert.deepEqual(shipmentsAuth({ SHIPMENTS_PUBLIC_URL: "https://shipments.example.com/", CLEGRA_ISSUERS: "https://a.example.com, https://b.example.com|https://b.example.com/keys" }), {
+  it("one public address, Clegra's core, the registration id and the companies it serves", () => {
+    const core = { CLEGRA_ISSUER: "https://core.example.com", CLEGRA_REGISTRATION_ID: "r-1", CLEGRA_ALLOWED_COMPANIES: "co-a, co-b" }
+    assert.deepEqual(shipmentsAuth({ SHIPMENTS_PUBLIC_URL: "https://shipments.example.com/", ...core }), {
       resource: "https://shipments.example.com/mcp",
-      issuers: [{ issuer: "https://a.example.com" }, { issuer: "https://b.example.com", jwksUri: "https://b.example.com/keys" }],
+      clegra: { issuer: "https://core.example.com", registrationId: "r-1", allowedCompanies: ["co-a", "co-b"] },
     })
-    assert.throws(() => shipmentsAuth({ CLEGRA_ISSUERS: "https://a.example.com" }), /SHIPMENTS_PUBLIC_URL is not set/)
-    assert.throws(() => shipmentsAuth({ SHIPMENTS_PUBLIC_URL: "https://s.example.com" }), /CLEGRA_ISSUERS is not set/)
-    assert.throws(() => shipmentsAuth({ SHIPMENTS_PUBLIC_URL: "https://s.example.com?x=1", CLEGRA_ISSUERS: "https://a.example.com" }), /query or a fragment/)
-    assert.throws(() => shipmentsAuth({ SHIPMENTS_PUBLIC_URL: "https://s.example.com", CLEGRA_ISSUERS: "https://a.example.com,https://a.example.com" }), /named twice/)
+    assert.throws(() => shipmentsAuth(core), /SHIPMENTS_PUBLIC_URL is not set/)
+    assert.throws(() => shipmentsAuth({ SHIPMENTS_PUBLIC_URL: "https://s.example.com" }), /CLEGRA_ISSUER is not set/)
+    assert.throws(() => shipmentsAuth({ SHIPMENTS_PUBLIC_URL: "https://s.example.com", ...core, CLEGRA_REGISTRATION_ID: "" }), /CLEGRA_REGISTRATION_ID is not set/)
+    assert.throws(() => shipmentsAuth({ SHIPMENTS_PUBLIC_URL: "https://s.example.com", ...core, CLEGRA_ALLOWED_COMPANIES: "" }), /CLEGRA_ALLOWED_COMPANIES is not set/)
+    assert.throws(() => shipmentsAuth({ SHIPMENTS_PUBLIC_URL: "https://s.example.com?x=1", ...core }), /query or a fragment/)
     assert.deepEqual(ALL, ["shipments.view", "shipments.prices", "shipments.book"])
   })
 })

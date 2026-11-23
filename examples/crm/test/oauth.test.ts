@@ -14,7 +14,7 @@ const { password, users } = await import("./setup")
 import { and, eq } from "drizzle-orm"
 import { verifyOAuthQueryParams } from "@better-auth/oauth-provider"
 import { decodeJwt, decodeProtectedHeader, generateKeyPair, SignJWT } from "jose"
-import { embedProxy, toNextHandlers } from "@clegra/sdk/next"
+import { toNextHandlers } from "@clegra/sdk/next"
 import { checkApp, formatReport } from "@clegra/sdk/spec"
 
 import { deals, member, user } from "../db/schema"
@@ -30,9 +30,8 @@ const RESOURCE = `${SITE}/mcp`
 const ISSUER = `${SITE}/api/auth`
 const crm = createCrmApp({ auth: crmAuth() })
 const route = toNextHandlers(crm, { publicUrl: SITE })
-// proxy.ts in front of the embedded pages (spec §5.1): the site as an HTTP client reaches it.
-const proxy = embedProxy(crm, { publicUrl: SITE })
-const site = (r: Request) => (new URL(r.url).pathname.startsWith("/embed/") ? proxy(r) : route[r.method as "GET"](r))
+// The site as an HTTP client reaches it: the clegra route (what Next does with withClegra's rewrites).
+const site = (r: Request) => route[r.method as "GET"](r)
 const handler = (request: Request) => auth().handler(request)
 
 const accounts = { alice: "alice@orbit.example", ben: "ben@orbit.example", emma: "emma@kestrel.example" }

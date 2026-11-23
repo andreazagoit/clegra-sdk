@@ -1,6 +1,6 @@
 /**
  * THE SDK'S MCP APPS VIEW (spec §5): one HTML document that draws every
- * derived result (a list, a record, a fragment, a dashboard) for hosts that
+ * derived result (a list, a record, an artifact, a dashboard) for hosts that
  * show MCP Apps views: ChatGPT, Claude, and a workspace host's frames.
  *
  * It speaks the MCP Apps bridge (JSON-RPC 2.0 over postMessage:
@@ -17,7 +17,7 @@
  * the host or the app said, in a status line at the top of the view.
  */
 
-import { META_KEY, PROTOCOL_ID } from "../spec/src/protocol"
+import { META_KEY, PROTOCOL_ID, VIEW_HOST_META } from "../spec/src/protocol"
 
 export const MCP_APP_MIME_TYPE = "text/html;profile=mcp-app"
 export const MCP_APPS_PROTOCOL_VERSION = "2026-01-26"
@@ -60,7 +60,9 @@ const SCRIPT = `
   const root = document.getElementById("root"); const statusLine = document.getElementById("status");
   // shown: a result is on screen (the first one the host gave, or the view's own boot call).
   let nextId = 1; const pending = new Map(); let shown = false; let locale = navigator.language || "en";
-  const post = (m) => window.parent.postMessage(m, "*");
+  // Served by the app to a Clegra client (spec §5.3): that client's exact origin, the only one talked to or heard.
+  const HOST = (document.querySelector('meta[name="${VIEW_HOST_META}"]') || {}).content || null;
+  const post = (m) => window.parent.postMessage(m, HOST || "*");
   // A host that never answers (it refused the call without saying so) is an error the person sees, not a dead click.
   const request = (method, params, wait) => new Promise((resolve, reject) => { const id = nextId++; pending.set(id, { resolve, reject }); post({ jsonrpc: "2.0", id, method, params }); if (wait) setTimeout(() => { if (pending.delete(id)) reject(new Error(tr("noAnswer", method + (params && params.name ? " " + params.name : "")))); }, wait); });
   const notify = (method, params) => post({ jsonrpc: "2.0", method, params });
@@ -281,7 +283,7 @@ const SCRIPT = `
     actionsBar(el, view.actions, record, named === undefined || named === null ? "" : String(named));
     return el;
   }
-  function fragmentBox(fr) {
+  function artifactBox(fr) {
     const el = document.createElement("div"); el.className = "box";
     const d = fr.data || {};
     if (fr.state && fr.state !== "ok") { el.innerHTML = '<span class="muted">' + esc(tr(fr.state === "no-access" ? "noAccess" : "notAvailable")) + "</span>"; return el; }
@@ -325,14 +327,14 @@ const SCRIPT = `
       if (v.tool && s.record && s.record.id !== undefined) lastCall = { name: v.tool, args: { id: s.record.id } };
       backBar();
       root.appendChild(recordBox(v, s.record));
-    } else if (v.kind === "fragment") {
-      root.appendChild(fragmentBox(Object.assign({ title: v.title }, s)));
+    } else if (v.kind === "artifact") {
+      root.appendChild(artifactBox(Object.assign({ title: v.title }, s)));
     } else if (v.kind === "dashboard") {
       if (v.tool && !lastCall) lastCall = { name: v.tool, args: v.args || {} };
       navBar(v);
       const h = document.createElement("h2"); h.textContent = L(v.title); root.appendChild(h);
       const acts = pageActions(v); if (acts) root.appendChild(acts);
-      const g = document.createElement("div"); g.className = "grid"; for (const fr of s.fragments || []) g.appendChild(fragmentBox(fr)); root.appendChild(g);
+      const g = document.createElement("div"); g.className = "grid"; for (const fr of s.artifacts || []) g.appendChild(artifactBox(fr)); root.appendChild(g);
     } else if (v.kind === "search") {
       const box = document.createElement("div"); box.className = "box";
       box.innerHTML = (s.results || []).map((r, i) => "<div class='hit' data-i='" + i + "' style='padding:6px 0;border-bottom:1px solid var(--line);cursor:pointer'><b>" + esc(r.title) + "</b> <span class='muted'>" + esc(L(r.entityLabel || "")) + "</span>" + (r.status ? ' <span class="badge">' + esc(L(r.status)) + "</span>" : "") + (r.subtitle ? "<div class='muted'>" + esc(r.subtitle) + "</div>" : "") + "</div>").join("") || '<span class="muted">—</span>';
@@ -343,7 +345,7 @@ const SCRIPT = `
   }
   const applyContext = (ctx) => { if (!ctx) return; if (ctx.theme) document.documentElement.dataset.theme = ctx.theme; if (ctx.locale) locale = ctx.locale; const vars = ctx.styles && ctx.styles.variables; if (vars) for (const [k, v] of Object.entries(vars)) if (v) document.documentElement.style.setProperty(k, v); };
   window.addEventListener("message", (e) => {
-    if (e.source !== window.parent) return;
+    if (e.source !== window.parent || (HOST && e.origin !== HOST)) return;
     const m = e.data; if (!m || m.jsonrpc !== "2.0") return;
     if (m.id !== undefined && pending.has(m.id) && !m.method) { const p = pending.get(m.id); pending.delete(m.id); return m.error ? p.reject(new Error(m.error.message || "error")) : p.resolve(m.result); }
     // The result of the call that opened the view, once. Hosts send tool-result again for the view's own calls (MCP Apps,
@@ -381,68 +383,3 @@ export function viewHtml(title: string, boot: { tool: string; args?: Record<stri
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title.replace(/[<&]/g, "")}</title><style>${STYLE}</style></head><body><div id="status" role="status" aria-live="polite" hidden></div><div id="root"><div class="box muted">…</div></div><script>${SCRIPT.replace("__BOOT__", bootJson)}</script></body></html>`
 }
 
-const URL_PAGE_SCRIPT = `
-(() => {
-  const PAGE = __PAGE__;
-  const frame = document.getElementById("page"); const statusLine = document.getElementById("status");
-  let locale = navigator.language || "en";
-  const STR = {
-    en: { signingIn: "Signing in…", notOpened: "The page did not open: this host may not let the view sign in to an embedded page.", noBridge: "This host does not connect the view to the app", noAnswer: "The host did not answer ({n}).", refused: "The host refused the call ({n})." },
-    it: { signingIn: "Accesso in corso…", notOpened: "La pagina non si è aperta: questo host potrebbe non permettere alla vista di accedere a una pagina incorporata.", noBridge: "Questo host non collega la vista all'app", noAnswer: "L'host non ha risposto ({n}).", refused: "L'host ha rifiutato la chiamata ({n})." },
-    es: { signingIn: "Iniciando sesión…", notOpened: "La página no se abrió: puede que este host no permita a la vista iniciar sesión en una página incrustada.", noBridge: "Este host no conecta la vista con la app", noAnswer: "El host no respondió ({n}).", refused: "El host rechazó la llamada ({n})." },
-    fr: { signingIn: "Connexion…", notOpened: "La page ne s'est pas ouverte : cet hôte ne permet peut-être pas à la vue de se connecter à une page intégrée.", noBridge: "Cet hôte ne relie pas la vue à l'app", noAnswer: "L'hôte n'a pas répondu ({n}).", refused: "L'hôte a refusé l'appel ({n})." },
-    de: { signingIn: "Anmeldung…", notOpened: "Die Seite wurde nicht geöffnet: Dieser Host erlaubt der Ansicht vielleicht nicht, sich bei einer eingebetteten Seite anzumelden.", noBridge: "Dieser Host verbindet die Ansicht nicht mit der App", noAnswer: "Der Host hat nicht geantwortet ({n}).", refused: "Der Host hat den Aufruf abgelehnt ({n})." },
-  };
-  const tr = (k, n) => String((STR[String(locale).split("-")[0].toLowerCase()] || STR.en)[k]).replace("{n}", n === undefined ? "" : n);
-  const notice = (text, error) => { statusLine.hidden = !text; statusLine.textContent = text || ""; statusLine.className = error ? "error" : ""; statusLine.setAttribute("role", error ? "alert" : "status"); };
-  let nextId = 1; const pending = new Map();
-  const post = (m) => window.parent.postMessage(m, "*");
-  const request = (method, params, wait) => new Promise((resolve, reject) => { const id = nextId++; pending.set(id, { resolve, reject }); post({ jsonrpc: "2.0", id, method, params }); setTimeout(() => { if (pending.delete(id)) reject(new Error(tr("noAnswer", method + (params && params.name ? " " + params.name : "")))); }, wait); });
-  window.addEventListener("message", (e) => {
-    if (e.source !== window.parent) return;
-    const m = e.data; if (!m || m.jsonrpc !== "2.0") return;
-    if (m.id !== undefined && !m.method && pending.has(m.id)) { const p = pending.get(m.id); pending.delete(m.id); return m.error ? p.reject(new Error(m.error.message || "error")) : p.resolve(m.result); }
-    if (m.method === "ui/resource-teardown" && m.id !== undefined) post({ jsonrpc: "2.0", id: m.id, result: {} });
-  });
-  let bridge = null;
-  const ready = request("ui/initialize", { protocolVersion: "${MCP_APPS_PROTOCOL_VERSION}", appInfo: { name: "${PROTOCOL_ID}-url-page", version: "1.0.0" }, appCapabilities: {} }, 10000).then(
-    (r) => { bridge = "mcp"; if (r && r.hostContext && r.hostContext.locale) locale = r.hostContext.locale; post({ jsonrpc: "2.0", method: "ui/notifications/initialized", params: {} }); post({ jsonrpc: "2.0", method: "ui/notifications/size-changed", params: { height: 720 } }); },
-    (e) => { if (window.openai && typeof window.openai.callTool === "function") { bridge = "openai"; if (window.openai.locale) locale = window.openai.locale; return; } throw new Error(tr("noBridge") + " (" + String((e && e.message) || e) + ")"); });
-  // The ticket (spec §5.1), asked for the viewer over the host's bridge, as the view's other calls.
-  const callTool = async (name, args) => {
-    await ready;
-    let r;
-    try { r = bridge === "mcp" ? await request("tools/call", { name, arguments: args }, 30000) : await window.openai.callTool(name, args); }
-    catch (e) { const why = String((e && e.message) || e); throw new Error(why.startsWith(tr("noAnswer", "")) ? why : tr("refused", name) + " " + why); }
-    const s = r && r.structuredContent;
-    if (!r || r.isError || !s) throw new Error((s && s.error && s.error.message) || (r && r.content && r.content[0] && r.content[0].text) || tr("refused", name));
-    return s;
-  };
-  const open = async () => {
-    if (!PAGE.embed) { frame.src = PAGE.url; return; }
-    notice(tr("signingIn"));
-    // location.origin is this document's: the one that posts the ticket, so the one the ticket is for.
-    const t = await callTool(PAGE.embed.tool, { page: PAGE.embed.page, origin: location.origin });
-    // A form posted into the frame: the ticket never sits in a URL, the history or a Referer.
-    const form = document.createElement("form"); form.method = "post"; form.action = t.action; form.target = frame.name; form.hidden = true;
-    const field = document.createElement("input"); field.type = "hidden"; field.name = t.field; field.value = t.ticket; form.appendChild(field);
-    document.body.appendChild(form);
-    const late = setTimeout(() => notice(tr("notOpened"), true), 20000);
-    frame.addEventListener("load", () => { clearTimeout(late); notice(null); }, { once: true });
-    form.submit(); form.remove();
-  };
-  ready.then(open).catch((e) => notice(String((e && e.message) || e), true));
-})();
-`
-
-/**
- * A custom page whose content is a site: an iframe in the view, the site's origin allowed as a frame (MCP Apps CSP
- * `frameDomains`). A page on the app's own site (`embed`) is opened signed in: the view asks the app for a ticket
- * (`clegra_embed`, for this document's origin) over the host's bridge and posts it into the frame (spec §5.1).
- * A page on another site is framed as it is.
- */
-export function urlPageHtml(title: string, url: string, embed: { tool: string; page: string } | null): string {
-  const page = JSON.stringify({ url, embed }).replace(/</g, "\\u003c")
-  const name = `${PROTOCOL_ID}-page`
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title.replace(/[<&]/g, "")}</title><style>html,body{margin:0;height:100%;font:13px system-ui,sans-serif}iframe{border:0;width:100%;height:100vh;display:block}#status{position:fixed;top:8px;left:8px;right:8px;padding:6px 10px;border-radius:8px;background:#f5f5f7;color:#6e6e73;border:1px solid #e5e5ea}#status[hidden]{display:none}#status.error{color:#c62828;border-color:#c62828}</style></head><body><div id="status" role="status" aria-live="polite" hidden></div><iframe id="page" name="${name}" sandbox="allow-scripts allow-forms allow-same-origin allow-popups" referrerpolicy="no-referrer" title="${title.replace(/"/g, "")}"></iframe><script>${URL_PAGE_SCRIPT.replace("__PAGE__", () => page)}</script></body></html>`
-}

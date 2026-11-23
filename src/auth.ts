@@ -4,7 +4,6 @@ import { isIP } from "node:net"
 
 import {
   createLocalJWKSet,
-  createRemoteJWKSet,
   decodeJwt,
   decodeProtectedHeader,
   exportJWK,
@@ -18,37 +17,29 @@ import {
 } from "jose"
 
 import { CONFIRMATION_TYPE, OAUTH_SCOPE, PROTOCOL_ID, TOKEN_CLAIM } from "../spec/src/protocol"
+import type { ClegraCaller, ClegraOptions } from "./clegra"
 
 /**
  * AUTH (spec §7). Two kinds of access token reach an app:
  *
- * - **its own** (the common case: a web app with its own users): issued by
- *   the app's own authorization server (better-auth, Clerk, …) to an MCP
- *   client such as ChatGPT, Claude or Clegra. The SDK does not read them: the
- *   app verifies them in `auth.resolve(token, request, { resource })` and says
- *   who is calling (installation, person, permissions).
- * - **a workspace host's** (in-house apps a company installs into its own
- *   host): JWTs (`typ: at+jwt`) from a trusted issuer listed in
- *   `auth.issuers`,
- * verified with the issuer's JWKS. Their audience is this server's own
- * public MCP address (`auth.resource`, RFC 8707): a token signed for another
- * app is refused whatever that app calls itself. The `clegra` claim says
- * who is calling for which installation; the tenant handlers see is the
- * installation of that issuer (`<installation>@<issuer>`), so one issuer
- * can never name another's. A workspace host's token is for one request
- * (60 seconds, used once). A workspace host proves a person's confirmation
- * with a second JWT (`clegra-confirm+jwt`) bound to the installation, the
- * call and the arguments as sent.
+ * - **its own** (an app with its own users): issued by the app's own authorization server (better-auth, Clerk, …)
+ *   to an MCP client such as ChatGPT or Claude. The SDK does not read them: the app verifies them in
+ *   `auth.resolve(token, request, { resource })` and says who is calling (tenant, person, permissions).
+ * - **Clegra's core's** (`auth.clegra`, clegra.ts): app tokens bound to the caller's key (DPoP), for exactly this
+ *   app's address (`auth.resource`), the tenant `<company>@<issuer>`; the person's permissions are the app's own
+ *   (roles per person per tenant, the store's `roles`).
  *
- * Dev mode: the SDK is its own authorization server with a local key
- * (DevAuthority below), for callers on a loopback address only.
+ * Dev mode: the SDK is its own authorization server with a local key (DevAuthority below), for callers on a
+ * loopback address only. Its tokens carry the `clegra` claim and can stand in for a workspace host (`host:
+ * "workspace"`), which confirms writes with a signed proof (`clegra-confirm+jwt`) and calls the installation-level
+ * tools (schedules, later runs, lifecycle) with no person: development and tests only.
  */
 
 export { CONFIRMATION_TYPE }
 export const DEV_ISSUER = `${PROTOCOL_ID}-dev`
 /** The `typ` of an access token (RFC 9068). */
 export const ACCESS_TOKEN_TYPE = "at+jwt"
-/** How long a workspace host's access token may live: it is for one request. */
+/** How long a dev workspace host's access token may live: it is for one request. */
 export const HOST_TOKEN_SECONDS = 60
 export const INSTALLATION = /^[A-Za-z0-9._:-]{1,128}$/
 
@@ -70,24 +61,17 @@ export type Caller = {
   host: "workspace" | "plain"
   issuer: string
   subject: string
+  /** A caller from Clegra's core (`auth.clegra`): its company, company role, device key, actor and grant. */
+  clegra?: ClegraCaller
 }
 
-/** The `clegra` claim of an access token. */
+/** The `clegra` claim of a dev access token. */
 export type HostClaim = {
   installation: string
   person?: Person
   permissions?: string[]
   locale?: string
   host?: "workspace" | "plain"
-}
-
-export type Issuer = {
-  /** The token's `iss`, exactly. */
-  issuer: string
-  /** Its key set; default `<issuer>/.well-known/jwks.json`. */
-  jwksUri?: string
-  /** Its keys given here instead (tests, a host on the same machine). */
-  jwks?: { keys: JWK[] }
 }
 
 /**
@@ -127,15 +111,22 @@ export type AuthOptions = {
    * metadata under `/.well-known/…`), on the same routes as MCP: null for any other path.
    */
   serve?: (request: Request) => Promise<Response | null> | Response | null
-  /** Workspace hosts whose tokens (with the `clegra` claim) are accepted. With issuers, `resource` is required. */
-  issuers?: Issuer[]
   /**
-   * This server's public MCP address, exactly as hosts and clients reach it
-   * (`https://crm.example.com/mcp`): the only audience (`aud`) accepted from
-   * the issuers, and what a host must have installed the app from.
+   * Clegra's core as the one trusted issuer (spec §7, «Clegra tokens»): its app tokens with DPoP, the tenant
+   * `<company>@<issuer>`, the app's own roles, confirmations, events, CORS. Needs `resource`. `clegraFromEnv()` reads it
+   * from `CLEGRA_*` variables.
+   */
+  clegra?: ClegraOptions
+  /**
+   * This server's public MCP address, exactly as clients reach it (`https://crm.example.com/mcp`): the only audience
+   * (`aud`) accepted, and what the DPoP proofs of Clegra calls must name (`htu`). Required with `clegra`, and in
+   * production with `resolve`.
    */
   resource?: string
-  /** The authorization servers named in the protected-resource metadata (default: the issuers'). */
+  /**
+   * The authorization servers named in the protected-resource metadata: the app's own (its sign-in), never
+   * Clegra's core (whose tokens a client gets from Clegra, not by OAuth). Default none.
+   */
   authorizationServers?: string[]
   /**
    * Dev mode: a local signing key, a minimal authorization server for test
@@ -190,13 +181,11 @@ export function argsHash(args: unknown): string {
 
 // ------------------------------------------------------------ verifying
 
-type KeySet = ReturnType<typeof createRemoteJWKSet> | ReturnType<typeof createLocalJWKSet>
-
 /** What one request allows: whether dev tokens are accepted (a loopback caller) and the address it came to. */
 export type RequestTrust = { dev: boolean; requestResource: string | null }
 
+/** The dev authority's tokens: verified here (Clegra's core's are clegra.ts's, the app's own its `resolve`'s). */
 export class TokenVerifier {
-  readonly #issuers = new Map<string, KeySet>()
   readonly #resource: string | null
   readonly #once: (key: string, ttlMs: number) => Promise<boolean>
   #dev: DevAuthority | null = null
@@ -204,12 +193,6 @@ export class TokenVerifier {
   constructor(options: AuthOptions, once: (key: string, ttlMs: number) => Promise<boolean>) {
     this.#once = once
     this.#resource = options.resource ?? null
-    for (const i of options.issuers ?? []) {
-      if (!i.issuer) throw new Error("auth.issuers: every issuer needs its `issuer`")
-      const keys = i.jwks ? createLocalJWKSet(i.jwks) : createRemoteJWKSet(new URL(i.jwksUri ?? `${i.issuer.replace(/\/+$/, "")}/.well-known/jwks.json`), { cooldownDuration: 30_000, cacheMaxAge: 10 * 60_000 })
-      this.#issuers.set(i.issuer, keys)
-    }
-    if (this.#issuers.size && !this.#resource) throw new Error("auth.resource: with issuers, give this server's public MCP address (https://…/mcp); it is the only audience their tokens are accepted for")
     if (this.#resource) {
       let url: URL
       try {
@@ -225,7 +208,7 @@ export class TokenVerifier {
     this.#dev = dev
   }
 
-  /** Whether a token is one this verifier answers for (a JWT whose `iss` is a configured issuer or the dev authority's), so it is never handed to `auth.resolve`. */
+  /** Whether a token is one this verifier answers for (a JWT whose `iss` is the dev authority's), so it is never handed to `auth.resolve`. */
   knows(token: string): boolean {
     let iss: string | undefined
     try {
@@ -233,14 +216,11 @@ export class TokenVerifier {
     } catch {
       return false
     }
-    return Boolean(iss && (this.#issuers.has(iss) || this.#dev?.issues(iss)))
+    return Boolean(iss && this.#dev?.issues(iss))
   }
 
-  /** The keys and the audiences of an issuer for this request; why not, as an AuthError. */
-  #trustOf(iss: string | undefined, trust: RequestTrust): { keys: KeySet | CryptoKey; audience: string[]; issuer: string } {
-    // A configured issuer always keeps its own keys: the dev authority's names come from request headers and must never shadow one.
-    const configured = iss ? this.#issuers.get(iss) : undefined
-    if (configured) return { keys: configured, audience: [this.#resource!], issuer: iss! }
+  /** The keys and the audiences of the dev authority for this request; why not, as an AuthError. */
+  #trustOf(iss: string | undefined, trust: RequestTrust): { keys: CryptoKey; audience: string[]; issuer: string } {
     if (this.#dev && iss && this.#dev.issues(iss)) {
       if (!trust.dev) throw new AuthError("dev sign-in answers callers on a loopback address only")
       // Every name the dev authority answers under is one authority, one tenant space.
@@ -269,7 +249,7 @@ export class TokenVerifier {
     if (!m || typeof m.installation !== "string" || !INSTALLATION.test(m.installation)) throw new AuthError(`the token has no valid ${TOKEN_CLAIM}.installation`)
     const host = m.host === "workspace" ? "workspace" : "plain"
     if (host === "workspace") {
-      // A workspace host signs a token per request: short, with an id, used once.
+      // A (dev) workspace host signs a token per request: short, with an id, used once.
       if (typeof payload.jti !== "string" || !payload.jti || typeof payload.iat !== "number") throw new AuthError("a workspace host's token needs jti and iat")
       if (payload.exp! - payload.iat > HOST_TOKEN_SECONDS) throw new AuthError(`a workspace host's token lives ${HOST_TOKEN_SECONDS} seconds at most`)
       const left = Math.max(1, payload.exp! + 30 - Math.floor(Date.now() / 1000))

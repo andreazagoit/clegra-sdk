@@ -87,8 +87,8 @@ expect(manifest.publishConfig?.access === "public", "tarball package.json: publi
 expect(manifest.bin && Object.keys(manifest.bin).join() === "clegra", "tarball package.json: the CLI's bin is named clegra")
 expect(JSON.stringify(manifest.scripts) === JSON.stringify({ postpublish: repoManifest.scripts.postpublish }) && !manifest.devDependencies && !manifest.workspaces && !manifest.overrides, "tarball package.json: no devDependencies, workspaces or overrides; of the scripts only postpublish")
 expect(repoManifest.exports["."] === "./src/index.ts" && !existsSync(join(pkgDir, ".package.repo.json")), "after npm pack the repository's package.json is back (exports the TypeScript source)")
-for (const f of ["README.md", "LICENSE", "NOTICE.md", "CHANGELOG.md", "package.json", "docs/spec.md", "docs/quickstart.md", "dist/spec/schema/clegra.schema.json", "dist/spec/kinds.json"]) expect(files.has(f), `tarball has ${f}`)
-expect(![...files].some((f) => /^docs\//.test(f) && !["docs/spec.md", "docs/quickstart.md"].includes(f)) && ![...files].some((f) => /^examples\//.test(f)), "tarball has docs/spec.md and docs/quickstart.md only of the docs, and no example")
+for (const f of ["README.md", "LICENSE", "NOTICE.md", "CHANGELOG.md", "package.json", "docs/spec.md", "docs/quickstart.md", "docs/accents.svg", "dist/spec/schema/clegra.schema.json", "dist/spec/kinds.json"]) expect(files.has(f), `tarball has ${f}`)
+expect(![...files].some((f) => /^docs\//.test(f) && !["docs/spec.md", "docs/quickstart.md", "docs/accents.svg"].includes(f)) && ![...files].some((f) => /^examples\//.test(f)), "tarball has docs/spec.md, docs/quickstart.md and the quickstart's palette (docs/accents.svg) only of the docs, and no example")
 expect(![...files].some((f) => /\.ts$/.test(f) && !f.endsWith(".d.ts")), "tarball has no TypeScript source")
 expect(![...files].some((f) => /\.test\.|^test\/|^scripts\//.test(f)), "tarball has no tests or scripts")
 const leaves = (e) => (e === null ? [] : typeof e === "string" ? [e] : Object.values(e).flatMap(leaves))
@@ -108,7 +108,8 @@ const shaped = (e) => {
 }
 expect(Object.values(manifest.exports).every(shaped), "every condition object of the exports has types before default, default last")
 expect(!Object.keys(manifest.exports).some((k) => k.startsWith("./ui")) && ![...files].some((f) => f.startsWith("dist/ui/")), "no UI entry or file: the design system is the separate @clegra/ui")
-expect(JSON.stringify(Object.keys(manifest.peerDependencies ?? {}).sort()) === JSON.stringify(["next", "zod"]) && manifest.peerDependenciesMeta?.next?.optional === true && !Object.keys(manifest.dependencies ?? {}).some((d) => /react|base-ui|lucide|tailwind|@clegra\/ui/.test(d)), "peers: zod and (optional) next only; no UI library and no @clegra/ui among the dependencies")
+// react only for <ClegraSite /> (@clegra/sdk/next, loaded when a page renders it): optional, like next.
+expect(JSON.stringify(Object.keys(manifest.peerDependencies ?? {}).sort()) === JSON.stringify(["next", "react", "zod"]) && manifest.peerDependenciesMeta?.next?.optional === true && manifest.peerDependenciesMeta?.react?.optional === true && !Object.keys(manifest.dependencies ?? {}).some((d) => /react|base-ui|lucide|tailwind|@clegra\/ui/.test(d)), "peers: zod, (optional) next and (optional) react only; no UI library and no @clegra/ui among the dependencies")
 const dist = join(pkgDir, "dist")
 let unresolved = []
 for (const f of [...files].filter((f) => /\.(js|d\.ts)$/.test(f))) {
@@ -122,7 +123,7 @@ expect(unresolved.length === 0, `every relative import in dist resolves inside t
 expect(existsSync(dist), "dist/ was built")
 // The hygiene list names what must never ship, so it is private: it lives in the repository this package is developed
 // in, not in the package (and not in its public mirror, where this step is skipped).
-const hygiene = resolve(pkgDir, "../../scripts/repo/hygiene.mjs")
+const hygiene = resolve(pkgDir, "../../scripts/hygiene/hygiene.mjs")
 if (existsSync(hygiene)) {
   const { checkTarball } = await import(hygiene)
   const findings = checkTarball("sdk", tarball)
@@ -136,8 +137,17 @@ const dry = run(npm, ["publish", "--dry-run", "--tag", "next"], { cwd: pkgDir })
 expect(dry.status === 0 && /with tag next/.test(dry.stdout + dry.stderr) && /\(dry-run\)/.test(dry.stdout + dry.stderr) && /public access/.test(dry.stdout + dry.stderr), `npm publish --dry-run --tag next runs, public access (uploads nothing)${dry.status === 0 ? "" : `: ${tail(dry)}`}`)
 expect(JSON.parse(readFileSync(join(pkgDir, "package.json"), "utf8")).exports["."] === "./src/index.ts" && !existsSync(join(pkgDir, ".package.repo.json")), "after the dry-run publishes the repository's package.json is back")
 
-/** The repository's installed version of a package (read by path: not every package exports its package.json). */
-const version = (name) => JSON.parse(readFileSync(join(repoRoot, "node_modules", ...name.split("/"), "package.json"), "utf8")).version
+/**
+ * The installed version of a package, found as Node finds it: the nearest node_modules from this package up (read by
+ * path: not every package exports its package.json; a workspace's dependencies may be hoisted above it).
+ */
+const version = (name) => {
+  for (let d = pkgDir; ; d = dirname(d)) {
+    const file = join(d, "node_modules", ...name.split("/"), "package.json")
+    if (existsSync(file)) return JSON.parse(readFileSync(file, "utf8")).version
+    if (dirname(d) === d) throw new Error(`pack-check: ${name} is not installed`)
+  }
+}
 
 // ------------------------------------------------------------ 2. a Node-only app: no React
 const nodeOnly = join(work, "node-only")
@@ -209,6 +219,8 @@ const stop = (child) => {
   running.delete(child)
 }
 process.on("exit", () => running.forEach(stop))
+/** Until the server's process has exited: `next dev` writes into .next/dev while it shuts down. */
+const exited = (child) => (child.exitCode !== null || child.signalCode !== null ? Promise.resolve() : new Promise((resolve) => child.once("exit", resolve)))
 /** Next.js stops a command once to show a security advisory for its own version and lets the same command through when run again. */
 const ADVISORY = /affected by a known security vulnerability|SecurityFatalError/
 const advisoryNoted = new Set()
@@ -263,7 +275,8 @@ const devServer = await serve(app, "dev", port)
 const devCheck = check(app, devServer.base, token)
 expect(onlyAuthMcp(devCheck) && /not conformant/i.test(devCheck.out), `next dev: npx @clegra/sdk check --token runs every check; the fresh app fails auth.mcp only (no authorization server yet)${onlyAuthMcp(devCheck) ? "" : `:\n${devCheck.out}\n${devServer.log().slice(-3000)}`}`)
 stop(devServer.child)
-rmSync(join(app, ".next"), { recursive: true, force: true })
+await exited(devServer.child)
+rmSync(join(app, ".next"), { recursive: true, force: true, maxRetries: 10, retryDelay: 300 })
 
 const build = nextBuild(app, port + 1)
 expect(build.status === 0, "next build (next.config imports @clegra/sdk/next from node_modules)")

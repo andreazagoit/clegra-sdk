@@ -46,15 +46,15 @@ export default withClegra(nextConfig)
   `basePath` and `trailingSlash: true` are refused too.
 - Locally, before the sign-in is wired: init's `resolve` accepts the bearer in `.env.local` (`CLEGRA_LOCAL_TOKEN`)
   only when `NODE_ENV !== "production"`.
-- In production: `CLEGRA_PUBLIC_URL` (an origin) and `auth.resource = ${CLEGRA_PUBLIC_URL}/mcp`, or every request
-  answers `500 misconfigured`. Use `store: new SqlStore(query)` on serverless.
+- In production: `CLEGRA_PUBLIC_URL` (an origin) and `auth.resource = ${CLEGRA_PUBLIC_URL}/mcp`, or every request but
+  the manifest answers `500 misconfigured`. Use `store: new SqlStore(query)` on serverless.
 - The app's handlers call the same functions its pages use. Data access is yours (any DB or ORM), and so is auth:
   `auth.resolve` verifies your own sign-in's tokens (recipes in [auth.md](auth.md)).
 
 ## The whole shape
 
 ```ts
-import { AppError, defineApp, ref } from "@clegra/sdk"
+import { AppError, clegraFromEnv, defineApp, ref } from "@clegra/sdk"
 import { z } from "zod"
 
 export default defineApp({
@@ -72,7 +72,7 @@ export default defineApp({
     resolve: async (token, request, { resource }) => ({ installation: "org_1", person: { id, name }, permissions: [...] }), // your own users' tokens: verify (signature, exp, aud === resource), map to a caller, or null
     authorizationServers: ["https://crm.example.com/api/auth"], // your auth library's OAuth server, named in the protected-resource metadata
     serve: async (request) => null,                          // optional: answer your authorization server's RFC 8414 metadata at the root; null otherwise
-    issuers: [{ issuer: "https://host.example.com" }],       // optional: Clegra nodes as workspace hosts (tokens with the clegra claim)
+    clegra: clegraFromEnv()!,                                // optional: Clegra's people through Clegra's core (DPoP app tokens, tenant <company>@<issuer>, the app's own roles); CLEGRA_* variables
   },
   path: "/api/clegra",             // optional, never under Next: where MCP lives with app.fetch elsewhere (default /mcp at the root)
   store: new SqlStore(query),        // optional: idempotency + one-time token ids in your Postgres (serverless, several instances)
@@ -131,7 +131,7 @@ export default defineApp({
     stats: { title: "Stats", input: z.object({}), readOnly: true, run: () => ({ data: { n: 1 } }) },   // a read: no confirmation
   },
 
-  fragments: {
+  artifacts: {
     pipeline_total: {
       title: "Open pipeline", description: "Total value of open deals", icon: "sigma",
       params: z.object({}),          // REQUIRED key
@@ -145,13 +145,11 @@ export default defineApp({
     },
   },
 
-  pages: {                           // each page is ONE of: list, record, dashboard, view, url
+  pages: {                           // each page is ONE of: list, record, dashboard, view
     deals: { title: "Deals", icon: "briefcase", list: "deal", columns: ["name", "stage", "value"] },
     deal: { record: "deal", sections: [{ title: "Deal", fields: ["name", "stage", "value"] }] },   // optional: every entity has a default record page
     pipeline: { title: "Pipeline", dashboard: [{ type: "pipeline_total", params: {}, size: "small" }, { type: "deal", params: { id: "d1" } }] },
     forecast: { title: "Forecast", permission: "deals.values", view: { html: () => loadHtml() } }, // your MCP Apps document
-    site: { title: "Site", url: "https://app.example.com/embed" },                                 // another site, isolated frame; https only
-    board: { title: "Board", url: "/embed/board", permission: "deals.view" },                      // a page of THIS app: needs `embed` (below)
   },
 
   agents: {
@@ -176,8 +174,9 @@ Template data: `card { title, subtitle?, status?, fields: [{ label, value }], ur
 
 An action's `input` is its form: `ref("entity")` becomes a picker, `.meta({ label, currency, labels })` the words,
 required/min/max/date are checked before sending, and an input the schema refuses comes back per field
-(`error.fields`). Views add no confirmation of their own: confirming is the host's (annotations, elicitation, or a
-workspace host's proof).
+(`error.fields`). Views add no confirmation of their own: confirming is the host's (annotations, elicitation), the
+person's device's for an agent with a Clegra token (`_meta.clegra.confirmation`: the core's confirmation token and the
+device's proof), or the Clegra client's UI, which asks and sends `_meta.clegra.confirmed: true`.
 
 An action on a record (`on: "deal"`) is listed with `id` and an optional `record_title` that the SDK adds (don't
 declare either in `input`): the model passes the record's title so a client's own approval prompt names it
@@ -196,7 +195,7 @@ Labels given as `{ en, it }` maps reach the generated view in every locale: it d
 `can(p)`, `locale`, `host` (`"workspace" | "plain"`), `settings`, `call`,
 `schedule` (the schedule this call is a run of, else null), `later` (in a later run: `{ id, at, until, confirmedAt }`,
 else null), `cancelLater(id)`, `t(label)`, `notify({ type?, title, body?, uri?, to? })` (`to`: person ids or
-`{ permission }`), `uri(entity, id)`.
+`"admins"`), `uri(entity, id)`.
 
 `AppError(code, message)` codes: `permission_denied`, `not_found`,
 `invalid_input`, `confirmation_required`, `conflict`, `internal`, `unauthorized`.
@@ -275,7 +274,7 @@ export const app = defineApp({
       confirm: "never",
       run: (_input, ctx) => {
         // ctx.person is null here (the installation runs it): say `to`
-        ctx.notify({ type: "digest", title: "3 tasks are due today", to: { permission: "tasks.view" } })
+        ctx.notify({ type: "digest", title: "3 tasks are due today", to: "admins" })
         return { message: "Sent." }
       },
     },
@@ -290,7 +289,7 @@ export const app = defineApp({
     },
     reindex: { title: "Reindex", input: z.object({}), confirm: "never", visibility: "app", run: () => ({}) },  // views and the host's UI only, never a model
   },
-  fragments: {
+  artifacts: {
     open_count: { title: "Open tasks", description: "How many are open", params: z.object({}), template: "stat",
       data: (_p, ctx) => ({ label: "open", value: db.openCount(ctx.installation) }) },   // a badge: stat, no required params
   },
@@ -312,11 +311,12 @@ export const app = defineApp({
 
 - **Page actions** are global actions (no `on`); a record page has none. Page params prefill inputs of the same
   name. The host and the generated view draw the first as the primary, the others in a menu, each opening its form.
-- **`visibility: "app"`** (entity, action, fragment): the tools carry `_meta.ui.visibility: ["app"]`, `search` and
+- **`visibility: "app"`** (entity, action, artifact): the tools carry `_meta.ui.visibility: ["app"]`, `search` and
   `fetch` leave the records out, agents can't `use` them. It hides from models; it is not a permission.
-- **Schedules** run as the *installation*: a workspace host's token with no person and exactly the action's
-  permission; `ctx.schedule` is the name. Nobody can confirm, so a `confirm: "always"` write can't be scheduled
-  (use `later`). Only a workspace host (trusted issuers) runs schedules; an app with its own sign-in runs its own cron.
+- **Schedules** run as the *installation*: a development workspace host's token with no person and exactly the
+  action's permission; `ctx.schedule` is the name. Nobody can confirm, so a `confirm: "always"` write can't be
+  scheduled (use `later`). Clegra's core issues no token without a person: an app with its own sign-in or with
+  `auth.clegra` runs its own cron; Clegra's lifecycle reaches it as signed events (`auth.clegra.events`).
 - **Notifications**: once you declare types, every `ctx.notify` names one (it throws otherwise). `to` defaults to the
   caller's person; a schedule must say `to`. `default: false` is off until the person turns it on.
 - **Targets** (global actions; at most 4 per action, 12 per app): `needs` lists the only fields you ever receive
@@ -326,9 +326,9 @@ export const app = defineApp({
 - **Later**: the confirmed call is stored (not run) and answered `{ data: { later: { id, at, until } } }`. The SDK adds
   the schedule and the notification type `clegra_later`; every 5 minutes the host runs the due runs once each,
   re-checking the stored proof; after `at + window` a run expires and its author is told. `ctx.cancelLater(id)`
-  cancels a pending run. With your own tokens (no workspace host), call `app.runLater(tenant)` from your cron and
-  deliver the notifications it returns. `SqlStore.schema()` gives both tables (`clegra_store`, `clegra_store_later`):
-  run it again in a new migration.
+  cancels a pending run. With your own tokens or `auth.clegra` (no workspace host), call `app.runLater(tenant)` from
+  your cron and deliver the notifications it returns. `SqlStore.schema()` gives its tables (`clegra_store`,
+  `clegra_store_later`, `clegra_store_roles`): run it again in a new migration.
 - **Lifecycle**: the tools `clegra_installation`, `clegra_export` (one file, with its size and sha256) and
   `clegra_delete` are listed only to the installation. Export and delete must work after `uninstalled`. Without
   them the host only changes its own state and tells the administrator your data stay on your server.
@@ -337,13 +337,14 @@ export const app = defineApp({
 
 `<entity>_list`, `<entity>_get`, `search` and `fetch` (when a field has
 `search: true`), `<entity>_<action>` / `<action>`, `open_<page>` (not for
-record pages), `show_<fragment>`, `clegra_resolve` (for hosts; `not_found` for another app's URI). Reads have
+record pages), `show_<artifact>`, `clegra_resolve` (for hosts; `not_found` for another app's URI). Reads have
 `readOnlyHint: true`; writes `destructiveHint: true` when `confirm` is always. With a kind, entity tools end with
 `Kind: person.` and carry `_meta.clegra: { entity, kind }`; `search` takes `kind`. What a model reads of a list,
 a get, `search` or `fetch` carries each record's `title` beside its `uri`. Every tool the generated view calls is
 callable from views (`_meta.ui.visibility` with `"app"`, `openai/widgetAccessible`). App-only items' tools carry
-`["app"]` alone. Only for the installation (a workspace host's token with no person): `clegra_later` (when an action
-has `later`) and the lifecycle tools.
+`["app"]` alone. Only for the installation (a development workspace host's token with no person): `clegra_later`
+(when an action has `later`) and the lifecycle tools. Only for a Clegra app administrator: `clegra_roles` («who has
+what», read-only).
 
 The generated view (ChatGPT, Claude, any MCP Apps host): rows open their record, «‹ back» returns, a record's
 actions run from it; progress, results and refusals appear in a status line at the top. It talks the MCP Apps bridge
@@ -355,18 +356,18 @@ change).
 ## Rules
 
 1. Scope **every** read and write by `ctx.installation`. Never keep global data.
-2. Never check permissions or strip fields yourself for what you declared: declare `permission` on the entity, field, action, page or fragment and the SDK enforces it. Use `ctx.can()` only for finer rules inside a handler.
+2. Never check permissions or strip fields yourself for what you declared: declare `permission` on the entity, field, action, page or artifact and the SDK enforces it. Use `ctx.can()` only for finer rules inside a handler.
 3. Every entity schema has a string `id` and exactly one `role: "title"`; at most one field per role.
 4. `input` and `params` are always present (`z.object({})`); omitting one breaks type inference for all entries.
 5. Writes confirm by default. Don't set `confirm: false` on anything a person would want to see first.
-6. Mark text that comes from outside (names typed into a form, emails, customer notes) `untrusted: true`, on the field; on a fragment whose data carry such text, `untrusted: true` on the fragment.
+6. Mark text that comes from outside (names typed into a form, emails, customer notes) `untrusted: true`, on the field; on an artifact whose data carry such text, `untrusted: true` on the artifact.
 7. Return short `message`s in the caller's language: `ctx.t({ en: "…", it: "…" })`.
-8. Names (`entities`, `actions`, `fragments`, `pages`, `agents` keys) are `[a-z][a-z0-9_]*`. Entities and fragments share one namespace. Don't name a filter/sort field `query`, `sort`, `dir`, `cursor` or `limit`.
+8. Names (`entities`, `actions`, `artifacts`, `pages`, `agents` keys) are `[a-z][a-z0-9_]*`. Entities and artifacts share one namespace. Don't name a filter/sort field `query`, `sort`, `dir`, `cursor` or `limit`.
 9. A list page with `params` also needs `query: (params) => ({ filters, text, sort })`.
 10. Dev auth (`auth: { dev: true }`) is for `listen()` and tests only: off unless you set it, refused when `NODE_ENV=production`, answers only callers on a loopback address, refused by `toNextHandlers`. In production give `auth.resource`: your server's public MCP address, the only audience tokens are accepted for. In `resolve`, check signature, expiry, issuer and `aud === resource` (a single audience); return null or throw `AuthError` to refuse.
-11. `ctx.installation` is the tenant: what `auth.resolve` said (your organization id), or a host's installation bound to that host (`<installation>@<issuer>`). Use it as an opaque key; never take a tenant from a parameter.
-12. In `list`, search `query.text` only in `query.textFields`; in a fragment's `data`, leave out values the caller may not see (`ctx.can`): template data are yours, the SDK only drops items whose `uri` is out of the caller's reach.
-13. Your data access is yours (any DB/ORM). Pages with `url` may be same-site paths (`/embed/pipeline`): then `defineApp({ embed: { frameAncestors: [the host origins], secret } })` (secret default `CLEGRA_EMBED_SECRET`), `proxy.ts` = `export const proxy = embedProxy(app); export const config = { matcher: "/embed/:path*" }`, and in the page `const caller = await getEmbedCaller(app, "<page name>")` (null → "open it from the app"; scope by `caller.installation`). Never read your own session cookie there: the host's frame is cross-site (spec §5.1).
+11. `ctx.installation` is the tenant: what `auth.resolve` said (your organization id), or a Clegra company bound to Clegra's core (`<company>@<issuer>`). Use it as an opaque key; never take a tenant from a parameter. A Clegra caller's `ctx.person.id` is pairwise (another id in every app); their permissions are your app's roles (`app.roles`, `ctx.admin`; a company administrator has everything unless `companyAdmin: "member"`), and `ctx.actor` says when an agent acts for them.
+12. In `list`, search `query.text` only in `query.textFields`; in an artifact's `data`, leave out values the caller may not see (`ctx.can`): template data are yours, the SDK only drops items whose `uri` is out of the caller's reach.
+13. Your data access is yours (any DB/ORM). Your app's own website is shown in Clegra as it is (spec §5.1): `defineApp({ site: { secret } })` (needs `auth.clegra`; secret default `CLEGRA_SITE_SECRET`), `proxy.ts` = `export const proxy = siteProxy(app); export const config = { matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"] }`, `<ClegraSite />` in the root layout (theme and language from the caller on `<html>`), and in pages/actions/routes `const caller = await getClegraCaller(app)` (null → your own sign-in; else a member of `caller.installation` with `caller.permissions`). Never read your own session cookie in a Clegra frame: it is cross-site there.
 
 ## Common mistakes
 
@@ -387,7 +388,7 @@ change).
 | `aud` checked with "includes", or not at all, in `resolve` | Exactly one audience, equal to `resource` |
 | The tenant taken from a tool argument or a header | From the verified token (or the database row it points to) only |
 | A schedule on a `confirm: "always"` write | Nobody is there to confirm: `confirm: "optional"`/`"never"` if it may run alone, else `later` |
-| `ctx.notify({ title })` in a schedule | Say `to` (person ids or `{ permission }`); with declared types, also `type` |
+| `ctx.notify({ title })` in a schedule | Say `to` (person ids or `"admins"`); with declared types, also `type` |
 | `later.at` on an optional input or a plain `z.string()` | A required `z.iso.datetime()` |
 | `targets` on an action with `on` | Targets are for global actions; the record action already has its record |
 | `visibility: "app"` to keep something from a client | It only keeps it from models; use `permission` or `expose: { plain: false }` |

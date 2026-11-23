@@ -10,8 +10,7 @@ const nextConfig: NextConfig = {
   serverExternalPackages: ["@electric-sql/pglite"],
   // The repository keeps its own agent instructions; no generated AGENTS.md in the example.
   agentRules: false,
-  // No page may be framed, except the embeddable ones (/embed/*, their policy is set in proxy.ts).
-  headers: async () => [{ source: "/((?!embed/).*)", headers: [{ key: "Content-Security-Policy", value: "frame-ancestors 'none'" }] }],
+  // Who may frame a page is said in one place: proxy.ts (the app's own site, spec §5.1).
 }
 
 // MCP at /mcp, the manifest and the OAuth metadata under /.well-known/, all served by app/api/clegra/[...path].

@@ -230,7 +230,7 @@ describe("later runs: what is kept is checked again", () => {
   })
 
   test("a later action needs a store with a later part", () => {
-    const bare: IdempotencyStore = { begin: async () => null, finish: async () => {}, abandon: async () => {}, once: async () => true }
+    const bare: IdempotencyStore = { begin: async () => null, finish: async () => {}, abandon: async () => {}, once: async () => true, put: async () => {}, get: async () => null, hit: async () => 1 }
     assert.throws(() => makeApp(bare), /action "publish": later keeps the confirmed call in the store, and this store has no later part/)
   })
 })
