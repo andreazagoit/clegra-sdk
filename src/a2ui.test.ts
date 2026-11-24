@@ -279,7 +279,7 @@ describe("records, creatable types, widgets and what changed", () => {
       },
       artifacts: {
         pipeline: { title: "Pipeline", description: "Open deals", params: z.object({}), template: "stat", data: () => ({ label: "Open", value: deals.size }) },
-        top: { title: "Top deals", description: "The biggest", params: z.object({ limit: z.number() }), template: "list", data: () => ({ items: [] }) },
+        top: { title: "Top deals", description: "The biggest", params: z.object({ limit: z.number() }), template: "list", data: ({ limit }) => ({ items: [...deals.values()].slice(0, limit.toFixed().length).map((d) => ({ title: d.name })) }) },
       },
       widgets: { pipeline: { sizes: ["small", "medium"] } },
     })

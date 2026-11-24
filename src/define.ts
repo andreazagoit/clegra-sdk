@@ -236,7 +236,7 @@ export type AppDefinition<E extends Schemas, A extends Schemas, F extends Schema
    * required params, each with its sizes (default medium and large) and the one it is added at (default the first).
    * An artifact that is not here is never offered as a widget (it is still pinned from where it is shown).
    */
-  widgets?: { [K in keyof F]?: WidgetConfig }
+  widgets?: { [K in NoInfer<keyof F & string>]?: WidgetConfig }
   pages?: Record<G, PageDef<E, NoInfer<P>, NoInfer<keyof A & string>, NoInfer<keyof F & string>>>
   /** The navigation: sections of pages, in order (no record pages; each page once). Without it a host shows every non-record page, ungrouped. */
   nav?: { section?: Label; pages: NoInfer<G>[] }[]

@@ -4,6 +4,11 @@ Clegra apps (spec 1.0 draft) and the `@clegra/sdk` package. Newest first. Versio
 npm dist-tag `next`. Entries below «Two scoped packages» keep the names of their time (the unscoped `clegra` package
 and its `clegra/ui`, the `modelapp` package, docs/map): they are history.
 
+## 0.1.0-next.10 (2026-11-24)
+
+- `defineApp({ widgets })` no longer takes part in inferring the artifacts' types: with `widgets` an artifact's `data`
+  lost its params' types (`unknown`).
+
 ## 0.1.0-next.9 (2026-11-24)
 
 - Spec, «Clegra tokens»: every Clegra token carries `locale`, the person's language, which is the caller's `ctx.locale`
