@@ -48,6 +48,7 @@ JSON Schema: [`spec/schema/clegra.schema.json`](../spec/schema/clegra.schema.jso
 | `components?` | The app's own A2UI components, by name (§5.4): `{ <Name>: { title, description?, view, props, actions? } }` |
 | `kinds?` | Definitions of the namespaced kinds this app uses (§3.1) |
 | `entities`, `actions`, `pages`, `artifacts`, `agents` | §3–§5 |
+| `widgets?` | `[{ artifact, sizes, size }]`: the artifact types the app offers as Home widgets (§5.5) |
 | `permissions` | `{ id, label, description?, default }`; ids are `group.verb` |
 | `settings` | `{ id, label, description?, type: text\|number\|boolean, required, default? }` (`id`: `[a-z][a-z0-9_]{1,39}`): values an administrator sets per installation; the workspace host sends them with every call (§7). Never secrets: those stay in the app's own configuration |
 | `nav?` | `[{ section?, pages }]`: the app's navigation (§5.2) |
@@ -78,8 +79,8 @@ runs it from outside.
 ## 3. Entities and field meaning
 
 An entity is `{ name, label, plural, description?, icon?, kind?, permission?,
-schema, fields, tools: { list, get }, searchable, visibility? }` (`visibility`:
-§6 rule 11). `kind` says what the
+schema, fields, tools: { list, get }, searchable, visibility?, record? }` (`visibility`:
+§6 rule 11; `record`: its record template, §5.4 rule 4). `kind` says what the
 entity is (§3.1): a kind name, or `{ by, map }` where `by` is a required enum
 field and `map` gives a kind for each of its values. `schema` is the record's
 JSON Schema; `fields` says what each field means:
@@ -351,8 +352,8 @@ actions?, badge?, … }` (`actions`, `badge`: §5.2):
 
 An **artifact** is a small live piece of the app shown in answers and on
 dashboards: `{ type, title, description?, params, template?, component?, view?, tool,
-permission?, actions?, size?, untrusted?, visibility? }` (`visibility`: §6
-rule 11). Templates are `record` (one per
+permission?, actions?, size?, untrusted?, visibility?, create? }` (`visibility`: §6
+rule 11; `create`: below). Templates are `record` (one per
 entity, `params { id }`), `card`, `stat`, `list`, `chart`; `component` names
 one of the app's own components (§5.4); an artifact with neither has only a `view`. An artifact instance's URI is
 `clegra://<app>/<type>/<base64url of its params, keys sorted>`.
@@ -371,6 +372,18 @@ SDK writes from them (§5.4):
 
 A `uri` is a record of the app: the item opens it. An item (or a card) whose
 `uri` is a record the caller can't reach is not sent.
+
+**Creatable types.** `create: { action, title }` makes an artifact type one
+people create in a workspace host, as a new file in a folder: Clegra lists it in
+«+ Nuovo» of a space and in a document's «/» block menu. `action` names a global
+write (§4) that makes a new, empty one from nothing: no required input (its
+defaults fill it), never `confirm: "always"`, never `later`; it answers with the
+new artifact instance's URI as `record` (a record type: the new record's URI,
+`ctx.uri(entity, id)`). `title` is the menu's words (default the type's title).
+Only record, template and component types are creatable. A host lists the type
+only for who may run the action and see the type, calls the action with `{}` as
+the person, and keeps or embeds the URI it answers; what was made is then edited
+as the app allows (its surface's actions, §5.4 rule 8, or the app's own pages).
 
 **Views** are MCP Apps documents (`ui://<app>/…`, `text/html;profile=mcp-app`).
 Any generated view MAY be overridden per entity, page or artifact; the
@@ -651,13 +664,27 @@ A2UI host. An app's own site (§5.1) is not a surface: it stays a frame.
    | `chart` | `root` Card → `body` Column [`heading`, `chart` Chart (Clegra) `kind: /kind, points: /points, format: /format, currency: /currency`, `actions`?] |
    | a component | `root` Card → `body` Column [`heading`, `component` (the app's component, `@catalogId` the app's catalog, each prop bound to `/<prop>`), `actions`?] |
 
-   `record` artifacts (an entity's record) are drawn by the host from the
-   entity's fields (§3) as before; their surface comes in a later revision of
-   this section.
+   | `record` | `root` Card → `body` Column [`head` Row (spaceBetween) [`title` borderless Button (child `title_text` Text `/title`, style `title`) calling `openRecord { uri: /uri }`, `status`? Text `/status` (style `status`)], `subtitle`? Text caption `/subtitle`, `fields` List (template `/fields` → `field` Row (spaceBetween) [`field_label` Text caption `label`, `field_value` Text `value`]), `actions`?] |
+
+   **The record template.** Every record (`record` artifacts: an entity's
+   record, `params { id }`) is one surface, written by the SDK from the
+   entity's `record: { fields, actions? }`, declared once: 1–6 key fields of
+   the entity (not `id`) and 0–3 of its record actions, in order (the first is
+   the primary). Without it the key fields are the first four a list would
+   show (fields with a role or a filter, not the title, subtitle or status) and
+   there are no actions. Its data model is `{ title, subtitle?, status?, tone?,
+   uri, fields: [{ name, label, value }] }`: the title, subtitle and status
+   from the fields' roles (§3), `tone` the status value's tone, and each key
+   field the caller may see as its label and its value **as a text in the
+   caller's language** (a referenced record by its title, money in its
+   currency, dates, numbers, enum labels, `✓`/`—`); a field with no value is
+   left out. A host draws it in an answer, a document, on Home and anywhere
+   else a record is shown, in place of its own drawing of the record.
 5. **Actions.** An artifact's `actions` (§5, global actions the caller may
    use) are `actions` Row [`action_<n>` Button (the first `primary`) with child
    `action_<n>_label` Text (the action's title in the caller's language)],
-   each with `action: { event: { name: <the action's tool>, context: {} } }`.
+   each with `action: { event: { name: <the action's tool>, context: {} } }`
+   (a record's actions, rule 4: `context: { id: <the record's id> }`).
    The host never runs the tool from the event: it opens the action's form
    (§4, §5.2 rule 2), and a write goes through the confirmation (§7) as from
    any other place. An `action` message whose name is not one of the
@@ -722,13 +749,20 @@ A2UI host. An app's own site (§5.1) is not a surface: it stays a frame.
    (the SDK leaves out what the action's permission doesn't allow; the app
    refuses it anyway). The result's `error.fields` are shown at the fields or
    cells they name, in the app's words.
-   **Live.** After a write through the host, and when an app's result names
-   artifacts it changed (`_meta.clegra.changed`: artifact URIs or types), the
-   host reads each surface again for every person who has it open, each as
-   themselves, and sends it as an `updateDataModel` (path `/`) over its live
-   channel (server-sent events; never polling). The components stay; a
-   person's uncommitted edit stays where it is and is told it is now out of
-   date (rule 9).
+   **Live.** A write's result names what it changed in `_meta.clegra.changed`
+   (§7): artifact instance URIs of the app, or artifact types and entity names
+   of it (every instance of that type). The SDK always names the record a write
+   acted on and the record it answered with; the handler adds more with
+   `ctx.changed(uri | type, …)` (a figure, a list the change moves). After such
+   a result, through whichever host or client it came, the host tells everyone
+   of the installation who may use the app, by ids only, over its live channel
+   (server-sent events; never polling); each place that draws one of those
+   surfaces (an answer, a document's app block, a Home widget, an open record)
+   reads it again **as its own viewer** and applies it as an `updateDataModel`
+   (path `/`) of the surface it has. The components stay; a person's
+   uncommitted edit stays where it is and is told it is now out of date (rule
+   9). Nothing is pushed on a timer and nothing of the data travels on the
+   live channel.
 9. **The spreadsheet.** Clegra's catalog has a native `Spreadsheet`
    component, drawn by the host (a grid, as a spreadsheet application's), for
    the SDK's template `sheet`:
@@ -772,6 +806,37 @@ A2UI host. An app's own site (§5.1) is not a surface: it stays a frame.
    the surface itself. A host has one renderer for artifacts, the A2UI one: its
    former template drawing goes in the same change in which its apps run an
    SDK with this section.
+
+### 5.5 Widgets: what an app offers on Home
+
+A workspace host's Home is the person's dashboard of **widgets**. An app says
+which of its artifact types are offered there, apart from the artifacts it
+produces: the manifest's `widgets` is `[{ artifact, sizes, size }]`, in the
+order the host's gallery lists them.
+
+- `artifact` is a template or component artifact type of the app (§5) whose
+  `params` have no required property: a widget is drawn with `{}`. A record
+  type is never offered (a record is pinned from where it is shown), nor a
+  view-only artifact (a host draws the surface, §5.4). Each type at most once;
+  at most 12 widgets.
+- `sizes` are the places it may take on the host's grid, of `small` (1×1),
+  `medium` (2×1), `large` (2×2), `extraLarge` (4×2); `size` (one of them) is the
+  one it is added at. Default (SDK): `medium` and `large`, the first.
+- The host draws it from the artifact's surface (§5.4), read as the person
+  with the artifact's permission, through the type's `show_<type>` tool or
+  `clegra_resolve`; it is live like any surface (§5.4 rule 8). The artifact's
+  `visibility: "app"` keeps a dashboard-only widget from every model.
+- An artifact type the app does not list is never offered as a widget. Any
+  artifact a person sees (a record, a figure in an answer) can still be pinned
+  to Home from where it is shown: that is the person's choice, not the app's
+  offer.
+
+```ts
+defineApp({
+  artifacts: { open_jobs: { title: "Open jobs", params: z.object({}), template: "stat", data } },
+  widgets: { open_jobs: { sizes: ["small", "medium"] } },
+})
+```
 
 ## 6. The generated MCP server
 
@@ -849,7 +914,7 @@ most once a minute):
 
 | Token | `typ` | Claims beyond `iss`, `aud`, `sub`, `iat`, `exp`, `jti` | Lives |
 |---|---|---|---|
-| app token: a person from a Clegra client | `clegra-app+jwt` | `company`, `company_role` (`admin`/`member`), `email`, `name`, `cnf.jkt` (the device's key) | ≤ 10 minutes |
+| app token: a person from a Clegra client | `clegra-app+jwt` | `company`, `company_role` (`admin`/`member`), `email`, `name`, `locale` (the person's language, BCP 47), `cnf.jkt` (the device's key) | ≤ 10 minutes |
 | delegated token: Clegra's agent for the person | `clegra-app+jwt` | as above, `act: { sub: "server:<id>" }`, `cnf.jkt` the server's key, `person_jkt` the person's device key | ≤ 60 s, one call |
 | automation run token | `clegra-app+jwt` | as the delegated token, `grant` (the person's consent) and `tools` (the tools consented to) | ≤ 60 s, one call |
 | device-agent token: an agent on the person's device | `clegra-app+jwt` | as the app token, `act: { sub: "device-agent:<jkt>" }` | ≤ 10 minutes |
@@ -861,6 +926,12 @@ most once a minute):
   client sends. `company` matches `[A-Za-z0-9._:-]{1,128}`.
 - **Subject.** `sub` is **pairwise**: the core gives the same person a
   different id in every app. It is `ctx.person.id`; the name is the token's.
+- **Language.** `locale` is the person's language, in every Clegra token
+  (the agent's delegated and automation tokens too), so the app's answers to
+  them read in it, whoever calls. It is the caller's `locale`: `ctx.locale`
+  and `ctx.t`, the data labels, titles, figures and errors (§6 rule 2). A
+  token without it answers in the app's own `locale`. A change of language
+  reaches the app with the next token.
 - **Allowed companies.** A private app is configured with the companies that
   may use it (`allowedCompanies`), a public one with `"any"`; a token of
   another company is refused. **In production an app without
@@ -1058,7 +1129,10 @@ and `error.pending: true`.
   any other caller gets the defaults. `schedule` names the schedule this call
   is a run of (§11); it counts only from the installation-level caller (§10),
   and any other call carrying it is refused.
-- Results MAY carry `{ notifications, untrusted, l10n }`:
+- Results MAY carry `{ notifications, untrusted, l10n, changed }`:
+  - `changed`: what a write changed, for hosts to draw again where it is open
+    (§5.4 rule 8): artifact instance URIs of this app, artifact types, entity
+    names. Others' URIs are refused when the result is made.
   - `notifications`: `[{ type?, title, body?, uri?, to }]` (§12). `to` is
     either the ids of people (as the token named them; default the caller's
     person) or `"admins"`: the company's administrators (§12). A workspace

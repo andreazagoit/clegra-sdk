@@ -22,7 +22,13 @@ export const LIMITS = {
   laterEvery: 5,
   publisherName: 100,
   publisherUrl: 300,
+  recordFields: 6,
+  recordActions: 3,
+  widgets: 12,
 } as const
+
+/** A Home widget's sizes (spec §5.5). */
+export const WIDGET_SIZES = ["small", "medium", "large", "extraLarge"] as const
 
 /** The fields of an email a target may need (`mail.message`). */
 export const MAIL_FIELDS = ["subject", "from", "to", "date", "text", "attachments"] as const
@@ -42,7 +48,7 @@ export type RulesManifest = {
   components?: Record<string, { view: string; actions: string[] }>
   publisher?: { name: string; url: string }
   kinds?: Record<string, KindDef>
-  entities: { name: string; tools: { list: ToolRef; get: ToolRef }; visibility?: string }[]
+  entities: { name: string; tools: { list: ToolRef; get: ToolRef }; visibility?: string; fields?: { name: string }[]; record?: { fields: string[]; actions?: string[] } }[]
   actions: {
     name: string
     entity?: string
@@ -55,7 +61,8 @@ export type RulesManifest = {
     later?: { at: string; window: number }
   }[]
   pages: { name: string; kind: string; tool: ToolRef; actions?: string[]; badge?: string }[]
-  artifacts: { type: string; entity?: string; template?: string; component?: string; params: InputSchema; tool: ToolRef; visibility?: string }[]
+  artifacts: { type: string; entity?: string; template?: string; component?: string; params: InputSchema; tool: ToolRef; visibility?: string; permission?: string; create?: { action: string; title: Label } }[]
+  widgets?: { artifact: string; sizes: string[]; size: string }[]
   agents: { name: string; tools: string[] }[]
   permissions: { id: string }[]
   nav?: { section?: Label; pages: string[] }[]
@@ -255,7 +262,7 @@ export function manifestRuleProblems(m: RulesManifest): string[] {
 
   // The app's own A2UI components (spec §5.4 rule 6) and the artifacts drawn by them.
   const components = m.components ?? {}
-  const reserved = ["Text", "Image", "Icon", "Video", "AudioPlayer", "Row", "Column", "List", "Card", "Tabs", "Modal", "Divider", "Button", "CheckBox", "TextField", "DateTimeInput", "ChoicePicker", "Slider", "Chart", "Surface", "McpApp"]
+  const reserved = ["Text", "Image", "Icon", "Video", "AudioPlayer", "Row", "Column", "List", "Card", "Tabs", "Modal", "Divider", "Button", "CheckBox", "TextField", "DateTimeInput", "ChoicePicker", "Slider", "Chart", "Spreadsheet", "TodoList", "AppBlock", "Surface", "McpApp"]
   for (const [name, c] of Object.entries(components)) {
     const where = `component "${name}"`
     if (!/^[A-Z][A-Za-z0-9]{0,39}$/.test(name)) p.push(`${where}: a capital letter, then letters and digits`)
@@ -263,6 +270,61 @@ export function manifestRuleProblems(m: RulesManifest): string[] {
     if (m.name && c.view !== `ui://${m.name}/components/${name}`) p.push(`${where}: its view is ui://${m.name}/components/${name}`)
     for (const t of c.actions) if (!tools.includes(t)) p.push(`${where}: action "${t}" is not a tool of this app`)
   }
+  // The record template of each entity (spec §5.4 rule 4 `record`): its own fields, its own record actions.
+  for (const e of m.entities) {
+    if (!e.record) continue
+    const where = `entity "${e.name}": record`
+    const fields = new Set((e.fields ?? []).map((f) => f.name))
+    if (!e.record.fields.length || e.record.fields.length > LIMITS.recordFields) p.push(`${where}: 1 to ${LIMITS.recordFields} fields`)
+    if (new Set(e.record.fields).size !== e.record.fields.length) p.push(`${where}: a field is named twice`)
+    for (const f of e.record.fields) if (!fields.has(f) || f === "id") p.push(`${where}: "${f}" is not a field of ${e.name}`)
+    const acts = e.record.actions ?? []
+    if (acts.length > LIMITS.recordActions) p.push(`${where}: at most ${LIMITS.recordActions} actions`)
+    if (new Set(acts).size !== acts.length) p.push(`${where}: an action is named twice`)
+    for (const n of acts) {
+      const a = actions.get(n)
+      if (!a) p.push(`${where}: "${n}" is not an action of this app`)
+      else if (a.entity !== e.name) p.push(`${where}: "${n}" is not an action on one ${e.name}`)
+    }
+  }
+
+  // Creatable types (spec §5 `create`): a global write that makes one from nothing, with nobody asked first.
+  for (const f of m.artifacts) {
+    if (!f.create) continue
+    const where = `artifact "${f.type}": create`
+    if (!f.entity && !f.template && !f.component) p.push(`${where}: only a record, template or component artifact is created (a host draws what it made)`)
+    const a = actions.get(f.create.action)
+    if (!a) {
+      p.push(`${where}: "${f.create.action}" is not an action of this app`)
+      continue
+    }
+    if (a.entity) p.push(`${where}: "${a.name}" works on one ${a.entity}; create runs a global action`)
+    if (a.readOnly) p.push(`${where}: "${a.name}" is a read; create runs a write`)
+    if (a.confirm === "always") p.push(`${where}: "${a.name}" is a write the person confirms (confirm "always"): a new, empty one is made at once`)
+    if (requiredOf(a.input).length) p.push(`${where}: "${a.name}" has required inputs (${requiredOf(a.input).join(", ")}); create calls it with {}`)
+    if (a.later) p.push(`${where}: "${a.name}" runs later; create makes it now`)
+  }
+
+  // Home widgets (spec §5.5): artifact types a host draws on a dashboard, with nothing to fill in.
+  const widgets = m.widgets ?? []
+  if (widgets.length > LIMITS.widgets) p.push(`widgets: at most ${LIMITS.widgets}`)
+  const offered = new Set<string>()
+  for (const w of widgets) {
+    const where = `widget "${w.artifact}"`
+    if (offered.has(w.artifact)) p.push(`${where} is declared twice`)
+    offered.add(w.artifact)
+    const f = artifacts.get(w.artifact)
+    if (!f || f.entity) p.push(`${where}: "${w.artifact}" is not an artifact type of this app (a record is pinned, not offered)`)
+    else {
+      if (!f.template && !f.component) p.push(`${where}: only a template or component artifact is a widget (a host draws its surface)`)
+      if (requiredOf(f.params).length) p.push(`${where}: "${w.artifact}" has required params (${requiredOf(f.params).join(", ")}); a widget is drawn with none`)
+    }
+    if (!w.sizes.length) p.push(`${where}: no sizes`)
+    if (new Set(w.sizes).size !== w.sizes.length) p.push(`${where}: a size is named twice`)
+    for (const size of w.sizes) if (!(WIDGET_SIZES as readonly string[]).includes(size)) p.push(`${where}: size "${size}" is not one of ${WIDGET_SIZES.join(", ")}`)
+    if (!w.sizes.includes(w.size)) p.push(`${where}: size "${w.size}" is not one of its sizes`)
+  }
+
   for (const f of m.artifacts) {
     if (f.component === undefined) continue
     const where = `artifact "${f.type}"`

@@ -223,3 +223,130 @@ describe("the app's own components", () => {
     assert.deepEqual(ofId(s, "component")!["a/b"], { "@path": "/a~1b" })
   })
 })
+
+describe("records, creatable types, widgets and what changed", () => {
+  const keyFile = join(tmpdir(), `clegra-a2ui-key-${randomUUID()}.json`)
+  after(() => rmSync(keyFile, { force: true }))
+  type Deal = { id: string; name: string; stage: "lead" | "proposal" | "won"; value: number; due: string; owner: string; note?: string }
+  const deals = new Map<string, Deal>([["d1", { id: "d1", name: "Acme renewal", stage: "proposal", value: 12000, due: "2026-12-01", owner: "o1", note: "call back" }]])
+  const make = () =>
+    defineApp({
+      name: "crm",
+      title: "CRM",
+      version: "1.0.0",
+      locale: "en",
+      auth: { dev: { keyFile, code: "TEST1" } } as AuthOptions,
+      permissions: { "deals.edit": { label: "Edit deals" } },
+      entities: {
+        owner: {
+          label: "Owner",
+          schema: z.object({ id: z.string(), name: z.string().meta({ role: "title" }) }),
+          get: (id) => (id === "o1" ? { id, name: "Ada" } : null),
+          list: () => ({ rows: [{ id: "o1", name: "Ada" }] }),
+        },
+        deal: {
+          label: { en: "Deal", it: "Trattativa" },
+          schema: z.object({
+            id: z.string(),
+            name: z.string().meta({ role: "title" }),
+            stage: z.enum(["lead", "proposal", "won"]).meta({ role: "status", labels: { proposal: { en: "Proposal", it: "Proposta" } }, tones: { proposal: "info" } }),
+            value: z.number().meta({ label: { en: "Value", it: "Valore" }, currency: "EUR", filter: true }),
+            due: z.iso.date().meta({ label: { en: "Due", it: "Scadenza" } }),
+            owner: z.string().meta({ label: { en: "Owner", it: "Responsabile" }, ref: "owner" }),
+            note: z.string().optional(),
+          }),
+          record: { fields: ["value", "due", "owner"], actions: ["win", "lose"] },
+          create: { action: "new_deal", title: { en: "Deal draft", it: "Bozza di trattativa" } },
+          get: (id) => deals.get(id) ?? null,
+          list: () => ({ rows: [...deals.values()] }),
+        },
+      },
+      actions: {
+        win: { on: "deal", title: "Mark won", input: z.object({}), confirm: false, expose: { plain: true }, run: (_i, _ctx, d) => ({ message: `${d.name} won` }) },
+        lose: { on: "deal", title: "Mark lost", input: z.object({}), confirm: false, permission: "deals.edit", run: () => ({ message: "lost" }) },
+        new_deal: {
+          title: "New deal",
+          input: z.object({ name: z.string().default("Untitled") }),
+          confirm: false,
+          expose: { plain: true },
+          run: ({ name }, ctx) => {
+            const id = `d${deals.size + 1}`
+            deals.set(id, { id, name, stage: "lead", value: 0, due: "2026-12-31", owner: "o1", note: "" })
+            ctx.changed("pipeline")
+            return { record: ctx.uri("deal", id) }
+          },
+        },
+      },
+      artifacts: {
+        pipeline: { title: "Pipeline", description: "Open deals", params: z.object({}), template: "stat", data: () => ({ label: "Open", value: deals.size }) },
+        top: { title: "Top deals", description: "The biggest", params: z.object({ limit: z.number() }), template: "list", data: () => ({ items: [] }) },
+      },
+      widgets: { pipeline: { sizes: ["small", "medium"] } },
+    })
+
+  test("manifest: the record template, the creatable type and the widgets; valid against the manifest schema", () => {
+    const m = make().manifest()
+    assert.ok(manifestSchema.safeParse(m).success, JSON.stringify(manifestSchema.safeParse(m).error?.issues.slice(0, 2)))
+    assert.deepEqual(m.entities.find((e) => e.name === "deal")?.record, { fields: ["value", "due", "owner"], actions: ["win", "lose"] })
+    assert.deepEqual(m.artifacts.find((a) => a.type === "deal")?.create, { action: "new_deal", title: { en: "Deal draft", it: "Bozza di trattativa" } })
+    assert.deepEqual(m.widgets, [{ artifact: "pipeline", sizes: ["small", "medium"], size: "small" }])
+  })
+
+  test("record: the surface from the template, values in the reader's language, only the actions the caller may use", async () => {
+    const c = await testClient(make(), { permissions: [], locale: "it" })
+    const r = await c.call("clegra_resolve", { uris: ["clegra://crm/deal/d1"], want: "artifact" })
+    const [one] = (r.structuredContent as { results: { a2ui: A2uiSurface }[] }).results
+    assertValid(one!.a2ui)
+    const model = one!.a2ui[0].createSurface.dataModel as { title: string; status: string; tone: string; uri: string; fields: { name: string; label: string; value: string }[] }
+    assert.equal(model.title, "Acme renewal")
+    assert.equal(model.status, "Proposta")
+    assert.equal(model.tone, "info")
+    assert.equal(model.uri, "clegra://crm/deal/d1")
+    assert.deepEqual(model.fields.map((f) => [f.name, f.label]), [["value", "Valore"], ["due", "Scadenza"], ["owner", "Responsabile"]])
+    assert.match(model.fields[0]!.value, /12\.000/)
+    assert.equal(model.fields[2]!.value, "Ada")
+    assert.equal(ofId(one!.a2ui, "title")!.component, "Button")
+    // «lose» needs deals.edit: not offered. «win» carries the record's id.
+    assert.equal(ofId(one!.a2ui, "action_1"), undefined)
+    assert.deepEqual(ofId(one!.a2ui, "action_0")!.action, { event: { name: "deal_win", context: { id: "d1" } } })
+  })
+
+  test("a write says what it changed: the record it acted on, the record it made, what the handler named", async () => {
+    const c = await testClient(make(), { permissions: "all" })
+    const won = await c.call("deal_win", { id: "d1" })
+    assert.deepEqual((won._meta?.clegra as { changed?: string[] }).changed, ["clegra://crm/deal/d1"])
+    const made = await c.call("new_deal", {})
+    assert.ok(!made.isError, JSON.stringify(made))
+    const uri = (made.structuredContent as { record: string }).record
+    assert.match(uri, /^clegra:\/\/crm\/deal\//)
+    assert.deepEqual((made._meta?.clegra as { changed?: string[] }).changed, [uri, "pipeline"])
+  })
+
+  test("definition errors: a record field or action that isn't the entity's, a create that needs input or confirmation, a widget with params", () => {
+    const base = { name: "xx", title: "X", version: "1", auth: { dev: { keyFile, code: "TEST1" } } as AuthOptions }
+    const thing = (extra: Record<string, unknown>) => ({ thing: { label: "Thing", schema: z.object({ id: z.string(), name: z.string().meta({ role: "title" }) }), get: () => null, list: () => ({ rows: [] }), ...extra } })
+    const make = { title: "Make", input: z.object({ name: z.string() }), run: () => ({}) }
+    assert.throws(() => defineApp({ ...base, entities: thing({ record: { fields: ["nope"] } }) as never }), /"nope" is not a field of thing/)
+    assert.throws(() => defineApp({ ...base, entities: thing({ record: { fields: ["name"], actions: ["make"] } }) as never, actions: { make } }), /not an action on one thing/)
+    assert.throws(() => defineApp({ ...base, entities: thing({ create: { action: "make" } }) as never, actions: { make } }), /required inputs \(name\)/)
+    assert.throws(() => defineApp({ ...base, entities: thing({ create: { action: "make" } }) as never, actions: { make: { ...make, input: z.object({}) } } }), /confirm "always"/)
+    const top = { title: "Top", description: "Top", params: z.object({ limit: z.number() }), template: "stat" as const, data: () => null }
+    assert.throws(() => defineApp({ ...base, entities: {}, artifacts: { top }, widgets: { top: {} } }), /required params \(limit\)/)
+    assert.throws(() => defineApp({ ...base, entities: {}, artifacts: { top: { ...top, params: z.object({}) } }, widgets: { top: { sizes: ["small"], size: "large" } } }), /not one of its sizes/)
+    assert.throws(() => defineApp({ ...base, entities: {}, widgets: { gone: {} } as never }), /not an artifact type/)
+  })
+
+  test("ctx.changed names only this app's artifacts", async () => {
+    const app = defineApp({
+      name: "yy",
+      title: "Y",
+      version: "1",
+      auth: { dev: { keyFile, code: "TEST1" } } as AuthOptions,
+      entities: {},
+      actions: { poke: { title: "Poke", input: z.object({}), confirm: false, expose: { plain: true }, run: (_i, ctx) => ctx.changed("clegra://other/x/1") } },
+    })
+    const c = await testClient(app, { permissions: "all" })
+    const r = await c.call("poke", {})
+    assert.equal(r.isError, true)
+  })
+})

@@ -8,7 +8,7 @@ import type { SiteOptions } from "./site"
 import type { Label } from "./labels"
 import { AppServer, type PeopleResolver } from "./server"
 import type { IdempotencyStore } from "./store"
-import type { ActionHandle, ActionResult, Confirm, Context, EntityHandle, Exposure, ArtifactInstance, KindConfig, LaterConfig, LifecycleConfig, ListResult, PageConfig, PermissionConfig, Publisher, Query, SettingConfig, Target, TemplateData, ViewSource, Visibility } from "./types"
+import type { ActionHandle, ActionResult, Confirm, Context, CreateConfig, EntityHandle, Exposure, ArtifactInstance, KindConfig, LaterConfig, LifecycleConfig, ListResult, PageConfig, PermissionConfig, Publisher, Query, SettingConfig, Target, TemplateData, ViewSource, Visibility, WidgetConfig } from "./types"
 
 /**
  * defineApp: THE authoring API (spec §1). One typed object holds the whole
@@ -46,6 +46,18 @@ export type EntityDef<S extends z.ZodObject, P extends string = string> = {
   view?: ViewSource
   /** `"app"`: its tools are for views and the host's own UI only, never for a model (search and fetch leave its records out). */
   visibility?: Visibility
+  /**
+   * The record template (spec §5.4 rule 4 `record`), declared once: up to 6 key fields and up to 3 of the entity's
+   * record actions, in order. Hosts draw every record of the entity from it (in answers, documents, Home). Default:
+   * the first four fields a list would show, no actions.
+   */
+  record?: { fields: (keyof z.infer<S> & string)[]; actions?: string[] }
+  /**
+   * People create a new record from a workspace host's «+ Nuovo» and a document's «/» menu (spec §5 `create`):
+   * `action` names a global write with no required input and no confirmation that makes an empty one and returns
+   * `{ record: ctx.uri("<entity>", id) }`; `title` is the menu's words (default: the entity's label).
+   */
+  create?: CreateConfig
 }
 
 type ActionBase<I extends z.ZodObject, P extends string> = {
@@ -95,6 +107,8 @@ type ArtifactBase<Pm extends z.ZodObject, P extends string, A extends string> = 
   untrusted?: boolean
   /** `"app"`: its tool is for views and the host's own UI only, never for a model. */
   visibility?: Visibility
+  /** People create a new one from a workspace host's «+ Nuovo» and a document's «/» menu (spec §5 `create`). */
+  create?: CreateConfig
 }
 
 export type ArtifactDef<Pm extends z.ZodObject, P extends string = string, A extends string = string> =
@@ -217,6 +231,12 @@ export type AppDefinition<E extends Schemas, A extends Schemas, F extends Schema
   /** The app's own A2UI components, by name (`[A-Z][A-Za-z0-9]*`, spec §5.4 rule 6). */
   components?: Record<string, ComponentDef<NoInfer<keyof A & string>>>
   artifacts?: { [K in keyof F]: ArtifactDef<F[K], NoInfer<P>, keyof A & string> }
+  /**
+   * The artifact types offered as Home widgets (spec §5.5), in order: template or component artifacts without
+   * required params, each with its sizes (default medium and large) and the one it is added at (default the first).
+   * An artifact that is not here is never offered as a widget (it is still pinned from where it is shown).
+   */
+  widgets?: { [K in keyof F]?: WidgetConfig }
   pages?: Record<G, PageDef<E, NoInfer<P>, NoInfer<keyof A & string>, NoInfer<keyof F & string>>>
   /** The navigation: sections of pages, in order (no record pages; each page once). Without it a host shows every non-record page, ungrouped. */
   nav?: { section?: Label; pages: NoInfer<G>[] }[]
@@ -251,7 +271,7 @@ export type App = Pick<AppServer, "name" | "locale" | "manifest" | "fetch" | "st
 const confirmOf = (c: boolean | Confirm | undefined): Confirm | undefined => (c === true ? "always" : c === false ? "never" : c)
 
 export function defineApp<E extends Schemas, A extends Schemas = Schemas, F extends Schemas = Schemas, P extends string = string, G extends string = string>(def: AppDefinition<E, A, F, P, G>): App {
-  const { permissions, settings, kinds, entities, actions, components, artifacts, pages, agents, nav, schedules, notifications, lifecycle, ...options } = def
+  const { permissions, settings, kinds, entities, actions, components, artifacts, widgets, pages, agents, nav, schedules, notifications, lifecycle, ...options } = def
   const app = new AppServer(options)
   if (kinds) app.defineKinds(kinds)
   for (const [id, p] of Object.entries(permissions ?? {})) app.registerPermission(id, p as PermissionConfig)
@@ -295,6 +315,7 @@ export function defineApp<E extends Schemas, A extends Schemas = Schemas, F exte
     })
     app.registerArtifact(type, { ...config, ...(handles.length ? { actions: handles } : {}) } as never)
   }
+  for (const [type, w] of Object.entries(widgets ?? {}) as [string, WidgetConfig | undefined][]) app.registerWidget(type, w ?? {})
 
   const actionOf = (n: string, where: string) => {
     const h = actionHandles.get(n)

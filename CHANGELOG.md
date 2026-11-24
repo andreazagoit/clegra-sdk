@@ -4,6 +4,27 @@ Clegra apps (spec 1.0 draft) and the `@clegra/sdk` package. Newest first. Versio
 npm dist-tag `next`. Entries below «Two scoped packages» keep the names of their time (the unscoped `clegra` package
 and its `clegra/ui`, the `modelapp` package, docs/map): they are history.
 
+## 0.1.0-next.9 (2026-11-24)
+
+- Spec, «Clegra tokens»: every Clegra token carries `locale`, the person's language, which is the caller's `ctx.locale`
+  (the agent's delegated and automation tokens too); a token without it gets the app's own `locale`.
+- `init --ui` names `@clegra/ui` `^0.1.0-next.13`.
+- **The record template (spec §5.4 rule 4 `record`)**: every record an app resolves carries its A2UI surface, written
+  from the entity's `record: { fields, actions? }`, declared once (1–6 key fields, 0–3 record actions; default the
+  first four fields a list would show): the title opening the record, the status as a chip (with its tone), the key
+  fields as texts in the reader's language (referenced records by title, money, dates, enum labels), the record
+  actions the caller may use, each event carrying the record's `id`. The manifest's entity carries `record`.
+- **What a write changed (spec §5.4 rule 8)**: a write's result carries `_meta.clegra.changed`, the URIs of the record
+  it acted on and of the record it answered with, plus what the handler names with `ctx.changed(uri | type, …)`; a
+  host reads those surfaces again wherever they are open, over its live channel.
+- **Creatable types (spec §5 `create`)**: an entity's or an artifact's `create: { action, title? }` lists the type in
+  a workspace host's «+ Nuovo» and in a document's «/» menu; the action is a global write with no required input and
+  no confirmation first that answers the new instance's URI as `record`. The manifest's artifact carries `create`.
+- **Widgets (spec §5.5)**: `defineApp({ widgets: { <artifact type>: { sizes?, size? } } })` and the manifest's
+  `widgets` say which template or component artifacts (without required params) the app offers on Home; no other
+  artifact is offered as a widget.
+- `Spreadsheet`, `TodoList` and `AppBlock` are Clegra catalog names: an app's own component can't take them.
+
 ## 0.1.0-next.8 (2026-11-23)
 
 - **`init --ui` installs `@clegra/ui` `^0.1.0-next.10`** (was `^0.1.0-next.5`).

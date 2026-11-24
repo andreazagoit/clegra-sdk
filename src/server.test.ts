@@ -203,7 +203,8 @@ describe("plain host", () => {
     const r = await c.call("note_close", { id: "n1" })
     assert.ok(!r.isError, JSON.stringify(r))
     assert.equal((r.structuredContent as { record: string }).record, "clegra://notes/note/n1")
-    assert.deepEqual(r._meta?.clegra, { notifications: [{ title: "#n1 closed", to: ["test-person"] }] })
+    // The record it acted on is said changed (spec §5.4 rule 8): hosts draw it again where it is open.
+    assert.deepEqual(r._meta?.clegra, { notifications: [{ title: "#n1 closed", to: ["test-person"] }], changed: ["clegra://notes/note/n1"] })
     const denied = await testClient(makeApp(), { permissions: [] })
     assert.ok(!(await denied.listTools()).some((t) => t.name === "note_close"))
   })

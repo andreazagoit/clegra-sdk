@@ -555,6 +555,33 @@
             "description": "App-only: hidden from every model (its tools carry MCP Apps `_meta.ui.visibility: [\"app\"]`); views and the host's own UI still call it. Absent: models and apps",
             "type": "string",
             "const": "app"
+          },
+          "record": {
+            "description": "The record template (spec §5.4 rule 4 `record`); absent: the fields a list would show first, no actions",
+            "type": "object",
+            "properties": {
+              "fields": {
+                "minItems": 1,
+                "maxItems": 6,
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "The key fields its surface shows, in order"
+              },
+              "actions": {
+                "description": "Record actions of this entity its surface offers, in order: the first is the primary",
+                "maxItems": 3,
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "fields"
+            ],
+            "additionalProperties": false
           }
         },
         "required": [
@@ -962,6 +989,31 @@
             "description": "App-only: hidden from every model (its tools carry MCP Apps `_meta.ui.visibility: [\"app\"]`); views and the host's own UI still call it. Absent: models and apps",
             "type": "string",
             "const": "app"
+          },
+          "create": {
+            "description": "A type people create in a workspace host (spec §5 `create`)",
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "description": "A global write with no required input, not confirmed first, that makes a new one and returns its URI as `record`"
+              },
+              "title": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "The words of «+ Nuovo» and the «/» menu"
+              }
+            },
+            "required": [
+              "action",
+              "title"
+            ],
+            "additionalProperties": false
           }
         },
         "required": [
@@ -969,6 +1021,51 @@
           "title",
           "params",
           "tool"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "widgets": {
+      "description": "The artifact types offered as Home widgets (spec §5.5)",
+      "maxItems": 12,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "artifact": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{0,39}$",
+            "description": "A template or component artifact type of this app without required params"
+          },
+          "sizes": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "small",
+                "medium",
+                "large",
+                "extraLarge"
+              ]
+            },
+            "description": "The sizes it may take on a dashboard grid"
+          },
+          "size": {
+            "type": "string",
+            "enum": [
+              "small",
+              "medium",
+              "large",
+              "extraLarge"
+            ],
+            "description": "The size it is added at: one of `sizes`"
+          }
+        },
+        "required": [
+          "artifact",
+          "sizes",
+          "size"
         ],
         "additionalProperties": false
       }

@@ -42,9 +42,11 @@ import type {
   SettingConfig,
   Template,
   ViewSource,
+  WidgetConfig,
+  WidgetSize,
 } from "./types"
 import { MCP_APP_MIME_TYPE, viewHtml } from "./view"
-import { A2UI_MIME_TYPE, appCatalog, appCatalogId, COMPONENT_NAME, componentSurface, RESERVED_COMPONENTS, surfaceResourceUri, templateSurface, type ComponentEntry } from "./a2ui"
+import { A2UI_MIME_TYPE, appCatalog, appCatalogId, COMPONENT_NAME, componentSurface, recordSurface, RESERVED_COMPONENTS, surfaceResourceUri, templateSurface, type ComponentEntry } from "./a2ui"
 
 /**
  * THE CLEGRA APP SERVER, v1 (docs/spec.md): an MCP server
@@ -536,6 +538,16 @@ export class AppServer {
     return { kind: "artifact", type }
   }
 
+  readonly #widgets = new Map<string, { sizes: WidgetSize[]; size: WidgetSize }>()
+
+  /** An artifact type offered as a Home widget (spec §5.5), in declaration order; its sizes default to medium and large. */
+  registerWidget(artifact: string, config: WidgetConfig = {}): void {
+    if (this.#widgets.has(artifact)) throw new Error(`widget "${artifact}" is registered twice`)
+    const sizes = config.sizes?.length ? [...config.sizes] : (["medium", "large"] as WidgetSize[])
+    this.#widgets.set(artifact, { sizes, size: config.size ?? sizes[0]! })
+    this.#changed()
+  }
+
   /** One of the app's own A2UI components (spec §5.4 rule 6): a page of the app drawing the props a host gives it. */
   registerComponent(name: string, config: ComponentConfig): void {
     if (!COMPONENT_NAME.test(name)) throw new Error(`component "${name}": a capital letter, then letters and digits (at most 40)`)
@@ -806,8 +818,8 @@ export class AppServer {
     }))
   }
 
-  #notificationsMeta(sent: SentNotification[]) {
-    return sent.length ? { _meta: { [META_KEY]: { notifications: sent } } } : {}
+  #notificationsMeta(sent: SentNotification[], changed: readonly string[] = []) {
+    return sent.length || changed.length ? { _meta: { [META_KEY]: { ...(sent.length ? { notifications: sent } : {}), ...(changed.length ? { changed: [...changed] } : {}) } } } : {}
   }
 
   #context(caller: Caller, meta: Record<string, unknown> | undefined, notes: Notification[], run?: { later: LaterInfo; call: string | null }): Context {
@@ -852,7 +864,27 @@ export class AppServer {
         notes.push(n)
       },
       uri: (entity, id) => this.uri(entity, id),
+      changed: (...what) => {
+        const kept = this.#changes.get(notes) ?? new Set<string>()
+        for (const w of what) kept.add(this.#changeOf(w))
+        this.#changes.set(notes, kept)
+      },
     }
+  }
+
+  /** What a call said it changed (`ctx.changed`), by the call's notifications list (one per call). */
+  readonly #changes = new WeakMap<Notification[], Set<string>>()
+
+  /** One thing a call changed, as `_meta.clegra.changed` says it: an artifact URI of this app, or a type of it. */
+  #changeOf(what: string | EntityHandle): string {
+    const name = typeof what === "string" ? what : what.name
+    if (name.startsWith(`${URI_SCHEME}://`)) {
+      const parsed = this.parseUri(name)
+      if (!parsed || (!this.#entities.has(parsed.type) && !this.#artifacts.has(parsed.type))) throw new Error(`ctx.changed: ${name} is not an artifact URI of this app`)
+      return name
+    }
+    if (!this.#entities.has(name) && !this.#artifacts.has(name)) throw new Error(`ctx.changed: "${name}" is not an entity, an artifact type or an artifact URI of this app`)
+    return name
   }
 
   #t(caller: Caller | null, label: Label | undefined): string {
@@ -1240,6 +1272,46 @@ export class AppServer {
     }
   }
 
+  /** The record template's key fields (spec §5.4 rule 4 `record`): as declared, else the first four a list would show (not the title, subtitle or status). */
+  #recordFields(entity: EntityRecord): FieldInfo[] {
+    const declared = entity.config.record?.fields
+    if (declared) return declared.map((n) => entity.fields.find((f) => f.name === n)!).filter(Boolean)
+    return entity.fields.filter((f) => f.name !== "id" && f.role !== "title" && f.role !== "subtitle" && f.role !== "status" && (f.role || f.filter) && f.type !== "object" && f.type !== "array").slice(0, 4)
+  }
+
+  /** A record's surface data: every value a text in the caller's language (referenced records by their titles, dates, numbers, money, labels). */
+  #recordData(entity: EntityRecord, row: Record<string, unknown>, refs: Record<string, Record<string, string>>, uri: string, caller: Caller) {
+    const card = this.#recordCard(entity, row, caller)
+    const status = entity.fields.find((f) => f.role === "status" && (!f.permission || caller.permissions.has(f.permission)))
+    const tone = status?.tones?.[String(row[status.name])]
+    const locale = caller.locale ?? this.locale
+    const shown = (f: FieldInfo, v: unknown): string => {
+      if (v === undefined || v === null || v === "") return ""
+      if (typeof v === "string" && refs[f.name]?.[v]) return refs[f.name]![v]!
+      try {
+        if (typeof v === "number") return f.currency ? new Intl.NumberFormat(locale, { style: "currency", currency: f.currency }).format(v) : new Intl.NumberFormat(locale).format(v)
+        if (typeof v === "boolean") return v ? "✓" : "—"
+        if (typeof v === "string" && f.labels?.[v]) return this.#t(caller, f.labels[v])
+        if (typeof v === "string" && f.schema.format === "date" && /^\d{4}-\d{2}-\d{2}$/.test(v)) return new Intl.DateTimeFormat(locale, { dateStyle: "medium" }).format(new Date(`${v}T12:00:00`))
+        if (typeof v === "string" && f.schema.format === "date-time" && Number.isFinite(Date.parse(v))) return new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(new Date(v))
+      } catch {}
+      return typeof v === "string" ? v : Array.isArray(v) ? v.map(String).join(", ") : JSON.stringify(v)
+    }
+    const fields = this.#recordFields(entity)
+      .filter((f) => !f.permission || caller.permissions.has(f.permission))
+      .map((f) => ({ name: f.name, label: this.#t(caller, f.label ?? f.name), value: shown(f, row[f.name]) }))
+      .filter((f) => f.value !== "")
+    return { ...card, ...(tone ? { tone } : {}), uri, fields }
+  }
+
+  /** The record template's actions this caller may use, each an event carrying the record's id. */
+  #recordTemplateActions(entity: EntityRecord, caller: Caller, id: string) {
+    return (entity.config.record?.actions ?? [])
+      .map((n) => [...this.#actions.values()].find((a) => a.name === n && a.entity === entity))
+      .filter((a): a is ActionRecord => Boolean(a && this.#mayUse(a, caller)))
+      .map((a) => ({ tool: a.tool, title: this.#t(caller, a.config.title), context: { id } }))
+  }
+
   /** One artifact instance as this caller may see it now. */
   async #resolve(instance: ArtifactInstance, caller: Caller, ctx: Context) {
     const uri = this.artifactUri(instance)
@@ -1250,16 +1322,20 @@ export class AppServer {
       const row = await entity.config.get(String(instance.params.id ?? ""), ctx)
       if (!row) return { artifact, uri, state: "gone" as const }
       const data = this.#strip(entity, row as Record<string, unknown>, caller)
+      const card = this.#recordCard(entity, data, caller)
+      // The titles of the records it references (field → id → title), as this caller may see them: a host shows those, never the ids.
+      const refs = await this.#refs(entity, [data], caller, ctx)
       return {
         artifact,
         uri,
         state: "ok" as const,
         template: "record" as const,
-        ...this.#recordCard(entity, data, caller),
+        ...card,
         data,
-        // The titles of the records it references (field → id → title), as this caller may see them: a host shows those, never the ids.
-        refs: await this.#refs(entity, [data], caller, ctx),
+        refs,
         view: { kind: "record", tool: entity.tools.get.name, fields: this.#visibleFields(entity, caller).map((f) => this.#column(f, caller)), actions: this.#recordActions(entity, caller) },
+        // The record as an A2UI 1.0 surface (spec §5.4 rule 4 `record`): its template's key fields and actions.
+        a2ui: recordSurface(this.#recordData(entity, data, refs, uri, caller), { surfaceId: uri, title: card.title, actions: this.#recordTemplateActions(entity, caller, String(data.id ?? instance.params.id)) }),
       }
     }
     const f = this.#artifacts.get(instance.type)
@@ -1422,10 +1498,15 @@ export class AppServer {
       }
       const recordUri = out?.record ? (out.record.startsWith(`${URI_SCHEME}://`) ? out.record : a.entity ? this.uri(a.entity.name, out.record) : out.record) : undefined
       const message = out?.message ?? "Done."
+      // What changed (spec §5.4 rule 8): the record a write acted on, the record it returned, and what the handler said.
+      const changed = new Set<string>()
+      if (a.write && a.entity && record) changed.add(this.uri(a.entity.name, String(record.id)))
+      if (a.write && recordUri && this.parseUri(recordUri)) changed.add(recordUri)
+      for (const c of this.#changes.get(notes) ?? []) changed.add(c)
       const result: CallToolResult = {
         content: text(message),
         structuredContent: { ok: true, message, ...(recordUri ? { record: recordUri } : {}), ...(out?.data ? { data: out.data } : {}) },
-        ...this.#notificationsMeta(this.#sent(notes, caller, ctx)),
+        ...this.#notificationsMeta(this.#sent(notes, caller, ctx), [...changed]),
       }
       if (key) {
         await this.#store.finish(key, { args: hash, result }, 24 * 3600_000)
@@ -2290,6 +2371,7 @@ export class AppServer {
         tools: { list: e.tools.list, get: e.tools.get },
         searchable: e.fields.some((f) => f.search),
         ...(e.config.visibility === "app" ? { visibility: "app" as const } : {}),
+        ...(e.config.record ? { record: { fields: [...e.config.record.fields], ...(e.config.record.actions?.length ? { actions: [...e.config.record.actions] } : {}) } } : {}),
       }
     })
     const actions = [...this.#actions.values()].map((a) => ({
@@ -2332,7 +2414,7 @@ export class AppServer {
       return { ...base, tool: p.tool, view: this.#pageViewUri(p.name) }
     })
     const artifacts = [
-      ...[...this.#entities.values()].map((e) => ({ type: e.name, title: L(e.config.label)!, entity: e.name, template: "record" as const, params: { type: "object", properties: { id: { type: "string" } }, required: ["id"] }, tool: e.tools.get, ...(e.config.view ? { view: this.#entityViewUri(e.name) } : {}), ...perm(e.config.permission, `entity "${e.name}"`) })),
+      ...[...this.#entities.values()].map((e) => ({ type: e.name, title: L(e.config.label)!, entity: e.name, template: "record" as const, params: { type: "object", properties: { id: { type: "string" } }, required: ["id"] }, tool: e.tools.get, ...(e.config.view ? { view: this.#entityViewUri(e.name) } : {}), ...perm(e.config.permission, `entity "${e.name}"`), ...(e.config.create ? { create: { action: e.config.create.action, title: L(e.config.create.title ?? e.config.label)! } } : {}) })),
       ...[...this.#artifacts.values()].map((f) => {
         for (const h of f.config.actions ?? []) if (!this.#actions.has(h.tool)) throw new Error(`artifact "${f.type}": action ${h.tool} is not registered`)
         return {
@@ -2350,6 +2432,7 @@ export class AppServer {
           ...(f.config.size ? { size: f.config.size } : {}),
           ...(f.config.untrusted ? { untrusted: true } : {}),
           ...(f.config.visibility === "app" ? { visibility: "app" as const } : {}),
+          ...(f.config.create ? { create: { action: f.config.create.action, title: L(f.config.create.title ?? f.config.title)! } } : {}),
         }
       }),
     ]
@@ -2397,6 +2480,7 @@ export class AppServer {
       actions,
       pages,
       artifacts,
+      ...(this.#widgets.size ? { widgets: [...this.#widgets].map(([artifact, w]) => ({ artifact, sizes: [...w.sizes], size: w.size })) } : {}),
       agents,
       permissions: [...this.#permissions.entries()].map(([id, p]) => ({ id, label: L(p.label)!, ...(p.description ? { description: L(p.description) } : {}), default: p.default === true })),
       settings: [...this.#settings.entries()].map(([id, s]) => ({

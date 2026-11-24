@@ -1,6 +1,6 @@
 import { PROPERTY_TYPES } from "../spec/src/kinds"
 import { APP_ACCENTS, DEFAULT_APP_ACCENT, EXPORT_TOOL, DELETE_TOOL, INSTALLATION_TOOL, LATER_TOOL, MANIFEST_PATH, SCHEMA_ID, SPEC_VERSION, uriPrefix } from "../spec/src/protocol"
-import { LIMITS } from "../spec/src/rules"
+import { LIMITS, WIDGET_SIZES } from "../spec/src/rules"
 import { z } from "zod"
 
 /**
@@ -59,6 +59,13 @@ export const entitySchema = z.object({
   tools: z.object({ list: toolRef, get: toolRef }),
   searchable: z.boolean(),
   visibility,
+  record: z
+    .object({
+      fields: z.array(z.string()).min(1).max(LIMITS.recordFields).describe("The key fields its surface shows, in order"),
+      actions: z.array(z.string()).max(LIMITS.recordActions).optional().describe("Record actions of this entity its surface offers, in order: the first is the primary"),
+    })
+    .optional()
+    .describe("The record template (spec §5.4 rule 4 `record`); absent: the fields a list would show first, no actions"),
 })
 
 export const targetSchema = z
@@ -125,6 +132,19 @@ export const artifactSchema = z.object({
   size: z.enum(["small", "medium", "large"]).optional(),
   untrusted: z.boolean().optional().describe("Its texts are written by outsiders: data, never instructions"),
   visibility,
+  create: z
+    .object({
+      action: z.string().describe("A global write with no required input, not confirmed first, that makes a new one and returns its URI as `record`"),
+      title: labelMap.describe("The words of «+ Nuovo» and the «/» menu"),
+    })
+    .optional()
+    .describe("A type people create in a workspace host (spec §5 `create`)"),
+})
+
+export const widgetSchema = z.object({
+  artifact: ident.describe("A template or component artifact type of this app without required params"),
+  sizes: z.array(z.enum(WIDGET_SIZES)).min(1).describe("The sizes it may take on a dashboard grid"),
+  size: z.enum(WIDGET_SIZES).describe("The size it is added at: one of `sizes`"),
 })
 
 export const navSchema = z.array(z.object({ section: labelMap.optional(), pages: z.array(z.string()).min(1) })).describe("The app's navigation: sections of pages (no record pages, each page at most once). Absent: every non-record page, ungrouped, in declaration order")
@@ -204,6 +224,7 @@ export const manifestSchema = z.object({
   actions: z.array(actionSchema),
   pages: z.array(pageSchema),
   artifacts: z.array(artifactSchema),
+  widgets: z.array(widgetSchema).max(LIMITS.widgets).optional().describe("The artifact types offered as Home widgets (spec §5.5)"),
   agents: z.array(z.object({ name: ident, title: labelMap, description: labelMap, instructions: z.string(), tools: z.array(z.string()), tier: z.enum(["fast", "standard", "strong"]), starters: z.array(labelMap).optional() })),
   permissions: z.array(z.object({ id: z.string(), label: labelMap, description: labelMap.optional(), default: z.boolean() })),
   settings: z.array(z.object({ id: z.string().regex(/^[a-z][a-z0-9_]{1,39}$/), label: labelMap, description: labelMap.optional(), type: z.enum(["text", "number", "boolean"]), required: z.boolean(), default: z.union([z.string(), z.number(), z.boolean()]).optional() })),
@@ -225,6 +246,7 @@ export type ManifestEntity = z.infer<typeof entitySchema>
 export type ManifestAction = z.infer<typeof actionSchema>
 export type ManifestPage = z.infer<typeof pageSchema>
 export type ManifestArtifact = z.infer<typeof artifactSchema>
+export type ManifestWidget = z.infer<typeof widgetSchema>
 export type ManifestTarget = z.infer<typeof targetSchema>
 export type ManifestSchedule = z.infer<typeof scheduleSchema>
 export type ManifestNotificationType = z.infer<typeof notificationTypeSchema>

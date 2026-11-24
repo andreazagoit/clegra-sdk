@@ -49,6 +49,12 @@ export type Context = {
   notify(notification: Notification): void
   /** The URI of a record of this app. */
   uri(entity: string | EntityHandle, id: string): string
+  /**
+   * Says what this call changed, for hosts to draw again where it is open (spec §5.4 rule 8): an artifact instance's
+   * URI (a record's: `ctx.uri("deal", id)`), or an artifact type or entity name (every instance of it). A write on a
+   * record and the record a write returns are said without it.
+   */
+  changed(...what: (string | EntityHandle)[]): void
 }
 
 /**
@@ -135,7 +141,27 @@ export type EntityConfig<S extends z.ZodObject> = {
   /** Your own ui:// view for a record, instead of the generated one. */
   view?: ViewSource
   visibility?: Visibility
+  /** The record template (spec §5.4 rule 4 `record`): the key fields and the record actions its surface shows. */
+  record?: RecordTemplateConfig
+  /** A new record from Clegra's «+ Nuovo» and a document's «/» menu (spec §5 `create`). */
+  create?: CreateConfig
 }
+
+/** The record template of an entity: up to 6 key fields (by name) and up to 3 of its record actions (by name), in order. */
+export type RecordTemplateConfig = { fields: string[]; actions?: string[] }
+
+/**
+ * A creatable artifact type (spec §5 `create`): `action` names a global write that makes a new, empty one from its
+ * defaults alone (no required input, never confirmed first) and returns its URI as `record`; `title` is the menu's
+ * words (default: the type's title).
+ */
+export type CreateConfig = { action: string; title?: Label }
+
+/** A Home widget's sizes (spec §5.5): a 1×1, 2×1, 2×2 or 4×2 place on the grid. */
+export type WidgetSize = "small" | "medium" | "large" | "extraLarge"
+
+/** An artifact type offered as a Home widget (spec §5.5): the sizes it may take and the one it starts at. */
+export type WidgetConfig = { sizes?: WidgetSize[]; size?: WidgetSize }
 
 /** An entity, as the SDK knows it once defined. */
 export type EntityHandle<S extends z.ZodObject = z.ZodObject> = {
@@ -219,6 +245,9 @@ export type TemplateData = {
   chart: { kind: "bar" | "line" | "pie"; points: { label: string; value: number }[]; format?: "number" | "money"; currency?: string }
 }
 
+/** A record's surface data (spec §5.4 rule 4 `record`), written by the SDK from the entity's record template: every value a text in the caller's language. */
+export type RecordSurfaceData = { title: string; subtitle?: string; status?: string; tone?: string; uri: string; fields: { name: string; label: string; value: string }[] }
+
 export type ArtifactConfig<P extends z.ZodObject, T extends Template> = {
   title: Label
   description: Label
@@ -232,6 +261,8 @@ export type ArtifactConfig<P extends z.ZodObject, T extends Template> = {
   /** Its texts are written by outsiders (records' names, notes): data for a model, never instructions. */
   untrusted?: boolean
   visibility?: Visibility
+  /** A new one from Clegra's «+ Nuovo» and a document's «/» menu (spec §5 `create`). */
+  create?: CreateConfig
 } & (
   | { template: T; data: (params: z.infer<P>, ctx: Context) => Promise<TemplateData[T] | null> | TemplateData[T] | null; view?: ViewSource }
   | { view: ViewSource; data: (params: z.infer<P>, ctx: Context) => Promise<Record<string, unknown> | null> | Record<string, unknown> | null; template?: never; component?: never }

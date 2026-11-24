@@ -198,7 +198,7 @@ Labels given as `{ en, it }` maps reach the generated view in every locale: it d
 (`hostContext.locale`), else English. Give every label in each language you support.
 
 `ctx`: `app`, `installation`, `person` (`{ id, name }` or null), `permissions`,
-`can(p)`, `locale`, `host` (`"workspace" | "plain"`), `settings`, `call`,
+`can(p)`, `locale` (the caller's language: a Clegra token's `locale` claim, else the app's own), `host` (`"workspace" | "plain"`), `settings`, `call`,
 `schedule` (the schedule this call is a run of, else null), `later` (in a later run: `{ id, at, until, confirmedAt }`,
 else null), `cancelLater(id)`, `t(label)`, `notify({ type?, title, body?, uri?, to? })` (`to`: person ids or
 `"admins"`), `uri(entity, id)`.

@@ -64,7 +64,7 @@ function makeApp(clegra: Partial<ClegraOptions> = {}, auth: Partial<AuthOptions>
         title: "Who am I",
         input: z.object({}),
         readOnly: true,
-        run: (_input, ctx: Context) => ({ data: { tenant: ctx.installation, person: ctx.person, actor: ctx.actor, admin: ctx.admin, permissions: [...ctx.permissions].sort(), settings: ctx.settings } }),
+        run: (_input, ctx: Context) => ({ data: { tenant: ctx.installation, person: ctx.person, actor: ctx.actor, admin: ctx.admin, permissions: [...ctx.permissions].sort(), settings: ctx.settings, locale: ctx.locale } }),
       },
       ping: {
         title: "Ping",
@@ -110,7 +110,11 @@ describe("Clegra tokens: the core's app tokens", () => {
     const c = await core.client(app, { company: "co-1", sub: "pw-ada", name: "Ada", role: "member" })
     assert.equal(c.status, 200)
     const me = dataOf(await c.call("whoami"))
-    assert.deepEqual(me, { tenant: `co-1@${ISS}`, person: { id: "pw-ada", name: "Ada" }, actor: null, admin: false, permissions: ["notes.view"], settings: { tone: "plain" } })
+    assert.deepEqual(me, { tenant: `co-1@${ISS}`, person: { id: "pw-ada", name: "Ada" }, actor: null, admin: false, permissions: ["notes.view"], settings: { tone: "plain" }, locale: "en" })
+    // The person's language is the token's `locale`: ctx.locale (and ctx.t); without it, the app's own.
+    const it = await core.client(app, { company: "co-1", sub: "pw-ada", name: "Ada", role: "member", locale: "it" })
+    assert.equal(dataOf(await it.call("whoami")).locale, "it")
+    assert.equal(me.locale, "en")
     // Nothing a client sends names the tenant or the settings: `_meta.clegra.settings` is ignored (an app's settings live in the app).
     assert.deepEqual(dataOf(await c.call("whoami", {}, { clegra: { settings: { tone: "loud" } } })).settings, { tone: "plain" })
   })

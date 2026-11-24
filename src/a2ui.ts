@@ -7,7 +7,7 @@
  * A2UI 1.0: https://a2ui.org, `specification/v1_0` of github.com/a2ui-project/a2ui.
  */
 
-import type { TemplateData } from "./types"
+import type { RecordSurfaceData, TemplateData } from "./types"
 
 export const A2UI_VERSION = "1.0"
 export const A2UI_MIME_TYPE = "application/a2ui+json"
@@ -18,7 +18,7 @@ export const STYLE_EXTENSION = "com_clegra_style"
 /** The catalog-component extension that says where an app's own component is drawn from (spec §5.4 rule 6). */
 export const COMPONENT_EXTENSION = "com_clegra_component"
 /** The names an app's own component can't take: the Basic Catalog's, Clegra's, and A2UI's reserved `Surface`. */
-export const RESERVED_COMPONENTS = ["Text", "Image", "Icon", "Video", "AudioPlayer", "Row", "Column", "List", "Card", "Tabs", "Modal", "Divider", "Button", "CheckBox", "TextField", "DateTimeInput", "ChoicePicker", "Slider", "Chart", "Surface", "McpApp"] as const
+export const RESERVED_COMPONENTS = ["Text", "Image", "Icon", "Video", "AudioPlayer", "Row", "Column", "List", "Card", "Tabs", "Modal", "Divider", "Button", "CheckBox", "TextField", "DateTimeInput", "ChoicePicker", "Slider", "Chart", "Spreadsheet", "TodoList", "AppBlock", "Surface", "McpApp"] as const
 export const COMPONENT_NAME = /^[A-Z][A-Za-z0-9]{0,39}$/
 
 /** The app's own catalog id. */
@@ -37,8 +37,8 @@ export type CreateSurface = {
 /** What an artifact carries: exactly one `createSurface` (spec §5.4 rule 2). */
 export type A2uiSurface = [CreateSurface]
 
-/** An action offered inside (spec §5.4 rule 5): its tool and its title in the caller's language. */
-export type SurfaceAction = { tool: string; title: string }
+/** An action offered inside (spec §5.4 rule 5): its tool, its title in the caller's language, and the event's context (a record action's `{ id }`). */
+export type SurfaceAction = { tool: string; title: string; context?: Record<string, unknown> }
 
 const at = (path: string): Binding => ({ "@path": path })
 const styled = (c: A2uiComponent, style?: Style): A2uiComponent => (style ? { ...c, "@metadata": { extensions: { [STYLE_EXTENSION]: style } } } : c)
@@ -49,7 +49,7 @@ const openRecord = (uri: Binding) => ({ functionCall: { "@call": "openRecord", c
 function actionsRow(actions: readonly SurfaceAction[]): A2uiComponent[] {
   if (!actions.length) return []
   const buttons = actions.flatMap((a, n) => [
-    { id: `action_${n}`, component: "Button", child: `action_${n}_label`, variant: n === 0 ? "primary" : "default", action: { event: { name: a.tool, context: {} } } },
+    { id: `action_${n}`, component: "Button", child: `action_${n}_label`, variant: n === 0 ? "primary" : "default", action: { event: { name: a.tool, context: a.context ?? {} } } },
     text(`action_${n}_label`, a.title),
   ])
   return [{ id: "actions", component: "Row", children: actions.map((_, n) => `action_${n}`), justify: "start" }, ...buttons]
@@ -139,6 +139,33 @@ export function templateSurface<T extends keyof TemplateData>(template: T, data:
     )
   }
   return [{ version: A2UI_VERSION, createSurface: { surfaceId: input.surfaceId, catalogId: BASIC_CATALOG_ID, components, dataModel: data as Record<string, unknown> } }]
+}
+
+/**
+ * A record's surface (spec §5.4 rule 4 `record`): its title opening the record, its status as a chip, its key fields
+ * as label and value, its record actions. The data model is the record template's data, every value a text.
+ */
+export function recordSurface(data: RecordSurfaceData, input: SurfaceInput): A2uiSurface {
+  const components = frame(
+    ["head", ...(has(data.subtitle) ? ["subtitle"] : []), ...(data.fields.length ? ["fields"] : [])],
+    [
+      { id: "head", component: "Row", children: ["title", ...(has(data.status) ? ["status"] : [])], justify: "spaceBetween", align: "center" },
+      { id: "title", component: "Button", child: "title_text", variant: "borderless", action: openRecord(at("/uri")) },
+      text("title_text", at("/title"), "title"),
+      ...(has(data.status) ? [text("status", at("/status"), "status")] : []),
+      ...(has(data.subtitle) ? [text("subtitle", at("/subtitle"), "muted", "caption")] : []),
+      ...(data.fields.length
+        ? [
+            { id: "fields", component: "List", children: { path: "/fields", componentId: "field" } },
+            { id: "field", component: "Row", children: ["field_label", "field_value"], justify: "spaceBetween" },
+            text("field_label", at("label"), "muted", "caption"),
+            text("field_value", at("value")),
+          ]
+        : []),
+    ],
+    input.actions ?? [],
+  )
+  return [{ version: A2UI_VERSION, createSurface: { surfaceId: input.surfaceId, catalogId: BASIC_CATALOG_ID, components, dataModel: data as unknown as Record<string, unknown> } }]
 }
 
 /** A component artifact's surface (spec §5.4 rule 4): its heading, the app's component with each prop bound to the data model. */
