@@ -940,6 +940,8 @@ export class AppServer {
       ...(f.labels ? { labels: Object.fromEntries(Object.entries(f.labels).map(([k, v]) => [k, this.#t(caller, v)])) } : f.enum ? { labels: Object.fromEntries(f.enum.map((v) => [v, v])) } : {}),
       ...(f.tones ? { tones: f.tones } : {}),
       ...(f.currency ? { currency: f.currency } : {}),
+      // A date or a date-time (z.iso.date(), z.iso.datetime()): the view writes it in the reader's locale, never the raw ISO text.
+      ...(f.schema.format === "date" || f.schema.format === "date-time" ? { format: f.schema.format } : {}),
       ...(f.ref ? { ref: f.ref } : {}),
       ...(f.sort ? { sort: true } : {}),
     }

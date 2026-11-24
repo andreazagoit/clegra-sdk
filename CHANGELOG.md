@@ -4,6 +4,12 @@ Clegra apps (spec 1.0 draft) and the `@clegra/sdk` package. Newest first. Versio
 npm dist-tag `next`. Entries below «Two scoped packages» keep the names of their time (the unscoped `clegra` package
 and its `clegra/ui`, the `modelapp` package, docs/map): they are history.
 
+## 0.1.0-next.11 (2026-11-24)
+
+- The generated view writes dates and date-times in the reader's locale (`ctx.locale`, the host context's): a field
+  declared `z.iso.date()` or `z.iso.datetime()` reaches the view's list and record with its `format`, and shows as
+  «14 mar 2026» or «14 mar 2026, 10:30», never as the raw ISO text (before, only a field with role `date` was).
+
 ## 0.1.0-next.10 (2026-11-24)
 
 - `defineApp({ widgets })` no longer takes part in inferring the artifacts' types: with `widgets` an artifact's `data`

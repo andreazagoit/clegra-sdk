@@ -125,7 +125,8 @@ const SCRIPT = `
     if (col && col.role === "person" && !col.ref && refs[col.name] && v !== null && v !== undefined && v !== "") return refs[col.name][v] ? esc(refs[col.name][v]) : '<span class="muted">' + esc(tr("unknownPerson")) + "</span>";
     if (v === null || v === undefined || v === "") return '<span class="muted">—</span>';
     if (col && col.role === "amount" && typeof v === "number") { try { return esc(new Intl.NumberFormat(locale, { style: "currency", currency: col.currency || "EUR" }).format(v)); } catch { return esc(v); } }
-    if (col && col.role === "date" && typeof v === "string" && /^\\d{4}-\\d{2}-\\d{2}/.test(v)) { try { return esc(new Intl.DateTimeFormat(locale, { dateStyle: "medium" }).format(new Date(v.length === 10 ? v + "T12:00:00" : v))); } catch { return esc(v); } }
+    // A date (its day) or a date-time (its day and hour) in the reader's locale, never the raw ISO text.
+    if (col && (col.role === "date" || col.format === "date" || col.format === "date-time") && typeof v === "string" && /^\\d{4}-\\d{2}-\\d{2}/.test(v)) { const day = v.length === 10; const d = new Date(day ? v + "T12:00:00" : v); if (Number.isFinite(d.getTime())) { try { return esc(new Intl.DateTimeFormat(locale, col.format === "date-time" && !day ? { dateStyle: "medium", timeStyle: "short" } : { dateStyle: "medium" }).format(d)); } catch {} } return esc(v); }
     if (col && col.enum && col.labels) { const label = L(col.labels[v] ?? v); const tone = col.tones && col.tones[v]; return col.role === "status" ? '<span class="badge ' + (tone ? "t-" + tone : "") + '">' + esc(label) + "</span>" : esc(label); }
     if (typeof v === "number") return esc(new Intl.NumberFormat(locale).format(v));
     if (typeof v === "boolean") return v ? "✓" : "—";

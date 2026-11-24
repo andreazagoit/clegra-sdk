@@ -29,7 +29,7 @@ import { viewHtml } from "./view"
 
 const keyFile = join(tmpdir(), `clegra-view-key-${randomUUID()}.json`)
 
-type Deal = { id: string; name: string; stage: "open" | "won"; value: number }
+type Deal = { id: string; name: string; stage: "open" | "won"; value: number; openedAt: string }
 const names = ["Hartley Engineering", "Acme Tools", "Birch Labs", "Cobalt Retail", "Delta Foods", "Ember Studio", "Fjord Logistics", "Granite Works", "Harbor Clinic", "Iris Media", "Juniper Farms", "Kestrel Air"]
 
 function makeApp(deals: Deal[]) {
@@ -48,6 +48,7 @@ function makeApp(deals: Deal[]) {
           name: z.string().meta({ role: "title", label: "Deal", search: true, untrusted: true }),
           stage: z.enum(["open", "won"]).meta({ role: "status", label: "Stage", labels: { open: "Open", won: "Won" }, tones: { won: "success" } }),
           value: z.number().meta({ role: "amount", currency: "EUR", label: "Value" }),
+          openedAt: z.iso.datetime().meta({ label: "Opened" }),
         }),
         get: (id) => deals.find((d) => d.id === id) ?? null,
         list: () => ({ rows: deals }),
@@ -72,7 +73,7 @@ function makeApp(deals: Deal[]) {
         confirm: false,
         expose: { plain: true },
         run: (input) => {
-          deals.push({ id: `d${deals.length + 1}`, name: input.name, stage: input.stage, value: 0 })
+          deals.push({ id: `d${deals.length + 1}`, name: input.name, stage: input.stage, value: 0, openedAt: "2026-03-15T08:00:00.000Z" })
           return { message: `${input.name} added.` }
         },
       },
@@ -154,7 +155,7 @@ after(async () => {
 })
 
 async function host(options: HostOptions): Promise<{ page: Page; view: FrameLocator; log: () => Promise<Logged[]>; deals: Deal[] }> {
-  const deals: Deal[] = names.map((name, i) => ({ id: `d${i + 1}`, name, stage: "open", value: 1000 * (i + 1) }))
+  const deals: Deal[] = names.map((name, i) => ({ id: `d${i + 1}`, name, stage: "open", value: 1000 * (i + 1), openedAt: "2026-03-14T09:30:00.000Z" }))
   const app = makeApp(deals)
   const client = await testClient(app, { person: "alice", permissions: "all" })
   const tools = await client.listTools()
@@ -189,6 +190,9 @@ for (const mode of ["mcp", "chatgpt", "openai"] as const) {
       await scrollToEnd(view)
       await rowOf(view, "Hartley Engineering").click()
       await view.locator("h2", { hasText: "Hartley Engineering" }).waitFor()
+      // A date-time is written in the reader's locale with its hour, never as the raw ISO text.
+      const opened = await view.locator("dt", { hasText: "Opened" }).locator("xpath=following-sibling::dd[1]").textContent()
+      assert.ok(opened && !opened.includes("2026-03-14") && /2026/.test(opened) && /\d{1,2}[:.]\d{2}/.test(opened), `the opening date as the reader reads it: ${opened}`)
       const calls = (await log()).filter((l) => l.method === "tools/call" || l.method === "callTool")
       assert.deepEqual(calls.map((c) => [c.via, c.name, c.args]), [[mode === "openai" ? "openai" : "mcp", "deal_get", { id: "d1" }]], "one call, over the standard bridge when the host has it")
       if (mode !== "openai") assert.ok(calls.every((c) => c.initialized), "no tools/call before the handshake")
@@ -252,7 +256,7 @@ describe("the generated view: a page's actions and the app's navigation", () => 
     await view.locator("form.act input[name=name]").fill("Lumen Labs")
     await view.locator("form.act button.primary").click()
     await view.locator(".msg", { hasText: "Lumen Labs added." }).waitFor()
-    assert.deepEqual(deals.at(-1), { id: "d13", name: "Lumen Labs", stage: "won", value: 0 })
+    assert.deepEqual(deals.at(-1), { id: "d13", name: "Lumen Labs", stage: "won", value: 0, openedAt: "2026-03-15T08:00:00.000Z" })
     assert.deepEqual((await log()).find((l) => l.name === "add_deal")!.args, { name: "Lumen Labs", stage: "won" })
     await nav.locator("button", { hasText: "Summary" }).click()
     await view.locator("h2", { hasText: "Summary" }).waitFor()
