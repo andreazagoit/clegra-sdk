@@ -71,6 +71,8 @@ type ActionBase<I extends z.ZodObject, P extends string> = {
   /** Writes ask the person first by default (`true` / "always"); "optional" lets the host decide; `false` / "never" never asks. */
   confirm?: boolean | Confirm
   permission?: P
+  /** Callable without signing in (`auth.public`): global, no permission; a public write is always confirmed by the host. */
+  public?: boolean
   /** Plain MCP clients: reads are listed by default, writes only with `plain: true`; `tool` renames the tool (default `<entity>_<action>` or `<action>`). */
   expose?: Exposure
   /** `"app"`: for views and the host's own UI only, never for a model. */

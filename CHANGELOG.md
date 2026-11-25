@@ -4,6 +4,13 @@ Clegra apps (spec 1.0 draft) and the `@clegra/sdk` package. Newest first. Versio
 npm dist-tag `next`. Entries below «Two scoped packages» keep the names of their time (the unscoped `clegra` package
 and its `clegra/ui`, the `modelapp` package, docs/map): they are history.
 
+## 0.1.0-next.12 (2026-11-25)
+
+- Public operations (spec §7): signing in is not mandatory for an app. `auth.public: { installation }` serves a call
+  without a token, in production too, and it reaches only the actions declared `public: true` (global, no permission,
+  for every client; no record, page or artifact). A public write is always confirmed (`confirm: "always"`, else refused
+  at definition); the manifest says `public: true`. `auth.anonymous` stays a local demo's, refused in production.
+
 ## 0.1.0-next.11 (2026-11-24)
 
 - The generated view writes dates and date-times in the reader's locale (`ctx.locale`, the host context's): a field

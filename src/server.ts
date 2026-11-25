@@ -367,7 +367,9 @@ export class AppServer {
     this.locale = options.locale ?? "en"
     const auth = options.auth ?? {}
     if (auth.dev && process.env.NODE_ENV === "production") throw new Error("auth.dev is for development: it is refused when NODE_ENV is production")
-    if (auth.anonymous && process.env.NODE_ENV === "production") throw new Error("auth.anonymous is for local demos: it is refused when NODE_ENV is production")
+    if (auth.anonymous && process.env.NODE_ENV === "production") throw new Error("auth.anonymous is for local demos: it is refused when NODE_ENV is production (public operations: auth.public)")
+    if (auth.anonymous && auth.public) throw new Error("auth.anonymous and auth.public: one or the other (a call without a token is either a local demo's caller or the public caller)")
+    if (auth.public && (typeof auth.public.installation !== "string" || !INSTALLATION.test(auth.public.installation))) throw new Error("auth.public.installation must match [A-Za-z0-9._:-]{1,128}")
     const path = (options.path ?? "").replace(/\/+$/, "")
     if (path && !/^(\/[A-Za-z0-9._~-]+)+$/.test(path)) throw new Error(`path "${options.path}": a URL path like /api/clegra`)
     this.#path = path
@@ -497,8 +499,15 @@ export class AppServer {
     if (entity && RECORD_TITLE_PARAM in input.shape) throw new Error(`action "${name}": "${RECORD_TITLE_PARAM}" is the record's title hint, given by the SDK; don't declare it in input`)
     const write = config.readOnly !== true
     const confirm = write ? (config.confirm ?? "always") : "never"
-    // Writes reach plain MCP clients only when the developer opts in (spec §6).
-    const plain = config.expose?.plain ?? !write
+    if (config.public) {
+      // Public operations (spec §7): one call, no record to see, no permission to hold, and a write the host always confirms.
+      if (entity) throw new Error(`action "${name}": a public action is global (no entity): a caller without a token sees no record`)
+      if (config.permission) throw new Error(`action "${name}": a public action needs no permission (a caller without a token holds none)`)
+      if (write && confirm !== "always") throw new Error(`action "${name}": a public write is always confirmed (confirm: "always")`)
+      if (config.expose?.plain === false || config.visibility === "app") throw new Error(`action "${name}": a public action is for every client (no plain: false, no visibility "app")`)
+    }
+    // Writes reach plain MCP clients only when the developer opts in (spec §6); a public action is for every client.
+    const plain = config.public ? true : (config.expose?.plain ?? !write)
     if (config.later && !this.#store.later) throw new Error(`action "${name}": later keeps the confirmed call in the store, and this store has no later part (MemoryStore and SqlStore have one)`)
     const later = config.later ? { at: String(config.later.at), window: config.later.window ?? LIMITS.laterWindow.default } : undefined
     this.#actions.set(tool, { name, tool, ...(entity ? { entity } : {}), config: config as never, input, handler: handler as never, write, confirm, plain, ...(later ? { later } : {}) })
@@ -897,12 +906,14 @@ export class AppServer {
 
   /** Whether this caller reaches the entity at all, on any surface: its permission, and for a plain client its exposure. */
   #canSee(entity: EntityRecord, caller: Caller): boolean {
+    if (caller.public) return false
     if (entity.config.permission && !caller.permissions.has(entity.config.permission)) return false
     return caller.host !== "plain" || entity.tools.get.plain
   }
 
   /** The same for an artifact type. */
   #canShow(f: ArtifactRecord, caller: Caller): boolean {
+    if (caller.public) return false
     if (f.config.permission && !caller.permissions.has(f.config.permission)) return false
     return caller.host !== "plain" || f.tool.plain
   }
@@ -916,6 +927,7 @@ export class AppServer {
   }
 
   #mayUse(action: ActionRecord, caller: Caller): boolean {
+    if (caller.public) return action.config.public === true
     if (action.config.permission && !caller.permissions.has(action.config.permission)) return false
     if (action.entity && !this.#canSee(action.entity, caller)) return false
     if (caller.host === "plain" && !action.plain) return false
@@ -1656,7 +1668,7 @@ export class AppServer {
   /** Whether this caller may open a page (its tool's gates: exposure, permission, its list's entity). */
   #canOpen(p: PageRecord, caller: Caller): boolean {
     const c = p.config
-    if (c.kind === "record" || (caller.host === "plain" && !p.tool.plain)) return false
+    if (caller.public || c.kind === "record" || (caller.host === "plain" && !p.tool.plain)) return false
     if (c.permission && !caller.permissions.has(c.permission)) return false
     return c.kind !== "list" || this.#canSee(this.#entities.get(c.entity.name)!, caller)
   }
@@ -2386,6 +2398,7 @@ export class AppServer {
       input: labelled(a.input),
       readOnly: !a.write,
       confirm: a.confirm,
+      ...(a.config.public ? { public: true as const } : {}),
       ...perm(a.config.permission, `action "${a.name}"`),
       ...(a.config.visibility === "app" ? { visibility: "app" as const } : {}),
       ...(a.config.targets?.length ? { targets: a.config.targets.map((x) => ({ target: x.target, needs: [...x.needs], ...(x.input ? { input: JSON.parse(JSON.stringify(x.input)) as Record<string, unknown> } : {}), ...(x.label !== undefined ? { label: L(x.label)! } : {}) })) } : {}),
@@ -2595,6 +2608,10 @@ export class AppServer {
         const a = auth.anonymous
         return { installation: tenantOf(a.installation, "anonymous"), installationId: a.installation, person: a.person ?? null, permissions: new Set(a.permissions === "all" ? this.#allPermissions() : a.permissions), ...(a.locale ? { locale: a.locale } : {}), host: "plain", issuer: "anonymous", subject: a.person?.id ?? "anonymous" }
       }
+      if (auth.public) {
+        const p = auth.public
+        return { installation: tenantOf(p.installation, "public"), installationId: p.installation, person: null, permissions: new Set<string>(), ...(p.locale ? { locale: p.locale } : {}), host: "plain", issuer: "public", subject: "public", public: true }
+      }
       return challenge("sign in first", { credentials: false })
     }
     if (trust.dev) await this.#devStarted()
@@ -2635,7 +2652,7 @@ export class AppServer {
     this.manifest()
     if (this.#dev) await this.#devStarted()
     const auth = this.options.auth ?? {}
-    if (!this.#dev && !auth.clegra && !auth.resolve && !auth.anonymous) console.warn(`[${PROTOCOL_ID}] nobody can sign in: give auth.resolve (the app's own tokens) or auth.clegra (Clegra's core), or turn on auth.dev while developing`)
+    if (!this.#dev && !auth.clegra && !auth.resolve && !auth.anonymous && !auth.public) console.warn(`[${PROTOCOL_ID}] nobody can sign in: give auth.resolve (the app's own tokens) or auth.clegra (Clegra's core), or turn on auth.dev while developing`)
     if (auth.clegra && auth.clegra.allowedCompanies === undefined && process.env.NODE_ENV !== "production") console.warn(`[${PROTOCOL_ID}] auth.clegra.allowedCompanies is not set: every company is allowed here; production refuses to start without it`)
     return { devCode: this.#dev?.code ?? null }
   }

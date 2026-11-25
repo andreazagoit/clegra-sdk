@@ -34,6 +34,19 @@ The contract:
 - Return `null` for a token that isn't yours. Throw `AuthError("reason")` to refuse with a reason; the reason goes
   into `WWW-Authenticate`. Any other error is logged and answered as `401 invalid token`.
 
+## Your users are linked through your sign-in, never around it
+
+An app with its own users is linked through its own sign-in: each person signs in with your app's credentials and
+consents, and the host (Clegra like ChatGPT or Claude) then acts only with the token your authorization server issued.
+A host's identity is never a way into one of your users' accounts: no email match, no session handed over. Your
+accounts, permissions and revocations stay the one authority, read on every call.
+
+When the host also shows your site in a frame (spec §5.1), the first sign-in can link in the same step: the host opens
+the frame at your authorization page with `response_mode=web_message`; your page signs the person in, asks the
+consent, and posts `{ type: "authorization_response", response: { code, state, iss } }` to the framing host (only to
+its configured client origins) instead of redirecting. List `web_message` in `response_modes_supported`. Signing out
+of your site never revokes the link; your revocation endpoint (RFC 7009) and your own admin screens do.
+
 ## What the authorization server must give MCP clients
 
 This is spec §7 «Production», as a checklist:

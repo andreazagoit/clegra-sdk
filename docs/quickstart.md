@@ -65,7 +65,8 @@ npx @clegra/sdk check http://localhost:3000 --token <CLEGRA_LOCAL_TOKEN>
 per project and lives in `.env.local`, which Next's `.gitignore` keeps out of git. The SDK's own dev sign-in
 (`auth.dev`, a sign-in page for test people) does **not** exist under Next: it trusts only loopback callers, and a
 route handler can't know the caller's address, so `toNextHandlers` refuses it. `auth.anonymous` (no token at all) is
-not used either. It has no production guard, and with it nobody ever gets a `401`.
+not used either: it is a local demo's, refused in production. Operations anyone may call without signing in are
+declared `public: true` with `auth.public` (spec §7, «Public operations»).
 
 ## Your app's colour
 

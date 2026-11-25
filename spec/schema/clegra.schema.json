@@ -651,6 +651,11 @@
               "never"
             ]
           },
+          "public": {
+            "description": "Callable without signing in (spec §7 «Public operations»): global, no permission; a write is always confirmed",
+            "type": "boolean",
+            "const": true
+          },
           "permission": {
             "type": "string"
           },

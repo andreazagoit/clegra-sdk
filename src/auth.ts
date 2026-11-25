@@ -63,6 +63,8 @@ export type Caller = {
   subject: string
   /** A caller from Clegra's core (`auth.clegra`): its company, company role, device key, actor and grant. */
   clegra?: ClegraCaller
+  /** A caller with no token (`auth.public`): it reaches only the actions declared `public`. */
+  public?: true
 }
 
 /** The `clegra` claim of a dev access token. */
@@ -134,6 +136,12 @@ export type AuthOptions = {
    * `production`; answers callers on a loopback address only.
    */
   dev?: boolean | DevOptions
+  /**
+   * Public operations (spec §7 «Public operations»): signing in is not mandatory for an app. A call without a token is
+   * served as this installation's public caller, which reaches only the actions declared `public: true` (global, no
+   * permission; a public write is always confirmed): no record, page or artifact. Allowed in production.
+   */
+  public?: { installation: string; locale?: string }
   /** Serve calls without a token as this caller (local demos only). Off by default; refused when NODE_ENV is `production`. */
   anonymous?: { installation: string; person?: Person; permissions: string[] | "all"; locale?: string }
 }

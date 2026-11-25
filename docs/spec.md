@@ -907,6 +907,26 @@ An app may accept both (a CRM with its own users that Clegra companies also
 use); the two never meet: a core token is recognised by its `iss` and its
 `DPoP` scheme and is never handed to `auth.resolve`.
 
+**Public operations.** Signing in is not mandatory for an app. With
+`auth.public: { installation }` a call without a token is served as that
+installation's public caller, in production too, and reaches only the actions
+declared `public: true`:
+
+1. A public action is global (no `entity`), needs no `permission`, and is for
+   every client (never `plain: false` or `visibility: "app"`). The public
+   caller sees no record, page or artifact: entities, `search`, `fetch` and
+   the resolver answer as for a caller with no access.
+2. A public write is always confirmed: its `confirm` is `always` (anything
+   else is refused at definition), so it carries `destructiveHint: true` and
+   the host asks the person before it runs (Clegra's company server, which
+   calls such a server with no token, waits for «Conferma»; a plain client
+   elicits or applies its own approval, below).
+3. The manifest marks it `public: true`; a token, when one is sent, is
+   verified as always and never falls back to the public caller.
+
+`auth.anonymous` (a caller with chosen permissions, for local demos) stays
+refused in production, and an app has one or the other.
+
 **Clegra tokens.** Clegra's core mints, for exactly one app, tokens signed with
 its keys of `use: "app"`, published at `<issuer>/.well-known/clegra-keys.json`
 (fetched once and kept; refreshed every 10 minutes and on an unknown `kid`, at

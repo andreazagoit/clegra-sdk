@@ -187,6 +187,8 @@ export type ActionConfig<I extends z.ZodObject, E extends EntityHandle | undefin
   /** Default `always` for writes. */
   confirm?: Confirm
   permission?: string
+  /** Callable without signing in (`auth.public`; spec §7 «Public operations»): global, no permission, a write always confirmed. */
+  public?: boolean
   /** Plain MCP clients: reads are listed by default, writes only with `plain: true`; `tool` renames the tool. */
   expose?: { plain?: boolean; tool?: string }
   visibility?: Visibility

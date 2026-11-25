@@ -86,6 +86,7 @@ export const actionSchema = z.object({
   input: jsonSchema,
   readOnly: z.boolean(),
   confirm: z.enum(["always", "optional", "never"]),
+  public: z.literal(true).optional().describe("Callable without signing in (spec §7 «Public operations»): global, no permission; a write is always confirmed"),
   permission: z.string().optional(),
   tool: toolRef,
   visibility,
