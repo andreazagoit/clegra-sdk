@@ -1,8 +1,9 @@
 // Who may call the CRM's MCP server: its own users, with access tokens from better-auth (the CRM's OAuth
-// authorization server, lib/auth-options.ts), and Clegra's people through Clegra's core (CLEGRA_ISSUER and the rest of CLEGRA_*).
+// authorization server, lib/auth-options.ts). Any client (Clegra, ChatGPT, Claude) acts with a token the CRM issued,
+// after the person signed in to the CRM and consented: never with an account of another system.
 import { oauthProviderAuthServerMetadata, oauthProviderOpenIdConfigMetadata } from "@better-auth/oauth-provider"
 import { createLocalJWKSet, decodeProtectedHeader, errors, jwtVerify, type JWK } from "jose"
-import { AuthError, clegraFromEnv, type AuthOptions, type CallerResolver } from "@clegra/sdk"
+import { AuthError, type AuthOptions, type CallerResolver } from "@clegra/sdk"
 
 import { auth, membership } from "@/lib/auth"
 import { CLEGRA_SCOPE, ORG_CLAIM } from "@/lib/auth-options"
@@ -68,15 +69,14 @@ async function serveMetadata(request: Request): Promise<Response | null> {
   return which === "oauth" ? oauthProviderAuthServerMetadata(auth())(request) : oauthProviderOpenIdConfigMetadata(auth())(request)
 }
 
-// ------------------------------------------------------------------ the CRM's users and Clegra's
+// ------------------------------------------------------------------ the MCP server's authorization
 
-/**
- * The MCP server's authorization, for the one public address (CLEGRA_PUBLIC_URL): the CRM's own users, and with
- * CLEGRA_ISSUER the people of Clegra companies through Clegra's core (the SDK verifies those tokens itself; their
- * tenant is `<company>@<issuer>`, never an organization of the CRM). The rest of the Clegra configuration comes from
- * CLEGRA_REGISTRATION_ID, CLEGRA_REGISTRATION_CHALLENGE, CLEGRA_ALLOWED_COMPANIES and CLEGRA_CLIENT_ORIGINS.
- */
+/** For the one public address (CLEGRA_PUBLIC_URL): the CRM's own users, through its own OAuth authorization server. */
 export function crmAuth(env: Record<string, string | undefined> = process.env): AuthOptions {
-  const clegra = clegraFromEnv(env)
-  return { resolve: resolveUser, serve: serveMetadata, authorizationServers: [authIssuer(env)], resource: mcpResource(env), ...(clegra ? { clegra } : {}) }
+  return { resolve: resolveUser, serve: serveMetadata, authorizationServers: [authIssuer(env)], resource: mcpResource(env) }
+}
+
+/** The workspace clients that frame the CRM's site (CLEGRA_CLIENT_ORIGINS, separated by commas). */
+export function crmClientOrigins(env: Record<string, string | undefined> = process.env): string[] {
+  return (env.CLEGRA_CLIENT_ORIGINS ?? "").split(",").map((o) => o.trim()).filter(Boolean)
 }

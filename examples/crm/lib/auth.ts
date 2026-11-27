@@ -22,7 +22,9 @@ export function createAuth(env: Record<string, string | undefined> = process.env
     baseURL: publicOrigin(env),
     // The client's address for rate limiting: on Vercel (and `next start` behind one proxy) x-real-ip / x-forwarded-for hold
     // the one address the platform saw; without it every client would share one bucket.
-    advanced: { ipAddress: { ipAddressHeaders: ["x-real-ip", "x-forwarded-for"] } },
+    // Over https the session cookie is SameSite=None; Secure; Partitioned (CHIPS): the person signs in to the CRM
+    // also inside a workspace client's frame (its site, spec §5.1), the cookie kept in that frame's partition only.
+    advanced: { ipAddress: { ipAddressHeaders: ["x-real-ip", "x-forwarded-for"] }, ...(publicOrigin(env).startsWith("https:") ? { defaultCookieAttributes: { sameSite: "none", secure: true, partitioned: true } } : {}) },
     database: drizzleAdapter(db(), { provider: "pg", schema }),
     databaseHooks: {
       session: {

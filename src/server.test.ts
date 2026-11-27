@@ -142,7 +142,7 @@ describe("definition", () => {
     assert.deepEqual(note.tools, { list: { name: "note_list", plain: true }, get: { name: "note_get", plain: true } })
     assert.equal(manifest.actions.find((a) => a.tool.name === "note_close")!.confirm, "always")
     assert.equal(manifest.actions.find((a) => a.tool.name === "ping")!.confirm, "never")
-    assert.deepEqual(manifest.actions.find((a) => a.name === "add")!.tool, { name: "add", plain: false })
+    assert.deepEqual(manifest.actions.find((a) => a.name === "add")!.tool, { name: "add", plain: true })
     assert.deepEqual(manifest.pages.map((p) => `${p.name}:${p.kind}`).sort(), ["folder:record", "frame:custom", "home:dashboard", "note:record", "notes:list"])
     assert.equal(manifest.pages.find((p) => p.name === "frame")!.view, "ui://notes/pages/frame")
     assert.ok(manifest.artifacts.some((f) => f.type === "note" && f.template === "record"))
@@ -171,7 +171,7 @@ describe("plain host", () => {
     const names = tools.map((t) => t.name).sort()
     assert.ok(names.includes("note_list") && names.includes("note_get") && names.includes("note_close") && names.includes("search") && names.includes("fetch"))
     assert.ok(names.includes("open_notes") && names.includes("open_home") && names.includes("show_open_count"))
-    assert.ok(!names.includes("add"), "a write is listed to plain clients only when the developer opts in")
+    assert.ok(names.includes("add"), "a write is listed to every client the app signed in")
     const list = tools.find((t) => t.name === "note_list")!
     assert.equal(list.title, "Notes", "tool names, titles and descriptions don't change with the caller's language")
     const columns = ((await c.call("note_list", {})).structuredContent as { view: { columns: { name: string; label: string; labels?: Record<string, string> }[] } }).view.columns

@@ -4,17 +4,16 @@ import { describe, test } from "node:test"
 import { z } from "zod"
 
 import { defineApp, MemoryStore } from "./index"
-import { testCore } from "./testing"
+import { testClient } from "./testing"
 import type { ViewTicket } from "./views"
 
-// Views at the app's own origin (spec §5.3): a Clegra client asks the app for a one-minute, single-use view ticket
-// with the person's app token and posts it into its frame; the app answers with the view, framed only by that client.
+// Views at the app's own origin (spec §5.3): a workspace client asks the app for a one-minute, single-use view ticket
+// with the person's token (one the app issued) and posts it into its frame; the app answers with the view, framed only by that client.
 
 const RES = "https://pipeline.test/mcp"
 const APP = "https://pipeline.test"
 const CLIENT = "https://app.clegra.test"
 const OTHER = "https://other-app.test"
-const core = await testCore({ resource: RES, issuer: "https://core.test" })
 
 function makeApp(store = new MemoryStore()) {
   return defineApp({
@@ -22,17 +21,18 @@ function makeApp(store = new MemoryStore()) {
     title: "Pipeline",
     version: "1.0.0",
     store,
-    auth: { resource: RES, clegra: core.options({ clientOrigins: [CLIENT, "app://client"] }) },
+    auth: { resource: RES, dev: { keyFile: false } },
+    clientOrigins: [CLIENT, "app://client"],
     entities: { deal: { label: "Deal", schema: z.object({ id: z.string(), name: z.string().meta({ role: "title" }) }), get: () => null, list: () => ({ rows: [] }) } },
     pages: { board: { title: "Board", dashboard: [] }, notes: { title: "Notes", view: { html: "<!doctype html><html><head><title>n</title></head><body>n</body></html>", csp: { connectDomains: ["https://api.pipeline.test"] } } } },
   })
 }
 
 const VIEW = "ui://pipeline/view"
-const who = { company: "co-1", sub: "ada" }
+const who = { person: { id: "ada", name: "Ada" } }
 
 async function ticketFor(app: ReturnType<typeof makeApp>, input: { view?: string; origin?: string } = {}) {
-  const c = await core.client(app, who)
+  const c = await testClient(app, who)
   return c.call("clegra_view", { view: input.view ?? VIEW, origin: input.origin ?? CLIENT })
 }
 
@@ -48,7 +48,7 @@ const post = (app: ReturnType<typeof makeApp>, ticket: string, init: { origin?: 
 describe("views at the app's own origin", () => {
   test("the ticket tool: app-only, for a person's app token, a ticket for one view and one client origin", async () => {
     const app = makeApp()
-    const c = await core.client(app, who)
+    const c = await testClient(app, who)
     const tool = (await c.listTools()).find((t) => t.name === "clegra_view")
     assert.ok(tool)
     assert.deepEqual((tool._meta as { ui: unknown }).ui, { visibility: ["app"] })
@@ -72,12 +72,6 @@ describe("views at the app's own origin", () => {
     assert.equal(missing.isError, true)
     const foreign = await ticketFor(app, { view: "ui://crm/view" })
     assert.equal(foreign.isError, true)
-  })
-
-  test("an agent acting for the person gets no view ticket (the tool is not there)", async () => {
-    const app = makeApp()
-    const c = await core.client(app, { ...who, act: "device-agent:abc" })
-    assert.ok(!(await c.listTools()).some((t) => t.name === "clegra_view"))
   })
 
   test("the posted ticket opens the view: framed by that client only, the client's origin for the bridge, no cache, no referrer", async () => {
@@ -140,12 +134,5 @@ describe("views at the app's own origin", () => {
     const t = (await ticketFor(one)).structuredContent as unknown as ViewTicket
     assert.equal((await post(two, t.ticket)).status, 200)
     assert.equal((await post(one, t.ticket)).status, 403)
-  })
-
-  test("a person removed from the company after the ticket gets no view", async () => {
-    const app = makeApp()
-    const t = (await ticketFor(app)).structuredContent as unknown as ViewTicket
-    assert.equal((await core.deliver(app, await core.event("member.removed", { company: "co-1", sub: "ada" }))).status, 204)
-    assert.equal((await post(app, t.ticket)).status, 403)
   })
 })

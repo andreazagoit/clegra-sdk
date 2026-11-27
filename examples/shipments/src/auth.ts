@@ -1,24 +1,24 @@
-import { clegraFromEnv, type AuthOptions, type ClegraOptions } from "@clegra/sdk"
+import type { AuthOptions } from "@clegra/sdk"
+import { createSignIn, MemorySignInStore, passwordLogin, type PasswordLogin, type SignIn, type SignInApp, type SignInStore } from "@clegra/sdk/signin"
 
 /**
- * WHO MAY CALL: the people of the Clegra companies that installed the app, through Clegra's core, in Clegra apps'
- * trusted-issuer mode (spec §7, «Clegra tokens»). The SDK verifies the core's tokens itself: signed by the core's
- * `app` keys, `aud` exactly this server's MCP address, bound to the caller's key (DPoP).
+ * WHO MAY CALL: the courier's customers' people, with the app's OWN sign-in (`@clegra/sdk/signin`). The courier has
+ * no login of its own, so the SDK's password login is it: accounts are made by the courier (`login.accounts.create`,
+ * one tenant per customer company), and any client (Clegra, Claude, ChatGPT) acts with a delegation the person gave
+ * on the app's consent page, revocable here. Never an account of another system.
  *
- * SEVERAL COMPANIES PER SERVER: a courier hosts one server for all its customers. The tenant is
- * `<company>@<issuer>`: two companies never reach each other's shipments. Which companies may use it is the
- * courier's list (CLEGRA_ALLOWED_COMPANIES), or `any`.
+ * SEVERAL COMPANIES PER SERVER: a courier hosts one server for all its customers. The tenant is the account's
+ * `installation` (the customer company): two companies never reach each other's shipments.
  *
- *   SHIPMENTS_PUBLIC_URL          the address the companies connect the app from (its MCP address is <url>/mcp)
- *   CLEGRA_ISSUER                 Clegra's core (required)
- *   CLEGRA_REGISTRATION_ID        the id the core gave this server when it was registered (required)
- *   CLEGRA_REGISTRATION_CHALLENGE the registration challenge, while the core verifies the address
- *   CLEGRA_ALLOWED_COMPANIES      the companies that may use it, separated by commas, or `any` (required)
- *   CLEGRA_CLIENT_ORIGINS         the Clegra clients' origins (CORS), separated by commas
+ *   SHIPMENTS_PUBLIC_URL   the app's public address (its MCP address is <url>/mcp; its sign-in at <url>/signin)
+ *   SHIPMENTS_SIGNIN_KEY   the sign-in's signing key, a private Ed25519 JWK (`newSignInKey()`); required in production
+ *   CLEGRA_CLIENT_ORIGINS  the workspace clients that may frame its consent (web_message), separated by commas
  */
-export function shipmentsAuth(env: Record<string, string | undefined> = process.env): AuthOptions & { resource: string; clegra: ClegraOptions } {
+export type ShipmentsAuth = { auth: AuthOptions & { resource: string }; signIn: SignIn; login: PasswordLogin }
+
+export function shipmentsAuth(app: SignInApp, env: Record<string, string | undefined> = process.env, store: SignInStore = new MemorySignInStore()): ShipmentsAuth {
   const base = env.SHIPMENTS_PUBLIC_URL?.trim().replace(/\/+$/, "")
-  if (!base) throw new Error("SHIPMENTS_PUBLIC_URL is not set: the address the companies connect Shipments from (its MCP address is <SHIPMENTS_PUBLIC_URL>/mcp)")
+  if (!base) throw new Error("SHIPMENTS_PUBLIC_URL is not set: the app's public address (its MCP address is <SHIPMENTS_PUBLIC_URL>/mcp)")
   let url: URL
   try {
     url = new URL(base)
@@ -26,10 +26,10 @@ export function shipmentsAuth(env: Record<string, string | undefined> = process.
     throw new Error(`SHIPMENTS_PUBLIC_URL: "${base}" is not an address`)
   }
   if (url.protocol !== "https:" && url.protocol !== "http:") throw new Error(`SHIPMENTS_PUBLIC_URL: "${base}" is not an http(s) address`)
-  if (url.search || url.hash) throw new Error(`SHIPMENTS_PUBLIC_URL: "${base}" has a query or a fragment`)
-  const clegra = clegraFromEnv(env)
-  if (!clegra) throw new Error("CLEGRA_ISSUER is not set: Clegra's core, whose tokens this server accepts")
-  if (!clegra.registrationId) throw new Error("CLEGRA_REGISTRATION_ID is not set: the id Clegra's core gave this server when it was registered")
-  if (!clegra.allowedCompanies) throw new Error("CLEGRA_ALLOWED_COMPANIES is not set: the companies that may use this server (ids separated by commas), or any")
-  return { resource: `${base}/mcp`, clegra }
+  if (url.search || url.hash || url.pathname !== "/") throw new Error(`SHIPMENTS_PUBLIC_URL: "${base}" must be an origin, without a path, a query or a fragment`)
+  const clientOrigins = (env.CLEGRA_CLIENT_ORIGINS ?? "").split(",").map((o) => o.trim()).filter(Boolean)
+  const keys = env.SHIPMENTS_SIGNIN_KEY ? [JSON.parse(env.SHIPMENTS_SIGNIN_KEY)] : undefined
+  const login = passwordLogin({ store, origin: base, title: app.manifest().title, frameAncestors: clientOrigins })
+  const signIn = createSignIn(app, { issuer: base, resource: `${base}/mcp`, login, permissionsOf: (a) => login.permissionsOf(a), store, clientOrigins, keys })
+  return { auth: { signIn, resource: signIn.resource }, signIn, login }
 }

@@ -3,7 +3,7 @@ import { Ajv2020 } from "ajv/dist/2020.js"
 import schemaJson from "../schema/clegra.schema.json" with { type: "json" }
 
 import { entityKindProblems, keyOf, RECORD_URI, kindDefinitionProblems, kindNameProblem, kindOfRecord, kindSentence, kindsOf, normaliseKey, propertyOf, valueProblem, type EntityKind, type KindDef, type KindField } from "./kinds"
-import { INSTALLATION_TOOLS, SITE_COOKIE, SITE_MARKER_COOKIE, SITE_PATH, SITE_TICKET_SECONDS, SITE_TICKET_TYPE, LATER_TOOL, MANIFEST_PATH, META_KEY, PROTOCOL_ID, URI_SCHEME } from "./protocol"
+import { INSTALLATION_TOOLS, LATER_TOOL, MANIFEST_PATH, META_KEY, PROTOCOL_ID, URI_SCHEME } from "./protocol"
 import { appOnlyTools, manifestRuleProblems, type RulesManifest } from "./rules"
 
 /**
@@ -13,8 +13,7 @@ import { appOnlyTools, manifestRuleProblems, type RulesManifest } from "./rules"
  *
  *   const report = await checkApp({ url: "http://127.0.0.1:3920", token })
  *
- * For an app in the trusted-issuer mode (it trusts Clegra's core, spec §7 «Clegra tokens») the caller is a Clegra
- * caller instead: `clegra: { token, proof }`, its token sent as `Authorization: DPoP` with a proof per request.
+ * The token is one the app's own sign-in issued (any client's: the checks are a plain MCP client's).
  */
 
 export { MANIFEST_PATH }
@@ -30,31 +29,10 @@ export type Report = { ok: boolean; complete: boolean; checks: Check[] }
 export type Options = {
   /** The app's origin, e.g. `https://crm.example.com`. */
   url: string
-  /** A bearer token of a plain MCP caller (not a workspace host). Without it (or `clegra`) only the public checks run. */
+  /** A bearer token of the app's own sign-in, for a test person. Without it only the public checks run. */
   token?: string
-  /** A Clegra caller, in place of `token`: a person of a company (or an agent for them) with a token of Clegra's core. */
-  clegra?: ClegraCaller
   /** `fetch` to use (tests pass the app's own handler). */
   fetch?: (request: Request) => Promise<Response>
-}
-
-/**
- * A caller with a token of Clegra's core (spec §7, «Clegra tokens»): `@clegra/sdk/testing`'s `testCore` and
- * `deviceKey` make one for tests, Clegra's store review its own.
- */
-export type ClegraCaller = {
-  /** The app token (`clegra-app+jwt`, `aud` the app's resource), or a function giving one per request. */
-  token: string | (() => string | Promise<string>)
-  /** A DPoP proof (RFC 9449) by the key the token is bound to, for one request: `htu` is the app's resource. */
-  proof(input: { htm: string; htu: string; token: string; nonce?: string }): string | Promise<string>
-  /**
-   * For an agent's token (`act`): the core's confirmation token for one call and the person's device's proof over it
-   * (`_meta.clegra.confirmation`). With it the `mcp.confirm` check also calls each sensitive write once with a right
-   * confirmation, so it runs: give it only against a test installation.
-   */
-  confirmation?(input: { tool: string; args: Record<string, unknown> }): Promise<{ token: string; proof: string }>
-  /** One of the app's Clegra client origins (`CLEGRA_CLIENT_ORIGINS`): with it the `site.ticket` check frames the site from there. */
-  clientOrigin?: string
 }
 
 type Tool = { name: string; title?: string; description?: string; inputSchema?: Record<string, unknown>; annotations?: Record<string, unknown>; _meta?: Record<string, unknown> }
@@ -252,27 +230,13 @@ export async function checkApp(options: Options): Promise<Report> {
 
   // 3. MCP authorization: no parallel sign-in.
   const mcpUrl = new URL(manifest.mcp.url, `${origin}/`).toString()
-  const clegra = options.clegra
-  if (clegra && options.token !== undefined) throw new Error("checkApp: give a plain caller's token or a Clegra caller, not both")
-  /** A Clegra caller's DPoP `htu`: the app's configured resource (spec §7), never the address it was reached at. */
-  const htu = manifest.auth.resource ?? mcpUrl
-  let nonce: string | undefined
-  /** `token`: a plain caller's bearer; `true`: the Clegra caller (DPoP, once more with the app's nonce). */
-  const rpc = async (method: string, params: Record<string, unknown>, token?: string | true) => {
+  const rpc = async (method: string, params: Record<string, unknown>, token?: string) => {
     const payload = JSON.stringify({ jsonrpc: "2.0", id: 1, method, params })
     const send = async () => {
-      let auth: Record<string, string> = {}
-      if (token === true && clegra) {
-        const t = typeof clegra.token === "function" ? await clegra.token() : clegra.token
-        auth = { authorization: `DPoP ${t}`, dpop: await clegra.proof({ htm: "POST", htu, token: t, ...(nonce ? { nonce } : {}) }) }
-      } else if (typeof token === "string") auth = { authorization: `Bearer ${token}` }
+      const auth: Record<string, string> = typeof token === "string" ? { authorization: `Bearer ${token}` } : {}
       return doFetch(new Request(mcpUrl, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "mcp-protocol-version": "2025-06-18", ...auth }, body: payload }))
     }
-    let response = await send()
-    if (token === true && response.status === 401 && response.headers.get("dpop-nonce")) {
-      nonce = response.headers.get("dpop-nonce")!
-      response = await send()
-    }
+    const response = await send()
     const raw = await response.text()
     let body: { result?: Record<string, unknown>; error?: { message: string } } = {}
     try {
@@ -297,30 +261,28 @@ export async function checkApp(options: Options): Promise<Report> {
         else if (manifest.auth.resource ? manifest.auth.resource !== mcpUrl && body.resource !== mcpUrl : body.resource !== mcpUrl) authProblems.push(`the app says its address is ${manifest.auth.resource ?? body.resource}, but it was reached at ${mcpUrl}`)
         // An app in the trusted-issuer mode alone (it declares Clegra's events and no authorization server) signs nobody in by
         // OAuth: Clegra's core is never an authorization server (its tokens come from Clegra, spec §7), so the list may be empty.
-        const trustedIssuerOnly = manifest.events !== undefined && !manifest.auth.authorizationServers.length
         if (!Array.isArray(body.authorization_servers)) authProblems.push("protected-resource metadata has no authorization_servers list")
-        else if (!body.authorization_servers.length && !trustedIssuerOnly) authProblems.push("protected-resource metadata names no authorization server")
+        else if (!body.authorization_servers.length) authProblems.push("protected-resource metadata names no authorization server")
       }
     }
     check("auth.mcp", "without a token the endpoint answers 401 and points to OAuth protected-resource metadata", authProblems)
   } else if (anonymous.status === 200) skip("auth.mcp", "without a token the endpoint answers 401 and points to OAuth protected-resource metadata", "the app accepts anonymous callers")
   else check("auth.mcp", "without a token the endpoint answers 401 and points to OAuth protected-resource metadata", `status ${anonymous.status}`)
 
-  // 3b. The app's own site (spec §5.1): the exchange is only ever posted, and nobody frames its refusals.
-  const FA_TITLE = "the site's ticket exchange refuses anything but a framed POST, framable by no one, never X-Frame-Options"
+  // 3b. The app's own site (spec §5.1): framable by the app itself and its client origins, never by any site.
+  const FA_TITLE = "the site's start page says who may frame it (frame-ancestors), never any site, never X-Frame-Options"
   if (!manifest.site) skip("site.frame-ancestors", FA_TITLE, "the app has no site")
   else {
     const fa: string[] = []
-    const r = await doFetch(new Request(`${origin}${SITE_PATH}`, { headers: { "sec-fetch-dest": "iframe" }, redirect: "manual" }))
+    const r = await doFetch(new Request(new URL(manifest.site.start, `${origin}/`).toString(), { headers: { "sec-fetch-dest": "iframe" }, redirect: "manual" }))
     const directive = (r.headers.get("content-security-policy") ?? "").split(";").map((d) => d.trim()).find((d) => d.startsWith("frame-ancestors"))
-    if (r.status < 400) fa.push(`GET ${SITE_PATH} answers ${r.status}: a ticket is only ever posted`)
-    if (directive !== "frame-ancestors 'none'") fa.push(`GET ${SITE_PATH}: ${directive ?? "no frame-ancestors"}, not frame-ancestors 'none'`)
-    if (r.headers.get("x-frame-options")) fa.push(`GET ${SITE_PATH}: X-Frame-Options ${r.headers.get("x-frame-options")} (it conflicts with frame-ancestors)`)
-    if (r.headers.get("set-cookie")) fa.push(`GET ${SITE_PATH} sets a cookie`)
+    if (!directive) fa.push(`GET ${manifest.site.start}: no frame-ancestors`)
+    else if (/\s\*(\s|$)|https:(\s|$)/.test(` ${directive.slice("frame-ancestors".length)} `)) fa.push(`GET ${manifest.site.start}: ${directive} lets any site frame it`)
+    if (r.headers.get("x-frame-options")) fa.push(`GET ${manifest.site.start}: X-Frame-Options ${r.headers.get("x-frame-options")} (it conflicts with frame-ancestors)`)
     check("site.frame-ancestors", FA_TITLE, fa)
   }
 
-  const token: string | true | undefined | null = clegra ? true : (options.token ?? (anonymous.status === 200 ? undefined : null))
+  const token: string | undefined | null = options.token ?? (anonymous.status === 200 ? undefined : null)
   if (token === null) {
     skip("mcp", "the MCP endpoint (tools, annotations, views)", "no token given", true)
     return done()
@@ -339,8 +301,7 @@ export async function checkApp(options: Options): Promise<Report> {
   }
   for (const r of refs) {
     const tool = byName.get(r.tool.name)
-    // A Clegra caller is a workspace host's person: what is hidden from plain clients is theirs to see.
-    if (!r.tool.plain && !clegra) {
+    if (!r.tool.plain) {
       if (tool) toolProblems.push(`${r.tool.name} (${r.where}) is not for plain clients but is listed to one`)
       continue
     }
@@ -381,7 +342,7 @@ export async function checkApp(options: Options): Promise<Report> {
   const declared = [...Object.values(manifest.lifecycle ?? {}), ...((manifest.schedules ?? []).some((x) => x.name === LATER_TOOL) ? [LATER_TOOL] : [])]
   const shown = INSTALLATION_TOOLS.filter((n) => byName.has(n))
   if (!declared.length && !shown.length) skip("lifecycle.hidden", HIDDEN_TITLE, "the app has no lifecycle tools and no later runs")
-  else check("lifecycle.hidden", HIDDEN_TITLE, shown.map((n) => `${n} is listed to ${clegra ? "a person" : "a plain caller"}`))
+  else check("lifecycle.hidden", HIDDEN_TITLE, shown.map((n) => `${n} is listed to a plain caller`))
   const again = ((await rpc("tools/list", {}, token)).result?.tools ?? []) as Tool[]
   check("mcp.deterministic", "tools/list is the same on every call", JSON.stringify(again) === JSON.stringify(listed) ? null : "two calls differ")
 
@@ -615,111 +576,6 @@ export async function checkApp(options: Options): Promise<Report> {
     check("mcp.app-callable", "the tools a view calls (lists, records, actions, pages) are callable from views", p)
   }
 
-  // 5c. The site ticket (spec §5.1): one minute, for one path and one client origin, single use, exchanged only by a
-  // frame posting it from that origin, for a partitioned, HttpOnly session cookie of the whole site and a 303 to the path.
-  const TICKET_TITLE = "a site ticket is short, single-use, bound to its client origin, and opens a partitioned session cookie for the site"
-  const site = manifest.site
-  if (!site) skip("site.ticket", TICKET_TITLE, "the app has no site")
-  else if (!clegra) skip("site.ticket", TICKET_TITLE, "only a person's own Clegra app token gets site tickets")
-  else if (!clegra.clientOrigin) skip("site.ticket", TICKET_TITLE, "no client origin given (clegra.clientOrigin)")
-  else if (!byName.has(site.tool.name)) check("site.ticket", TICKET_TITLE, `${site.tool.name} is not listed to a person`)
-  else {
-    const tp: string[] = []
-    const appOrigin = manifest.auth.resource ? new URL(manifest.auth.resource).origin : origin
-    const frameOrigin = clegra.clientOrigin
-    const ask = async (o: string, path?: string) => {
-      const r = await rpc("tools/call", { name: site.tool.name, arguments: { origin: o, ...(path ? { path } : {}) } }, token)
-      const result = r.result as { isError?: boolean; structuredContent?: { action?: string; field?: string; ticket?: string; path?: string } } | undefined
-      return result?.isError || !result?.structuredContent?.ticket ? null : result.structuredContent
-    }
-    const post = (t: { action?: string; field?: string; ticket?: string }, o: string, dest = "iframe") =>
-      doFetch(new Request(t.action!, { method: "POST", redirect: "manual", headers: { "content-type": "application/x-www-form-urlencoded", origin: o, "sec-fetch-dest": dest }, body: new URLSearchParams({ [t.field ?? "ticket"]: t.ticket! }) }))
-    const first = await ask(frameOrigin)
-    if (!first) tp.push(`${site.tool.name} gave no ticket for origin ${frameOrigin}`)
-    else {
-      if (first.action !== `${appOrigin}${SITE_PATH}`) tp.push(`the ticket is posted to ${first.action}, not ${appOrigin}${SITE_PATH}`)
-      if (first.path !== site.start) tp.push(`without a path the ticket opens ${first.path}, not the site's start ${site.start}`)
-      try {
-        const [h, p] = first.ticket!.split(".")
-        const header = JSON.parse(Buffer.from(h!, "base64url").toString()) as { alg?: string; typ?: string }
-        const claims = JSON.parse(Buffer.from(p!, "base64url").toString()) as { exp?: number; iat?: number; jti?: string; origin?: unknown }
-        if (header.typ !== SITE_TICKET_TYPE || !header.alg || header.alg === "none") tp.push(`ticket header ${JSON.stringify(header)}`)
-        if (typeof claims.exp !== "number" || typeof claims.iat !== "number" || claims.exp - claims.iat > SITE_TICKET_SECONDS) tp.push("the ticket lives longer than a minute (or has no exp/iat)")
-        if (!claims.jti) tp.push("the ticket has no jti (single use)")
-        if (claims.origin !== frameOrigin) tp.push("the ticket does not name the framing origin")
-      } catch {
-        tp.push("the ticket is not a JWT")
-      }
-      if (await ask(`https://${PROTOCOL_ID}-check.invalid`)) tp.push("a ticket was issued for an origin that is not a client origin")
-      if (await ask(frameOrigin, "//elsewhere.invalid/")) tp.push("a ticket was issued for a path that leaves the site (//…)")
-      const elsewhere = await post(first, `https://${PROTOCOL_ID}-check.invalid`)
-      if (elsewhere.status < 400 || elsewhere.headers.get("set-cookie")) tp.push(`a ticket posted from another origin answers ${elsewhere.status}`)
-      const ok = await post(first, frameOrigin)
-      const cookies = (ok.headers as Headers & { getSetCookie?: () => string[] }).getSetCookie?.() ?? [ok.headers.get("set-cookie") ?? ""]
-      if (ok.status !== 303) tp.push(`the exchange answers ${ok.status}, not 303`)
-      const location = ok.headers.get("location") ?? ""
-      if (new URL(location, `${appOrigin}/`).href !== new URL(site.start, appOrigin).href) tp.push(`the exchange redirects to ${location || "nowhere"}, not to ${site.start}`)
-      for (const name of [SITE_COOKIE, SITE_MARKER_COOKIE]) {
-        const cookie = cookies.find((c) => c.startsWith(`${name}=`))
-        if (!cookie) {
-          tp.push(`the exchange sets no ${name} cookie`)
-          continue
-        }
-        const attributes = cookie.split(";").map((a) => a.trim().toLowerCase())
-        for (const a of ["secure", "httponly", "samesite=none", "partitioned", "path=/"]) if (!attributes.includes(a)) tp.push(`${name} lacks ${a}`)
-        if (attributes.some((a) => a.startsWith("domain="))) tp.push(`${name} sets Domain`)
-      }
-      if (ok.headers.get("referrer-policy") !== "no-referrer") tp.push("the exchange has no Referrer-Policy: no-referrer")
-      const again = await post(first, frameOrigin)
-      if (again.status < 400 || again.headers.get("set-cookie")) tp.push(`a used ticket answers ${again.status} (single use)`)
-      const top = await ask(frameOrigin)
-      if (top) {
-        const r = await post(top, frameOrigin, "document")
-        if (r.status < 400 || r.headers.get("set-cookie")) tp.push(`a ticket posted by a top-level page answers ${r.status} (frames only)`)
-      }
-    }
-    check("site.ticket", TICKET_TITLE, tp)
-  }
-
-  // 4j. Sensitive writes (spec §7, «Confirmation»): a Clegra caller's call of a write whose `confirm` is "always" never
-  // runs without the person's confirmation; for an agent, a core confirmation of other arguments is refused and the
-  // confirmation of its own arguments, with the device's proof, is taken. Called with sample arguments (each required
-  // input from its schema, the record of an action on one from its list): a call they don't fit is not counted.
-  const CONFIRM_TITLE = "a Clegra caller's write that asks for confirmation runs only with it (for an agent: the core's confirmation of exactly these arguments, with the device's proof)"
-  const sensitive = manifest.actions.filter((a) => !a.readOnly && a.confirm === "always" && byName.has(a.tool.name))
-  if (!clegra) skip("mcp.confirm", CONFIRM_TITLE, "not a Clegra caller (a plain client relies on destructiveHint or elicitation)")
-  else if (!sensitive.length) skip("mcp.confirm", CONFIRM_TITLE, "no write that asks for confirmation is listed to this caller")
-  else {
-    const p: string[] = []
-    let tried = 0
-    const codeOf = (r: Awaited<ReturnType<typeof rpc>>): string | null => (r.error ? `error ${r.error.message}` : ((r.result?.structuredContent as { error?: { code?: string } } | undefined)?.error?.code ?? (r.result?.isError ? "isError" : null)))
-    const attempt = (name: string, args: Record<string, unknown>, meta?: Record<string, unknown>) => rpc("tools/call", { name, arguments: args, ...(meta ? { _meta: { [META_KEY]: meta } } : {}) }, token)
-    for (const a of sensitive) {
-      const tool = byName.get(a.tool.name)!
-      const args = (sampleOf(tool.inputSchema) ?? {}) as Record<string, unknown>
-      if (a.entity) {
-        const e = manifest.entities.find((x) => x.name === a.entity)
-        const first = e && byName.has(e.tools.list.name) ? (await rowsOf(e, { limit: 1 })).rows[0] : undefined
-        if (typeof first?.uri !== "string") continue
-        args.id = decodeURIComponent(first.uri.split("/").pop() ?? "")
-      }
-      const bare = codeOf(await attempt(tool.name, args))
-      if (bare === "invalid_input" || bare === "not_found" || bare === "permission_denied") continue
-      tried++
-      if (bare !== "confirmation_required") {
-        p.push(`${tool.name}: ${bare === null ? "ran" : `answered ${bare}`} without a confirmation`)
-        continue
-      }
-      if (!clegra.confirmation) continue
-      const other = codeOf(await attempt(tool.name, args, { confirmation: await clegra.confirmation({ tool: tool.name, args: { ...args, conformance_other_arguments: true } }) }))
-      if (other !== "confirmation_required") p.push(`${tool.name}: ${other === null ? "ran" : `answered ${other}`} with a confirmation of other arguments`)
-      const right = codeOf(await attempt(tool.name, args, { confirmation: await clegra.confirmation({ tool: tool.name, args }) }))
-      if (right === "confirmation_required") p.push(`${tool.name}: refused the core's confirmation of its own arguments`)
-    }
-    if (!tried && !p.length) skip("mcp.confirm", CONFIRM_TITLE, "no sensitive write takes the sample arguments")
-    else check("mcp.confirm", CONFIRM_TITLE, p)
-  }
-
   // 6. The manifest is also one MCP resource, identical to the file.
   const resources = ((await rpc("resources/list", {}, token)).result?.resources ?? []) as { uri: string; mimeType?: string }[]
   const asResource = resources.find((r) => r.mimeType === "application/json" && r.uri === `${URI_SCHEME}://${manifest.name}`)
@@ -735,6 +591,6 @@ export async function checkApp(options: Options): Promise<Report> {
 }
 
 export function formatReport(report: Report): string {
-  const verdict = !report.ok ? "NOT conformant." : report.complete ? "Conformant." : "Incomplete: the public checks pass, the MCP checks did not run. Not a conformance result: give a plain caller's token (--token) or a Clegra caller."
+  const verdict = !report.ok ? "NOT conformant." : report.complete ? "Conformant." : "Incomplete: the public checks pass, the MCP checks did not run. Not a conformance result: give a test person's token of the app's own sign-in (--token)."
   return [...report.checks.map((c) => `${c.skipped ? "SKIP" : c.ok ? "PASS" : "FAIL"}  ${c.id} — ${c.title}${c.detail ? `\n      ${c.detail}` : ""}`), verdict].join("\n")
 }

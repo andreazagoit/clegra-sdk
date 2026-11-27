@@ -4,6 +4,40 @@ Clegra apps (spec 1.0 draft) and the `@clegra/sdk` package. Newest first. Versio
 npm dist-tag `next`. Entries below «Two scoped packages» keep the names of their time (the unscoped `clegra` package
 and its `clegra/ui`, the `modelapp` package, docs/map): they are history.
 
+## 0.2.0-next.0 (2026-11-27)
+
+The redesign's first part (apps never use Clegra accounts). Breaking, with no compatibility path.
+
+- **The sign-in module, `@clegra/sdk/signin`** (spec §7 «Your sign-in»): `createSignIn(definition, { issuer, resource,
+  login, permissionsOf, store, keys, clientOrigins })` is the app's own OAuth 2.1 authorization server on top of its
+  login, and `auth: { signIn }` serves it. Authorization code with PKCE S256; clients by Client ID Metadata Document
+  (public or `private_key_jwt`), no dynamic registration; RFC 8414 metadata, RFC 8707 `resource`, RFC 9207 `iss`; the
+  consent page in the person's language; `at+jwt` access tokens (EdDSA, `jwks_uri`, ten minutes, `aud` the MCP
+  address), DPoP-bound when the token request carries a proof; refresh tokens rotated, reuse ends the delegation;
+  RFC 7009; `response_mode=web_message` to the configured client origins (linking inside a workspace client's frame);
+  personal keys (`signIn.keys`) for background work; `signIn.links` and `signIn.forget` for the app's own screens. What
+  a token allows is read live (`permissionsOf`, narrowed to the consented scopes). `passwordLogin` is a ready-made
+  login (email and password, PBKDF2, a session cookie that works in a cross-site frame) for an app that has none;
+  `frameCookie` writes such a cookie for any login; `MemorySignInStore` and `SqlSignInStore` (one table,
+  `SqlSignInStore.schema()`) keep what it issued, as hashes. Web APIs only.
+- **No Clegra identity in an app**: removed `auth.clegra`, `clegraFromEnv`, `clegraTenant`, the core's app,
+  delegated, automation and confirmation tokens and their DPoP checks, `ctx.actor`, events (`/clegra/events`,
+  `manifest.events`), the registration document (`/.well-known/clegra-app.json`), the app's roles of Clegra companies
+  (`app.roles`, `clegra_roles`, `manifest.rolesTool`, `RoleStore`, `MemoryRoles`, `SqlStore`'s roles table), and from
+  `@clegra/sdk/testing` `testCore` and `deviceKey().confirm`. Conformance takes a token the app's own sign-in issued
+  (`checkApp({ token })`); its `clegra` caller, `mcp.confirm` and `site.ticket` are gone.
+- **The site in a workspace client's frame, signed in by the app** (spec §5.1): `site: { start }` and the app's
+  `clientOrigins`; every page framable by those origins only (`siteProxy`, `siteFraming`); the person signs in with
+  the app's own sign-in inside the frame. Removed: site tickets (`clegra_site`, `/clegra/site` exchange, session,
+  context, renewal), `site.secret`, `site.sessionSeconds`, `getClegraCaller`, `siteGuard`, `SiteError`. The bridge
+  (`/clegra/site/bridge.js`) reports the location and applies the client's theme and language.
+- View tickets (spec §5.3) are for any signed-in person and one of the app's `clientOrigins`.
+- **Writes reach every client** the app signed in (`expose.plain` defaults to true for writes too).
+- **The index profile**: every action of the manifest carries `effect` (`read`, `write`, `irreversible`).
+- `withClegra` and `toNextHandlers` route the sign-in module (`/oauth/*`) and, with `signInPath`, the password login.
+- **Two getting-started guides**, `docs/start-javascript.md` and `docs/start-next.md`, replace `docs/quickstart.md`
+  (both in the package).
+
 ## 0.1.0-next.12 (2026-11-25)
 
 - Public operations (spec §7): signing in is not mandatory for an app. `auth.public: { installation }` serves a call

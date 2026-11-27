@@ -53,44 +53,6 @@ export type LaterStore = {
   clear(tenant: string): Promise<number>
 }
 
-/**
- * What one person may do inside the app for one tenant (the app's own permissions, spec §7 «Roles»): kept by the
- * app, assigned by its administrators. `sub` is the person's pairwise id from the core's token (a different id in
- * every app). `seen` is what the core's token said the last time the person called (name, email, company role):
- * what a permissions page shows beside the id.
- */
-export type Grant = {
-  tenant: string
-  sub: string
-  /** An app administrator: every permission, and may assign them. */
-  admin: boolean
-  /** The declared permissions granted (ignored when `admin`). */
-  permissions: string[]
-  name: string | null
-  email: string | null
-  /** The person's role in the company, as the core's last token said it. */
-  companyRole: "admin" | "member" | null
-  /** When the person last called (ISO), null when never seen. */
-  seenAt: string | null
-  /** Whether an administrator assigned this grant (false: only seen, nothing assigned yet). */
-  assigned: boolean
-}
-
-/** The store's part for roles: one row per person (`sub`) per tenant. */
-export type RoleStore = {
-  get(tenant: string, sub: string): Promise<Grant | null>
-  /** Every person of the tenant the app knows (assigned or seen), by name. */
-  list(tenant: string): Promise<Grant[]>
-  /** What an administrator assigns: replaces the person's admin flag and permissions. */
-  assign(tenant: string, sub: string, grant: { admin: boolean; permissions: string[] }): Promise<void>
-  /** What the core's token said about the person (name, email, company role), when they call. Keeps what was assigned. */
-  seen(tenant: string, sub: string, who: { name: string | null; email: string | null; companyRole: "admin" | "member" }): Promise<void>
-  /** Drops the person (a member removed from the company): false when there was nothing. */
-  remove(tenant: string, sub: string): Promise<boolean>
-  /** Drops every person of the tenant (the app uninstalled or unassigned): how many. */
-  clear(tenant: string): Promise<number>
-}
-
 export type IdempotencyStore = {
   /**
    * Starts the call `key` with these arguments, in one atomic step: null
@@ -113,8 +75,6 @@ export type IdempotencyStore = {
   hit(key: string, windowMs: number): Promise<number>
   /** Later runs (needed by actions with `later`). */
   later?: LaterStore
-  /** Roles (needed by Clegra apps, `auth.clegra`: the app's own permissions per person per tenant). */
-  roles?: RoleStore
 }
 
 type KeptRun = { run: LaterRun; status: "pending" | "running" | "cancelled" | LaterOutcome["status"]; message?: string }
@@ -162,46 +122,9 @@ export class MemoryLater implements LaterStore {
   }
 }
 
-/** Roles in memory: what MemoryStore keeps (one process, lost on restart). */
-export class MemoryRoles implements RoleStore {
-  readonly #rows = new Map<string, Grant>()
-  #key = (tenant: string, sub: string) => `${tenant}\n${sub}`
-  async get(tenant: string, sub: string) {
-    const g = this.#rows.get(this.#key(tenant, sub))
-    return g ? structuredClone(g) : null
-  }
-  async list(tenant: string) {
-    return [...this.#rows.values()]
-      .filter((g) => g.tenant === tenant)
-      .sort((a, b) => (a.name ?? a.sub).localeCompare(b.name ?? b.sub))
-      .map((g) => structuredClone(g))
-  }
-  #row(tenant: string, sub: string): Grant {
-    const k = this.#key(tenant, sub)
-    let g = this.#rows.get(k)
-    if (!g) this.#rows.set(k, (g = { tenant, sub, admin: false, permissions: [], name: null, email: null, companyRole: null, seenAt: null, assigned: false }))
-    return g
-  }
-  async assign(tenant: string, sub: string, grant: { admin: boolean; permissions: string[] }) {
-    Object.assign(this.#row(tenant, sub), { admin: grant.admin, permissions: [...new Set(grant.permissions)].sort(), assigned: true })
-  }
-  async seen(tenant: string, sub: string, who: { name: string | null; email: string | null; companyRole: "admin" | "member" }) {
-    Object.assign(this.#row(tenant, sub), { name: who.name, email: who.email, companyRole: who.companyRole, seenAt: new Date().toISOString() })
-  }
-  async remove(tenant: string, sub: string) {
-    return this.#rows.delete(this.#key(tenant, sub))
-  }
-  async clear(tenant: string) {
-    let n = 0
-    for (const [k, g] of this.#rows) if (g.tenant === tenant && this.#rows.delete(k)) n++
-    return n
-  }
-}
-
 export class MemoryStore implements IdempotencyStore {
   readonly #items = new Map<string, { value: StoredCall; until: number }>()
   readonly later = new MemoryLater()
-  readonly roles = new MemoryRoles()
 
   #live(key: string): StoredCall | undefined {
     const item = this.#items.get(key)
@@ -329,52 +252,8 @@ class SqlLater implements LaterStore {
   }
 }
 
-const GRANT_COLUMNS = "tenant, sub, admin, permissions, name, email, company_role, seen_at, assigned"
-
-function grantOf(row: Record<string, unknown>): Grant {
-  const permissions = typeof row.permissions === "string" ? (JSON.parse(row.permissions) as string[]) : ((row.permissions ?? []) as string[])
-  const seen = row.seen_at === null || row.seen_at === undefined ? null : new Date(row.seen_at as string).toISOString()
-  const role = row.company_role === "admin" || row.company_role === "member" ? row.company_role : null
-  return { tenant: String(row.tenant), sub: String(row.sub), admin: row.admin === true, permissions, name: row.name === null || row.name === undefined ? null : String(row.name), email: row.email === null || row.email === undefined ? null : String(row.email), companyRole: role, seenAt: seen, assigned: row.assigned === true }
-}
-
-/** Roles in the app's Postgres (`<table>_roles`): each method one statement. */
-class SqlRoles implements RoleStore {
-  constructor(
-    private readonly rows: (text: string, params: unknown[]) => Promise<Record<string, unknown>[]>,
-    private readonly table: string,
-  ) {}
-  async get(tenant: string, sub: string) {
-    const [row] = await this.rows(`SELECT ${GRANT_COLUMNS} FROM ${this.table} WHERE tenant = $1 AND sub = $2`, [tenant, sub])
-    return row ? grantOf(row) : null
-  }
-  async list(tenant: string) {
-    return (await this.rows(`SELECT ${GRANT_COLUMNS} FROM ${this.table} WHERE tenant = $1 ORDER BY coalesce(name, sub)`, [tenant])).map(grantOf)
-  }
-  async assign(tenant: string, sub: string, grant: { admin: boolean; permissions: string[] }) {
-    await this.rows(
-      `INSERT INTO ${this.table} (tenant, sub, admin, permissions, assigned, updated_at) VALUES ($1, $2, $3, $4::jsonb, true, now())
-       ON CONFLICT (tenant, sub) DO UPDATE SET admin = EXCLUDED.admin, permissions = EXCLUDED.permissions, assigned = true, updated_at = now()`,
-      [tenant, sub, grant.admin, JSON.stringify([...new Set(grant.permissions)].sort())],
-    )
-  }
-  async seen(tenant: string, sub: string, who: { name: string | null; email: string | null; companyRole: "admin" | "member" }) {
-    await this.rows(
-      `INSERT INTO ${this.table} (tenant, sub, admin, permissions, name, email, company_role, seen_at, assigned) VALUES ($1, $2, false, '[]'::jsonb, $3, $4, $5, now(), false)
-       ON CONFLICT (tenant, sub) DO UPDATE SET name = EXCLUDED.name, email = EXCLUDED.email, company_role = EXCLUDED.company_role, seen_at = now()`,
-      [tenant, sub, who.name, who.email, who.companyRole],
-    )
-  }
-  async remove(tenant: string, sub: string) {
-    return (await this.rows(`DELETE FROM ${this.table} WHERE tenant = $1 AND sub = $2 RETURNING sub`, [tenant, sub])).length > 0
-  }
-  async clear(tenant: string) {
-    return (await this.rows(`DELETE FROM ${this.table} WHERE tenant = $1 RETURNING sub`, [tenant])).length
-  }
-}
-
 /**
- * A store in the app's own Postgres (three tables), for serverless and several
+ * A store in the app's own Postgres (two tables), for serverless and several
  * instances: every method is a single statement, atomic on its own. Create the
  * tables once with `SqlStore.schema()` in a migration (the SDK never migrates;
  * the SQL is idempotent, so a new migration may run it again).
@@ -384,7 +263,6 @@ export class SqlStore implements IdempotencyStore {
   readonly #query: SqlQuery
   readonly #table: string
   readonly later: LaterStore
-  readonly roles: RoleStore
   #calls = 0
 
   constructor(query: SqlQuery, options: { table?: string } = {}) {
@@ -392,10 +270,9 @@ export class SqlStore implements IdempotencyStore {
     this.#query = query
     this.#table = table
     this.later = new SqlLater((text, params) => this.#rows(text, params), `${table}_later`)
-    this.roles = new SqlRoles((text, params) => this.#rows(text, params), `${table}_roles`)
   }
 
-  /** The tables (`<table>`, `<table>_later` and `<table>_roles`), as SQL for a migration: `CREATE … IF NOT EXISTS`, safe to run again. */
+  /** The tables (`<table>` and `<table>_later`), as SQL for a migration: `CREATE … IF NOT EXISTS`, safe to run again. */
   static schema(table = "clegra_store"): string {
     checkTable(table)
     const later = `${table}_later`
@@ -404,7 +281,6 @@ export class SqlStore implements IdempotencyStore {
       `CREATE INDEX IF NOT EXISTS ${table}_expires_at ON ${table} (expires_at);`,
       `CREATE TABLE IF NOT EXISTS ${later} (id text PRIMARY KEY, tenant text NOT NULL, tool text NOT NULL, args text NOT NULL, args_hash text NOT NULL, at text NOT NULL, due_at timestamptz NOT NULL, until bigint NOT NULL, author jsonb, permissions jsonb NOT NULL, proof text, issuer text NOT NULL, subject text NOT NULL, installation text NOT NULL, call text, confirmed_at bigint NOT NULL, status text NOT NULL DEFAULT 'pending', message text, created_at timestamptz NOT NULL DEFAULT now(), claimed_at timestamptz, finished_at timestamptz);`,
       `CREATE INDEX IF NOT EXISTS ${later}_due ON ${later} (tenant, due_at) WHERE status = 'pending';`,
-      `CREATE TABLE IF NOT EXISTS ${table}_roles (tenant text NOT NULL, sub text NOT NULL, admin boolean NOT NULL DEFAULT false, permissions jsonb NOT NULL DEFAULT '[]'::jsonb, name text, email text, company_role text, seen_at timestamptz, assigned boolean NOT NULL DEFAULT false, updated_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY (tenant, sub));`,
     ].join("\n")
   }
 

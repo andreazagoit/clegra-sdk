@@ -3,18 +3,18 @@ import { createHash, randomUUID } from "node:crypto"
 
 import { createMcpHandler, inputRequired, inputResponse, McpServer, type CallToolResult, type Icon, type ServerContext } from "@modelcontextprotocol/server"
 import { entityKindProblems, keyOf, kindNameProblem, kindDefinitionProblems, kindOfRecord, kindSentence, kindsOf, normaliseKey, type KindDef, type KindField, type Normalisation } from "../spec/src/kinds"
-import { DELETE_TOOL, type AppAccent, EXPORT_TOOL, INSTALLATION_TOOL, INSTALLATION_TOOLS, EVENTS_PATH, LATER_TOOL, META_KEY, OAUTH_SCOPE, PROTOCOL_ID, REGISTRATION_PATH, RESOLVE_TOOL, ROLES_TOOL, SITE_BRIDGE_PATH, SITE_CONTEXT_PATH, SITE_PATH, SITE_RENEWED_PATH, SITE_SESSION_PATH, SITE_TOOL, URI_SCHEME, uriPrefix, VIEW_TOOL, VIEWS_PATH } from "../spec/src/protocol"
+import { DELETE_TOOL, type AppAccent, EXPORT_TOOL, INSTALLATION_TOOL, INSTALLATION_TOOLS, LATER_TOOL, META_KEY, OAUTH_SCOPE, PROTOCOL_ID, RESOLVE_TOOL, SITE_BRIDGE_PATH, URI_SCHEME, uriPrefix, VIEW_TOOL, VIEWS_PATH } from "../spec/src/protocol"
 import { viewPath, viewPolicy, ViewError, ViewTickets, withHost, type ViewDocument } from "./views"
 import { LIMITS, manifestRuleProblems } from "../spec/src/rules"
 import { z } from "zod"
 
 import { argsHash, AuthError, canonicalJson, DEV_ISSUER, DevAuthority, INSTALLATION, isLoopback, laterDeadline, signConfirmation, tenantOf, TokenVerifier, type AuthOptions, type Caller, type Person, type RequestTrust } from "./auth"
-import { ClegraAuthority, DpopError, type ClegraEvent } from "./clegra"
-import { SITE_BRIDGE_SCRIPT, SiteAuthority, SiteError, siteLocaleOf, siteThemeOf, type SiteCaller, type SiteClaim, type SiteOptions } from "./site"
+import { DpopError } from "./dpop"
+import { siteBridgeScript, siteFraming, siteStart, type SiteOptions } from "./site"
 import { MANIFEST_PATH, manifestUri, SPEC_VERSION, type Manifest, type ManifestField } from "./manifest"
 import { isLabel, labelMap, localize, type Label } from "./labels"
 import { fieldsOf, jsonSchemaOf, kindRef, localRef, plainSchema, type FieldInfo } from "./meaning"
-import { MemoryStore, type Grant, type IdempotencyStore, type LaterOutcome, type LaterRun } from "./store"
+import { MemoryStore, type IdempotencyStore, type LaterOutcome, type LaterRun } from "./store"
 import type {
   ActionConfig,
   ActionHandle,
@@ -108,7 +108,12 @@ export type ServerOptions = {
   mcp?: (server: McpServer, caller: Caller | null) => void
   /** The names of people of the installation by their ids (the values of `person` fields): what a host shows in place of an id. */
   people?: PeopleResolver
-  /** The app's own website, shown as it is in Clegra's clients (spec §5.1): where it opens, the tickets' signing secret. Needs `auth.clegra`. */
+  /**
+   * The origins of the workspace clients that frame the app (Clegra's web and desktop clients): its site's pages and
+   * its views are framable by them only (spec §5.1, §5.3). Default none.
+   */
+  clientOrigins?: string[]
+  /** The app's own website, shown as it is in a workspace client's frame (spec §5.1): where it opens. People sign in there with the app's own sign-in. */
   site?: SiteOptions
 }
 
@@ -119,14 +124,10 @@ export type ServerOptions = {
 export type AppSite = {
   /** Where the site opens (`/`). */
   readonly start: string
-  /** The caller of a site request (its session cookie), or null: none, expired, a top-level visit, revoked. */
-  caller(request: Request): Promise<SiteCaller | null>
-  /**
-   * In front of a page of the site (spec §5.1 step 7): with a session, the headers that let its client frame it
-   * (`frame-ancestors 'self' <origin>`); a frame of a Clegra client's partition without one, the signed-out page
-   * (`response`); anything else, nothing (`headers` null: the app's own policy).
-   */
-  guard(request: Request): Promise<{ headers: Record<string, string> | null; response: Response | null }>
+  /** The workspace clients that may frame it. */
+  readonly clientOrigins: readonly string[]
+  /** The headers in front of every page of the site: framable by the app itself and its client origins only. */
+  headers(): Record<string, string>
 }
 
 /** Names by person id, for the ids it knows (spec §3, «People»). An id it leaves out is shown as an unknown person, never as the id. */
@@ -183,7 +184,7 @@ const NAME = /^[a-z][a-z0-9-]{1,39}$/
 const IDENT = /^[a-z][a-z0-9_]{0,39}$/
 const PERMISSION = /^[a-z][a-z0-9_-]{0,39}\.[a-z][a-z0-9_-]{0,39}$/
 const RESERVED_PARAMS = new Set(["query", "sort", "dir", "cursor", "limit", "id"])
-const RESERVED_TOOLS = new Set(["search", "fetch", RESOLVE_TOOL, SITE_TOOL, VIEW_TOOL, ROLES_TOOL, ...INSTALLATION_TOOLS])
+const RESERVED_TOOLS = new Set(["search", "fetch", RESOLVE_TOOL, VIEW_TOOL, ...INSTALLATION_TOOLS])
 /** How far in the past a later run's `at` may be when it is confirmed, and how far ahead. */
 const LATER_PAST_MS = 5 * 60_000
 const LATER_AHEAD_MS = 366 * 24 * 3600_000
@@ -327,7 +328,6 @@ export class AppServer {
   readonly options: ServerOptions
   readonly locale: string
   readonly #verifier: TokenVerifier
-  readonly #clegra: ClegraAuthority | null
   readonly #dev: DevAuthority | null
   readonly #store: IdempotencyStore
   readonly #entities = new Map<string, EntityRecord>()
@@ -346,7 +346,8 @@ export class AppServer {
   #manifest: Manifest | null = null
   #devReady: Promise<void> | null = null
   readonly #path: string
-  readonly #site: SiteAuthority | null
+  readonly #site: { start: string } | null
+  readonly #clientOrigins: string[]
   readonly #viewTickets: ViewTickets | null
   #warnedStore = false
   readonly #handler = createMcpHandler(
@@ -375,63 +376,32 @@ export class AppServer {
     this.#path = path
     this.#store = options.store ?? new MemoryStore()
     this.#verifier = new TokenVerifier(auth, (key, ttlMs) => this.#store.once(key, ttlMs))
-    if (auth.clegra && !auth.resource) throw new Error("auth.resource: with auth.clegra, give this app's public MCP address (https://…/mcp): the only audience of the core's tokens, and what DPoP proofs must name")
-    if (auth.clegra && !this.#store.roles) throw new Error("store: auth.clegra keeps the app's roles in the store's `roles` (MemoryStore and SqlStore have it)")
-    this.#clegra = auth.clegra ? new ClegraAuthority(auth.clegra, auth.resource!, this.#store) : null
     this.#dev = auth.dev ? new DevAuthority(auth.dev === true ? {} : auth.dev, { name: this.name, title: localize(options.title, this.locale, this.locale), allPermissions: () => [...this.#permissions.keys()] }) : null
     if (this.#dev) this.#verifier.useDev(this.#dev)
-    if (options.site && !auth.clegra) throw new Error("site: an app's own site is shown in Clegra's clients, signed in with Clegra's tokens, so it needs auth.clegra (clegraFromEnv())")
-    this.#site = options.site ? new SiteAuthority(options.site, this.#store, () => this.#clegra?.options.clientOrigins ?? []) : null
-    this.#viewTickets = this.#clegra ? new ViewTickets(this.#store, () => this.#clegra?.options.clientOrigins ?? []) : null
+    this.#clientOrigins = (options.clientOrigins ?? []).map((o) => {
+      // A web origin, or a desktop client's own scheme (`app://client`): scheme, host and port, nothing more.
+      const value = o.replace(/\/$/, "").toLowerCase()
+      if (!/^[a-z][a-z0-9+.-]*:\/\/[a-z0-9.-]+(:\d{1,5})?$/.test(value)) throw new Error(`clientOrigins: "${o}" must be an origin (scheme, host and port, no path)`)
+      return value
+    })
+    this.#site = options.site ? { start: siteStart(options.site.start) } : null
+    this.#viewTickets = this.#clientOrigins.length ? new ViewTickets(this.#store, () => this.#clientOrigins) : null
   }
 
   // ------------------------------------------------------------ the app's own site (spec §5.1)
 
-  /** The app's origin for tickets and sessions: its configured public address, else the one the request reached. */
+  /** The app's origin: its configured public address, else the one the request reached. */
   #appOrigin(requestOrigin: string): string {
-    const resource = this.options.auth?.resource
+    const resource = this.options.auth?.resource ?? this.options.auth?.signIn?.resource
     return resource ? new URL(resource).origin : requestOrigin
-  }
-
-  /** Whether a site session is still good: the person still in the company, the app still installed. */
-  async #siteLive(s: { claim: SiteClaim; sub?: string; iat: number }): Promise<boolean> {
-    return !(this.#clegra && (await this.#clegra.revoked(s.claim.installation, s.sub ?? s.claim.person?.id ?? null, s.iat)))
   }
 
   /** The site's side for whatever serves its pages: null when the app declares no `site`. */
   get site(): AppSite | null {
     const site = this.#site
     if (!site) return null
-    return {
-      start: site.start,
-      caller: async (request) => {
-        // The session is for frames: a top-level visit (Sec-Fetch-Dest: document) is the app's own sign-in's.
-        if (request.headers.get("sec-fetch-dest") === "document") return null
-        const s = await site.session(request, this.#appOrigin(this.#origin(request)))
-        return s && (await this.#siteLive(s)) ? site.callerOf(s) : null
-      },
-      guard: async (request) => {
-        const dest = request.headers.get("sec-fetch-dest")
-        if (dest === "document") return { headers: null, response: null }
-        const s = await site.session(request, this.#appOrigin(this.#origin(request)))
-        if (s && (await this.#siteLive(s))) return { headers: { "content-security-policy": site.framing(s.origin) }, response: null }
-        // No session (or one revoked since) in a frame of a Clegra client's partition: say so to the client, never the app's own sign-in.
-        const marker = dest === "iframe" ? (s?.origin ?? site.marker(request)) : null
-        return { headers: null, response: marker ? site.signedOut(marker) : null }
-      },
-    }
-  }
-
-  /** `<path>/clegra/site…`: the exchange, the bridge, its session, context and renewal pages. */
-  async #serveSite(request: Request, path: string): Promise<Response> {
-    const site = this.#site!
-    const appOrigin = this.#appOrigin(this.#origin(request))
-    if (path === SITE_PATH) return site.exchange(request, appOrigin)
-    if (path === SITE_BRIDGE_PATH) return new Response(SITE_BRIDGE_SCRIPT, { headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "public, max-age=300", "x-content-type-options": "nosniff" } })
-    if (path === SITE_SESSION_PATH) return site.sessionInfo(request, appOrigin, (s) => this.#siteLive(s as { claim: SiteClaim; sub: string; iat: number }))
-    if (path === SITE_CONTEXT_PATH) return site.context(request, appOrigin)
-    if (path === SITE_RENEWED_PATH) return site.renewed(request, appOrigin)
-    return new Response("Not found", { status: 404, headers: { ...site.headers(null), "content-type": "text/plain; charset=utf-8" } })
+    const origins = this.#clientOrigins
+    return { start: site.start, clientOrigins: [...origins], headers: () => ({ "content-security-policy": siteFraming(origins) }) }
   }
 
   // ------------------------------------------------------------ registration
@@ -506,8 +476,9 @@ export class AppServer {
       if (write && confirm !== "always") throw new Error(`action "${name}": a public write is always confirmed (confirm: "always")`)
       if (config.expose?.plain === false || config.visibility === "app") throw new Error(`action "${name}": a public action is for every client (no plain: false, no visibility "app")`)
     }
-    // Writes reach plain MCP clients only when the developer opts in (spec §6); a public action is for every client.
-    const plain = config.public ? true : (config.expose?.plain ?? !write)
+    // Every client acts with a delegation the app issued (or as the public caller): its writes reach every client,
+    // unless the developer keeps one for the app's own views (`expose.plain: false`, spec §6).
+    const plain = config.public ? true : (config.expose?.plain ?? true)
     if (config.later && !this.#store.later) throw new Error(`action "${name}": later keeps the confirmed call in the store, and this store has no later part (MemoryStore and SqlStore have one)`)
     const later = config.later ? { at: String(config.later.at), window: config.later.window ?? LIMITS.laterWindow.default } : undefined
     this.#actions.set(tool, { name, tool, ...(entity ? { entity } : {}), config: config as never, input, handler: handler as never, write, confirm, plain, ...(later ? { later } : {}) })
@@ -663,109 +634,9 @@ export class AppServer {
     return [...this.#permissions.keys()]
   }
 
-  /** Whether the caller administers the app (only Clegra callers have app administrators). */
+  /** Whether the caller administers the app, as its own sign-in says. */
   #isAdmin(caller: Caller): boolean {
-    return caller.clegra?.admin === true
-  }
-
-  /**
-   * The app's own permissions of a Clegra caller (M1): a company administrator is an app administrator (every
-   * permission) unless `companyAdmin: "member"`; anyone else has what an administrator assigned, or the declared
-   * defaults (`default: true`) until then.
-   */
-  async #grantOf(tenant: string, sub: string, companyRole: "admin" | "member"): Promise<{ admin: boolean; permissions: Set<string> }> {
-    const grant = await this.#store.roles!.get(tenant, sub)
-    const admin = (companyRole === "admin" && this.options.auth?.clegra?.companyAdmin !== "member") || (grant?.assigned === true && grant.admin)
-    const known = this.#allPermissions()
-    if (admin) return { admin, permissions: new Set(known) }
-    if (grant?.assigned) return { admin, permissions: new Set(grant.permissions.filter((p) => known.includes(p))) }
-    return { admin, permissions: new Set([...this.#permissions.entries()].filter(([, p]) => p.default === true).map(([id]) => id)) }
-  }
-
-  /** «Who has what» in a tenant: every person the app knows (assigned or seen), with what they have here now. */
-  async whoHasWhat(tenant: string): Promise<(Omit<Grant, "permissions" | "admin"> & { admin: boolean; permissions: string[]; source: "company-admin" | "assigned" | "default" })[]> {
-    if (!this.#store.roles) throw new Error("store: roles are kept in the store's `roles` (MemoryStore and SqlStore have it)")
-    const out = []
-    for (const g of await this.#store.roles.list(tenant)) {
-      const now = await this.#grantOf(tenant, g.sub, g.companyRole ?? "member")
-      const source = g.companyRole === "admin" && this.options.auth?.clegra?.companyAdmin !== "member" ? ("company-admin" as const) : g.assigned ? ("assigned" as const) : ("default" as const)
-      out.push({ ...g, admin: now.admin, permissions: [...now.permissions].sort(), source })
-    }
-    return out
-  }
-
-  /**
-   * The app's roles (spec §7, «Roles»), for its own permissions page: who has what in a tenant, and what an
-   * administrator assigns. `sub` is the person's pairwise id (`ctx.person.id` of a Clegra caller).
-   */
-  get roles() {
-    const store = () => {
-      if (!this.#store.roles) throw new Error("store: roles are kept in the store's `roles` (MemoryStore and SqlStore have it)")
-      return this.#store.roles
-    }
-    return {
-      list: (tenant: string) => this.whoHasWhat(tenant),
-      get: (tenant: string, sub: string) => store().get(tenant, sub),
-      /** Assigns a person's permissions (only declared ones) or makes them an administrator. Check `ctx.admin` before calling it from a handler. */
-      assign: async (tenant: string, sub: string, grant: { admin?: boolean; permissions?: string[] }) => {
-        const known = new Set(this.#allPermissions())
-        const unknown = (grant.permissions ?? []).filter((p) => !known.has(p))
-        if (unknown.length) throw new AppError("invalid_input", `Not permissions of this app: ${unknown.join(", ")}.`)
-        await store().assign(tenant, sub, { admin: grant.admin === true, permissions: grant.permissions ?? [] })
-      },
-      remove: (tenant: string, sub: string) => store().remove(tenant, sub),
-    }
-  }
-
-  /**
-   * One event from Clegra's core (spec §7, «Events»): what the SDK does itself, then the app's handler. member.removed
-   * drops the person's roles and refuses what was issued to them; app.unassigned and app.uninstalled drop the tenant's
-   * roles and refuse what was issued for it; company.suspended refuses what was issued for it. The lifecycle hook
-   * (`lifecycle.installation`) hears app.installed (`enabled`), app.unassigned (`disabled`), app.uninstalled (`uninstalled`).
-   */
-  async #onEvent(event: ClegraEvent): Promise<void> {
-    const clegra = this.#clegra!
-    const roles = this.#store.roles!
-    // What the event refuses is what was issued before it happened (its `at`), not before it arrived.
-    const at = new Date(event.at)
-    if (event.kind === "member.removed" && event.sub) {
-      await clegra.revokePerson(event.tenant, event.sub, at)
-      await roles.remove(event.tenant, event.sub)
-    }
-    if (event.kind === "app.unassigned" || event.kind === "app.uninstalled" || event.kind === "company.suspended") await clegra.closeTenant(event.tenant, at)
-    if (event.kind === "app.unassigned" || event.kind === "app.uninstalled") await roles.clear(event.tenant)
-    const state = event.kind === "app.installed" ? "enabled" : event.kind === "app.unassigned" ? "disabled" : event.kind === "app.uninstalled" ? "uninstalled" : null
-    if (state && this.#lifecycle.installation) {
-      const caller: Caller = { installation: event.tenant, installationId: event.company, person: null, permissions: new Set(this.#allPermissions()), host: "workspace", issuer: clegra.issuer, subject: `company:${event.company}` }
-      await this.#lifecycle.installation(state, this.#context(caller, undefined, []))
-    }
-    await this.options.auth?.clegra?.events?.[event.kind]?.(event)
-  }
-
-  /** `POST <path>/events`: one event the core signed (`application/jwt`), handled once by its id (a retry of a handled one answers 204 again). */
-  async #events(request: Request): Promise<Response> {
-    const plain = (status: number, body?: unknown) => new Response(body === undefined ? null : JSON.stringify(body), { status, headers: body === undefined ? {} : { "content-type": "application/json" } })
-    if (request.method !== "POST") return new Response(null, { status: 405, headers: { allow: "POST" } })
-    const text = await request.text()
-    if (text.length > 16_384) return plain(413, { error: "too_large" })
-    let event: ClegraEvent
-    try {
-      event = await this.#clegra!.verifyEvent(text.trim())
-    } catch (error) {
-      return plain(401, { error: "invalid_event", error_description: error instanceof AuthError ? error.message : "not a valid event" })
-    }
-    const key = `clegra:event:${event.id}`
-    const existing = await this.#store.begin(key, event.kind, 3600_000)
-    if (existing) return existing.result === undefined ? plain(409, { error: "in_progress" }) : plain(204)
-    try {
-      await this.#onEvent(event)
-    } catch (error) {
-      await this.#store.abandon(key)
-      console.error(`[${PROTOCOL_ID}] event ${event.kind} ${event.id}`, error)
-      return plain(500, { error: "handler_failed" })
-    }
-    await this.#store.finish(key, { args: event.kind, result: true }, 24 * 3600_000)
-    return plain(204)
+    return caller.admin === true
   }
 
   /** The actions with `later`. */
@@ -835,8 +706,7 @@ export class AppServer {
     const locale = caller.locale ?? this.locale
     const host = hostMeta(meta)
     // Settings are the installation's, set by its administrator: only its workspace host says them (also when it runs a later run). A plain client gets the defaults.
-    // A Clegra caller (the core's token) never says them: an app's settings live in the app (H5).
-    const sent = (((caller.host === "workspace" && !caller.clegra) || run) && host.settings && typeof host.settings === "object" && !Array.isArray(host.settings) ? host.settings : {}) as Record<string, unknown>
+    const sent = ((caller.host === "workspace" || run) && host.settings && typeof host.settings === "object" && !Array.isArray(host.settings) ? host.settings : {}) as Record<string, unknown>
     const settings: Record<string, unknown> = {}
     for (const [id, s] of this.#settings) {
       const v = sent[id]
@@ -853,7 +723,6 @@ export class AppServer {
       can: (p) => caller.permissions.has(p),
       locale,
       host: caller.host,
-      actor: caller.clegra?.actor ?? null,
       admin: this.#isAdmin(caller),
       settings,
       call,
@@ -1445,20 +1314,7 @@ export class AppServer {
           confirm: { tool: a.tool, title: this.#t(caller, a.config.title), ...(a.entity && record ? { record: { uri: this.uri(a.entity.name, String(record.id)), ...card } } : {}), input: received, ...(a.later && until !== undefined ? { later: { at: received[a.later.at], until } } : {}) },
         })
       }
-      if (a.write && a.confirm === "always" && caller.clegra) {
-        const c = caller.clegra
-        if (c.actor) {
-          // An agent (Clegra's on a server, or one on the person's device): the person confirmed on their device, the core minted it, the device signed over it.
-          try {
-            await this.#clegra!.checkConfirmation(hostMeta(meta).confirmation, { sub: caller.subject, company: c.company, tool: a.tool, args: received, deviceJkt: c.actor.kind === "device-agent" ? c.actor.id : c.personJkt })
-          } catch (error) {
-            return confirmRequired(error instanceof AuthError ? error.message : "no valid confirmation")
-          }
-        } else if (hostMeta(meta).confirmed !== true) {
-          // The person, from a Clegra client: the UI that sends the call (the app's own view, or the client drawing the app's form) asked them first and says so.
-          return confirmRequired("ask the person, then call again with _meta.clegra.confirmed: true")
-        }
-      } else if (a.write && a.confirm === "always" && caller.host === "workspace") {
+      if (a.write && a.confirm === "always" && caller.host === "workspace") {
         const proof = hostMeta(meta).confirmation
         const checked = typeof proof === "string" ? await this.#verifier.checkConfirmation(proof, { issuer: caller.issuer, subject: caller.subject, installation: caller.installationId, tool: a.tool, args: received, call: ctx.call, ...(until !== undefined ? { until } : {}) }, request.trust) : { ok: false as const, why: "no proof" }
         if (checked.ok) proven = { proof: proof as string, iat: checked.iat }
@@ -1792,9 +1648,6 @@ export class AppServer {
       // A schedule's run is the installation's, of that schedule's own tool: anything else naming a schedule is refused.
       const scheduleWhy = this.#scheduleProblem(name, caller, ctx.mcpReq._meta as Record<string, unknown> | undefined)
       if (scheduleWhy) return failure("permission_denied", `Not a run of this schedule: ${scheduleWhy}.`)
-      // An automation's run token names the tools the person consented to: no other.
-      const tools = caller.clegra?.grant?.tools
-      if (tools && !tools.includes(name)) return failure("permission_denied", `This automation may not call ${name}: the person consented to ${tools.join(", ")}.`)
       try {
         return withL10n(await shownLabels.run(notes, () => fn(args ?? {}, ctx)), notes)
       } catch (error) {
@@ -1943,59 +1796,10 @@ export class AppServer {
       )
     }
 
-    // Site tickets (spec §5.1): a Clegra client frames the app's own site. Only a person's own app token from a client
-    // (no agent acting for them), hidden from models.
-    const site = this.#site
-    if (site && caller.clegra && !caller.clegra.actor) {
-      const clegra = caller.clegra
-      reg(
-        SITE_TOOL,
-        {
-          title: "Site ticket",
-          description: "For Clegra clients: a one-minute, single-use ticket that signs the person in to the app's own site at a path, framed by a document of the given origin.",
-          inputSchema: z.object({
-            path: z.string().max(2048).optional().describe("The path on the app's own site (default: where the site starts)"),
-            origin: z.string().describe("The origin of the document that frames the site and posts the ticket"),
-            theme: z.enum(["light", "dark"]).optional().describe("The client's theme now"),
-            locale: z.string().max(35).optional().describe("The client's language now"),
-            renew: z.boolean().optional().describe("Only renew the session (the ticket lands on the SDK's renewal page)"),
-          }),
-          annotations: { title: "Site ticket", readOnlyHint: true, idempotentHint: false, destructiveHint: false, openWorldHint: false },
-          _meta: APP_ONLY_META,
-        },
-        guard(SITE_TOOL, async (args) => {
-          const appOrigin = this.#appOrigin(request.origin ?? "")
-          if (!appOrigin) return failure("internal", "The app's public origin is unknown (set auth.resource).")
-          const theme = siteThemeOf(args.theme)
-          const locale = siteLocaleOf(args.locale) ?? caller.locale
-          const claim: SiteClaim = {
-            installation: caller.installation,
-            person: caller.person,
-            email: clegra.email,
-            permissions: [...caller.permissions],
-            admin: clegra.admin,
-            ...(locale ? { locale } : {}),
-            ...(theme ? { theme } : {}),
-          }
-          try {
-            const ticket = await site.issue(claim, { path: args.path, origin: args.origin, renew: args.renew === true, subject: caller.subject }, appOrigin, `${appOrigin}${this.#path}${SITE_PATH}`)
-            return { content: text(`A ticket for ${ticket.path}, valid until ${ticket.expiresAt}.`), structuredContent: ticket }
-          } catch (error) {
-            if (!(error instanceof SiteError)) throw error
-            if (error.code === "misconfigured") {
-              console.error(`[${PROTOCOL_ID}] ${error.message}`)
-              return failure("internal", "The app can't issue site tickets (misconfigured).")
-            }
-            return error.code === "wrong_origin" ? failure("permission_denied", error.message, { fields: { origin: error.message } }) : failure("invalid_input", error.message, { fields: { path: error.message } })
-          }
-        }),
-      )
-    }
-
-    // View tickets (spec §5.3): a Clegra client frames the app's views from the app itself. Only a person's own app
-    // token from a client (no agent acting for them), hidden from models.
+    // View tickets (spec §5.3): a workspace client frames the app's views from the app itself, for a signed-in person
+    // (never the public caller), hidden from models.
     const tickets = this.#viewTickets
-    if (tickets && caller.clegra && !caller.clegra.actor) {
+    if (tickets && caller.person && !caller.public) {
       reg(
         VIEW_TOOL,
         {
@@ -2175,23 +1979,6 @@ export class AppServer {
     }
     // The installation's own tools: listed only to the installation-level caller (a workspace host, no person).
     if (this.#isInstallation(caller)) this.#installationTools(caller, reg, guard, request)
-    // «Who has what» (M1): for the app's administrators (a company administrator is one unless the app says otherwise).
-    if (caller.clegra && this.#isAdmin(caller)) {
-      reg(
-        ROLES_TOOL,
-        {
-          title: this.#t(caller, { en: "Who has what", it: "Chi ha cosa" }),
-          description: "Read-only: every person of this company the app knows, with their role in the company and the app's permissions they have here (for the company's administrator).",
-          inputSchema: z.object({}),
-          annotations: { title: this.#t(caller, { en: "Who has what", it: "Chi ha cosa" }), ...read },
-        },
-        guard(ROLES_TOOL, async () => {
-          const people = await this.whoHasWhat(caller.installation)
-          const lines = people.map((p) => `${p.name ?? p.sub}: ${p.admin ? "administrator" : p.permissions.join(", ") || "nothing"}`)
-          return { content: text(lines.join("\n") || "Nobody yet."), structuredContent: { people, permissions: [...this.#permissions.entries()].map(([id, p]) => ({ id, label: this.#t(caller, p.label), default: p.default === true })) } }
-        }),
-      )
-    }
     this.options.mcp?.(s, caller)
     return s
   }
@@ -2397,6 +2184,7 @@ export class AppServer {
       ...(a.config.icon ? { icon: a.config.icon } : {}),
       input: labelled(a.input),
       readOnly: !a.write,
+      effect: !a.write ? ("read" as const) : a.confirm === "always" ? ("irreversible" as const) : ("write" as const),
       confirm: a.confirm,
       ...(a.config.public ? { public: true as const } : {}),
       ...perm(a.config.permission, `action "${a.name}"`),
@@ -2484,10 +2272,10 @@ export class AppServer {
       locale: this.locale,
       mcp: { url: `${this.#path}/mcp` },
       // The server's own address is what its tokens are for (never a name an app could claim): a host installs the app from it or not at all.
-      auth: { ...(auth.resource ? { resource: auth.resource } : {}), authorizationServers: auth.authorizationServers ?? [] },
+      auth: { ...((auth.resource ?? auth.signIn?.resource) ? { resource: auth.resource ?? auth.signIn!.resource } : {}), authorizationServers: auth.signIn ? [...auth.signIn.authorizationServers] : (auth.authorizationServers ?? []) },
       view: this.#viewUri(),
       resolveTool: RESOLVE_TOOL,
-      ...(this.#site ? { site: { start: this.#site.start, tool: { name: SITE_TOOL, plain: false } } } : {}),
+      ...(this.#site ? { site: { start: this.#site.start } } : {}),
       ...(this.#components.size ? { components: Object.fromEntries(this.#componentEntries().map(({ name, ...c }) => [name, c])) } : {}),
       ...([...this.#entities.values()].some((e) => e.fields.some((f) => f.search)) ? { searchTool: "search" } : {}),
       ...(Object.keys(this.#kinds).length ? { kinds: Object.fromEntries(Object.entries(this.#kinds).map(([k, d]) => [k, { label: L(d.label)!, properties: d.properties }])) } : {}),
@@ -2510,8 +2298,6 @@ export class AppServer {
       ...(this.#allSchedules().length ? { schedules: this.#allSchedules().map((s) => ({ name: s.name, ...(s.name !== LATER_TOOL ? { action: s.action?.name ?? s.tool } : {}), tool: s.tool, every: s.every, maxSeconds: s.maxSeconds })) } : {}),
       ...(notifications.length ? { notifications } : {}),
       ...(Object.keys(lifecycle).length ? { lifecycle } : {}),
-      // Where Clegra's core posts its signed events (H3, M4), and the «who has what» tool (M1).
-      ...(this.#clegra ? { events: { url: `${this.#path}${EVENTS_PATH}` }, rolesTool: ROLES_TOOL } : {}),
     }
     // The rules beyond the schema (spec/src/rules.ts, the same the conformance checks run): a wrong name fails here, at definition time.
     const problems = manifestRuleProblems(this.#manifest)
@@ -2568,29 +2354,18 @@ export class AppServer {
     const dpopToken = /^DPoP\s+(.+)$/i.exec(authorization)?.[1]?.trim()
     const metadata = `${new URL(resource).origin}/.well-known/oauth-protected-resource${new URL(resource).pathname}`
     const quote = (reason: string) => reason.replace(/["\\]/g, "'")
-    // RFC 9449 §7.1: an app that takes only Clegra's DPoP-bound tokens (no resolver of its own, no dev sign-in here)
-    // challenges with the DPoP scheme and the algorithms it takes; one that also takes bearer tokens, with Bearer.
-    const dpopOnly = Boolean(this.#clegra) && !auth.resolve && !trust.dev
-    const scheme = dpopOnly ? `DPoP algs="${DPOP_ALGS}", resource_metadata="${metadata}"` : `Bearer resource_metadata="${metadata}"`
+    const scheme = `Bearer resource_metadata="${metadata}"`
     const challenge = (reason: string, { credentials = true }: { credentials?: boolean } = {}) =>
       new Response(JSON.stringify({ error: "invalid_token", error_description: reason }), {
         status: 401,
         // RFC 6750 §3.1: a request without any credentials gets no error code.
-        headers: { "content-type": "application/json", "www-authenticate": credentials || !dpopOnly ? `${scheme}, error="invalid_token", error_description="${quote(reason)}"` : `${scheme}, error_description="${quote(reason)}"`, ...cors },
+        headers: { "content-type": "application/json", "www-authenticate": credentials ? `${scheme}, error="invalid_token", error_description="${quote(reason)}"` : `${scheme}, error_description="${quote(reason)}"`, ...cors },
       })
-    if (dpopToken) {
-      // Clegra's core's tokens are bound to the caller's key: `Authorization: DPoP <token>` with a `DPoP` proof.
-      const clegra = this.#clegra
-      if (!clegra) return challenge("this app accepts DPoP-bound tokens only from Clegra's core, and does not trust it (auth.clegra)")
+    if (auth.signIn && (bearer || dpopToken)) {
+      // The app's own sign-in module (`@clegra/sdk/signin`): its access tokens (Bearer, or DPoP-bound) and personal keys.
       try {
-        if (!clegra.issues(dpopToken)) throw new AuthError("the token is not from Clegra's core (its iss)")
-        const v = await clegra.verify(dpopToken, { method: request.method, dpop: request.headers.get("dpop") })
-        const grant = await this.#grantOf(v.tenant, v.sub, v.caller.companyRole)
-        // What a permissions page shows beside the pairwise id: written at most once an hour per person, and again
-        // after the tenant's roles were cleared (an app removed and added again) or the person removed and added again.
-        if (await this.#store.once(`clegra:seen:${v.tenant}:${v.sub}:${await clegra.lifeOf(v.tenant, v.sub)}`, 3600_000)) await this.#store.roles!.seen(v.tenant, v.sub, { name: v.name || null, email: v.caller.email, companyRole: v.caller.companyRole })
-        const locale = typeof v.claims.locale === "string" ? v.claims.locale : undefined
-        return { installation: v.tenant, installationId: v.caller.company, person: { id: v.sub, name: v.name }, permissions: grant.permissions, ...(locale ? { locale } : {}), host: "workspace", issuer: clegra.issuer, subject: v.sub, clegra: { ...v.caller, admin: grant.admin } }
+        const resolved = await auth.signIn.resolve((dpopToken ?? bearer)!, request, { resource, scheme: dpopToken ? "DPoP" : "Bearer" })
+        if (resolved) return this.#resolved(resolved)
       } catch (error) {
         if (!(error instanceof AuthError)) console.error(`[${PROTOCOL_ID}] auth`, error)
         const reason = error instanceof AuthError ? error.message : "invalid token"
@@ -2598,11 +2373,11 @@ export class AppServer {
         const code = nonce ? "use_dpop_nonce" : error instanceof DpopError ? "invalid_dpop_proof" : "invalid_token"
         return new Response(JSON.stringify({ error: code, error_description: reason }), {
           status: 401,
-          headers: { "content-type": "application/json", "www-authenticate": `DPoP algs="${DPOP_ALGS}", resource_metadata="${metadata}", error="${code}", error_description="${quote(reason)}"`, ...(nonce ? { "dpop-nonce": nonce } : {}), "cache-control": "no-store", ...cors },
+          headers: { "content-type": "application/json", "www-authenticate": `${dpopToken ? `DPoP algs="${DPOP_ALGS}", ` : "Bearer "}resource_metadata="${metadata}", error="${code}", error_description="${quote(reason)}"`, ...(nonce ? { "dpop-nonce": nonce } : {}), "cache-control": "no-store", ...cors },
         })
       }
     }
-    if (bearer && this.#clegra?.issues(bearer)) return challenge("a token of Clegra's core is bound to a key: send it as Authorization: DPoP <token> with its DPoP proof")
+    if (dpopToken) return challenge("a DPoP-bound token is accepted only from this app's own sign-in (auth.signIn)")
     if (!bearer) {
       if (auth.anonymous) {
         const a = auth.anonymous
@@ -2632,7 +2407,7 @@ export class AppServer {
     const person = r.person && typeof r.person.id === "string" && r.person.id ? { id: r.person.id, name: String(r.person.name ?? "") } : null
     const known = new Set(this.#allPermissions())
     const permissions = r.permissions === "all" ? known : new Set([...(r.permissions ?? [])].filter((p) => known.has(p)))
-    return { installation: r.installation, installationId: r.installation, person, permissions, ...(r.locale ? { locale: r.locale } : {}), host: "plain", issuer: OWN_ISSUER, subject: r.subject ?? person?.id ?? "anonymous" }
+    return { installation: r.installation, installationId: r.installation, person, permissions, ...(r.locale ? { locale: r.locale } : {}), host: "plain", issuer: OWN_ISSUER, subject: r.subject ?? person?.id ?? "anonymous", ...(r.admin === true ? { admin: true } : {}) }
   }
 
   /** The app's own path of a request (its `path` taken off), or null when the request is outside it. */
@@ -2652,8 +2427,7 @@ export class AppServer {
     this.manifest()
     if (this.#dev) await this.#devStarted()
     const auth = this.options.auth ?? {}
-    if (!this.#dev && !auth.clegra && !auth.resolve && !auth.anonymous && !auth.public) console.warn(`[${PROTOCOL_ID}] nobody can sign in: give auth.resolve (the app's own tokens) or auth.clegra (Clegra's core), or turn on auth.dev while developing`)
-    if (auth.clegra && auth.clegra.allowedCompanies === undefined && process.env.NODE_ENV !== "production") console.warn(`[${PROTOCOL_ID}] auth.clegra.allowedCompanies is not set: every company is allowed here; production refuses to start without it`)
+    if (!this.#dev && !auth.signIn && !auth.resolve && !auth.anonymous && !auth.public) console.warn(`[${PROTOCOL_ID}] nobody can sign in: give auth.signIn (the app's own sign-in, @clegra/sdk/signin), auth.resolve (tokens of the app's own authorization server) or auth.public, or turn on auth.dev while developing`)
     return { devCode: this.#dev?.code ?? null }
   }
 
@@ -2662,7 +2436,7 @@ export class AppServer {
     if (process.env.NODE_ENV !== "production") return null
     const auth = this.options.auth ?? {}
     if (auth.resolve && !auth.resource) return "auth.resource is required in production: this server's public MCP address (https://…/mcp), the only audience its tokens are accepted for"
-    return this.#clegra?.productionProblem() ?? null
+    return null
   }
 
   /**
@@ -2674,8 +2448,8 @@ export class AppServer {
     const url = new URL(request.url)
     const origin = this.#origin(request)
     const auth = this.options.auth ?? {}
-    // With Clegra: exact client origins only, never credentials (H4). Without: any origin, as an open MCP server.
-    const cors = this.#clegra ? this.#clegra.cors(request.headers.get("origin")) : CORS
+    // Any origin, as an open MCP server: no cookie is ever read on these routes, the token says who calls.
+    const cors = CORS
     const json = (body: unknown, status = 200, headers: Record<string, string> = {}) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", ...cors, ...headers } })
     const base = this.#path
     const path = this.#local(url.pathname)
@@ -2683,22 +2457,15 @@ export class AppServer {
     // registration document. It comes before the production check, since registering is what gives the app its
     // registration id; everything else (tokens, events, views, the site, MCP) keeps refusing until the app is configured.
     if (path === MANIFEST_PATH) return json(this.manifest(), 200, { "cache-control": "public, max-age=30" })
-    if (path === REGISTRATION_PATH && this.#clegra) {
-      // The registration challenge (C2): the core reads it back here to know this URL is the app's.
-      const c = this.#clegra.options
-      if (!c.registrationId || !c.challenge) return json({ error: "not_configured", error_description: "auth.clegra.registrationId and auth.clegra.challenge (CLEGRA_REGISTRATION_ID, CLEGRA_REGISTRATION_CHALLENGE) are not set" }, 404, { "cache-control": "no-store" })
-      return json({ registration_id: c.registrationId, challenge: c.challenge, resource: this.#clegra.resource, issuer: this.#clegra.issuer }, 200, { "cache-control": "no-store" })
-    }
     const problem = this.#productionProblem()
     if (problem) return json({ error: "misconfigured", error_description: problem }, 500)
     const devHere = Boolean(this.#dev) && isLoopback(info.remoteAddress)
     // In dev the server is whatever address the caller reached it by (a tunnel); otherwise only its configured one.
     const requestResource = `${origin}${base}/mcp`
-    const resource = devHere ? requestResource : (auth.resource ?? requestResource)
+    const resource = devHere ? requestResource : (auth.resource ?? auth.signIn?.resource ?? requestResource)
     const trust: RequestTrust = { dev: devHere, requestResource: devHere ? requestResource : null }
     // Preflight: the headers the browser asks for are allowed as asked (MCP 2026-07-28 clients send mcp-method, mcp-name, Mcp-Param-*; no cookies are ever used).
     if (request.method === "OPTIONS") {
-      if (this.#clegra) return new Response(null, { status: 204, headers: cors })
       const asked = request.headers.get("access-control-request-headers")
       return new Response(null, { status: 204, headers: { ...CORS, ...(asked && /^[\w\-, ]{1,2000}$/.test(asked) ? { "access-control-allow-headers": asked } : {}), "access-control-max-age": "600", vary: "access-control-request-headers" } })
     }
@@ -2706,13 +2473,16 @@ export class AppServer {
     if (path === null) return notHere()
     if (path === "/" && request.method === "GET" && (request.headers.get("accept") ?? "").includes("application/json")) return json({ name: this.name, manifest: MANIFEST_PATH, mcp: `${base}/mcp` })
     if (path === "/health") return json({ ok: true, name: this.name, version: this.options.version })
-    if (path === EVENTS_PATH && this.#clegra) return this.#events(request)
     if (path.startsWith(`${VIEWS_PATH}/`) && this.#viewTickets) return this.#serveView(request, path)
-    if ((path === SITE_PATH || path.startsWith(`${SITE_PATH}/`)) && this.#site) return this.#serveSite(request, path)
+    if (path === SITE_BRIDGE_PATH && this.#site) return new Response(siteBridgeScript(this.#clientOrigins), { headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "public, max-age=300", "x-content-type-options": "nosniff", "access-control-allow-origin": "*" } })
     if (path === "/.well-known/oauth-protected-resource" || path === `/.well-known/oauth-protected-resource${base}/mcp`) {
       // Where a client signs a person in: the app's own authorization server (with dev sign-in on, this server). Never Clegra's core: its tokens come from Clegra, not by OAuth (M3).
-      const servers = auth.authorizationServers ?? (devHere ? [`${origin}${base}`] : [])
+      const servers = auth.signIn ? auth.signIn.authorizationServers : (auth.authorizationServers ?? (devHere ? [`${origin}${base}`] : []))
       return json({ resource, authorization_servers: servers, bearer_methods_supported: ["header"], scopes_supported: [OAUTH_SCOPE], resource_name: localize(this.options.title, this.locale, this.locale) })
+    }
+    if (auth.signIn) {
+      const answered = await auth.signIn.fetch(request)
+      if (answered) return answered
     }
     if (auth.serve) {
       const answered = await auth.serve(request)
@@ -2727,7 +2497,7 @@ export class AppServer {
       if (answered) return answered
     }
     if (path !== "/mcp") return notHere()
-    const caller = await this.#caller(request, this.#clegra && !devHere ? this.#clegra.resource : resource, trust, cors)
+    const caller = await this.#caller(request, resource, trust, cors)
     if (caller instanceof Response) return caller
     if (!this.options.store && !this.#warnedStore && process.env.NODE_ENV === "production") {
       this.#warnedStore = true
@@ -2767,8 +2537,6 @@ export class AppServer {
       if (error instanceof ViewError) return refuse(error.status, error.message)
       throw error
     }
-    // A person removed, or the app taken from the company, since the ticket: no view either.
-    if (this.#clegra && (await this.#clegra.revoked(opened.tenant, opened.sub, opened.issuedAt))) return refuse(403, "no longer allowed")
     return new Response(withHost(await view.html(), opened.origin), {
       status: 200,
       headers: {
@@ -2792,6 +2560,6 @@ export class AppServer {
 const CORS: Record<string, string> = {
   "access-control-allow-origin": "*",
   "access-control-allow-methods": "GET, POST, DELETE, OPTIONS",
-  "access-control-allow-headers": "authorization, content-type, mcp-session-id, mcp-protocol-version, last-event-id",
-  "access-control-expose-headers": "www-authenticate, mcp-session-id",
+  "access-control-allow-headers": "authorization, dpop, content-type, mcp-session-id, mcp-protocol-version, last-event-id",
+  "access-control-expose-headers": "www-authenticate, dpop-nonce, mcp-session-id",
 }

@@ -43,8 +43,6 @@ export const DESIGN_STUDIO_DATA: DemoData = {
   deals: [{ id: "d1", name: "Rosewood Bakery — new brand", company: "co1", stage: "proposal", value: 3500, closeDate: "2026-12-05", owner: "emma" }],
 }
 
-/** Names of the owner keys, for workspace-host installations (their people are not users here). */
-export const OWNER_NAMES: Record<OwnerKey, string> = { alice: "Alice Morgan", ben: "Ben Carter", emma: "Emma Hayes" }
 
 export const ORGANIZATIONS = [
   { id: "org_orbit", name: "Orbit Sales", slug: "orbit", data: SALES_TEAM_DATA },

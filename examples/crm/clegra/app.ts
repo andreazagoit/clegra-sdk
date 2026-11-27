@@ -10,11 +10,9 @@ import {
   createContact,
   createDeal,
   CrmError,
-  deleteWorkspace,
   getCompany,
   getContact,
   getDeal,
-  isWorkspaceInstallation,
   listCompanies,
   listContacts,
   listDeals,
@@ -23,11 +21,9 @@ import {
   openPipeline,
   personNames,
   pipelineByStage,
-  provisionWorkspace,
   setErpCustomer,
   setStage,
   STAGES,
-  tenantData,
 } from "@/lib/crm"
 import { database } from "@/lib/db"
 import { STAGE_WORDS } from "@/lib/format"
@@ -77,12 +73,10 @@ const dealSchema = z.object({
 // ------------------------------------------------------------------ the tenant
 
 /**
- * The tenant of this call: `ctx.installation`, from the verified token. The CRM's own users call for their
- * organization (its id); a workspace host for one of its installations (`<installation>@<issuer>`), which
- * gets its own copy of the demo data on its first call.
+ * The tenant of this call: `ctx.installation`, from the verified token: the organization of the CRM's own user the
+ * token was issued to (any client acts with a token of the CRM's own sign-in).
  */
 async function tenant(ctx: Pick<Context, "installation">): Promise<string> {
-  if (isWorkspaceInstallation(ctx.installation)) await provisionWorkspace(ctx.installation)
   return ctx.installation
 }
 
@@ -97,14 +91,16 @@ function refused(error: unknown, ctx: Context, closed?: { en: string; it: string
 // ------------------------------------------------------------------ the app
 
 export type CrmAppOptions = {
-  /** Who may call: the app's own users (`resolve`: better-auth access tokens, clegra/auth.ts) and workspace hosts (`issuers`). */
+  /** Who may call: the CRM's own users, with access tokens of its own sign-in (`resolve`: better-auth, clegra/auth.ts). */
   auth: AuthOptions
+  /** The workspace clients that show the CRM's site in their frame (`CLEGRA_CLIENT_ORIGINS`); none: no site. */
+  clientOrigins?: string[]
   /** Default: the `clegra_store` table in the CRM's database. */
   store?: IdempotencyStore
 }
 
-export function createCrmApp({ auth, store = new SqlStore((text, params) => database().query(text, params)) }: CrmAppOptions): App {
-  return defineApp({
+export function createCrmApp({ auth, clientOrigins = [], store = new SqlStore((text, params) => database().query(text, params)) }: CrmAppOptions): App {
+  const app: App = defineApp({
     name: "crm",
     title: { en: "CRM", it: "CRM" },
     version: "1.0.0",
@@ -113,10 +109,9 @@ export function createCrmApp({ auth, store = new SqlStore((text, params) => data
     instructions: "A CRM. Use search or the *_list tools to find records, *_get for one record, open_pipeline for the overview. Changes need the person's confirmation.",
     auth,
     store,
-    // The CRM's own pages are its site in a Clegra client (spec §5.1): framed at the CRM's origin, the person signed in
-    // with a one-minute site ticket. Only with Clegra's core configured (a site needs it). Tickets and sessions are
-    // signed with keys derived from the CRM's one secret (the SDK's HKDF keeps the uses apart).
-    ...(auth.clegra ? { site: { secret: process.env.BETTER_AUTH_SECRET } } : {}),
+    // The CRM's own pages are its site in a workspace client (spec §5.1): framed at the CRM's origin by the client
+    // origins only, the person signed in there with the CRM's own sign-in (its cookie partitioned in the frame).
+    ...(clientOrigins.length ? { clientOrigins, site: { start: "/" } } : {}),
     // Deal owners are person ids: their names, so a host never shows an id.
     people: async (ids, ctx) => personNames(await tenant(ctx), ids),
 
@@ -169,7 +164,7 @@ export function createCrmApp({ auth, store = new SqlStore((text, params) => data
       },
     },
 
-    // Writes reach plain MCP clients (ChatGPT, Claude) only with `expose: { plain: true }`.
+    // Writes reach every client the CRM's own sign-in linked (Clegra, ChatGPT, Claude).
     actions: {
       mark_won: {
         on: "deal",
@@ -179,7 +174,6 @@ export function createCrmApp({ auth, store = new SqlStore((text, params) => data
         input: z.object({ note: z.string().max(500).optional().meta({ label: { en: "Note", it: "Nota" } }) }),
         confirm: true,
         permission: "deals.edit",
-        expose: { plain: true },
         run: async (input, ctx, deal) => {
           await markWon(await tenant(ctx), deal.id, input).catch((e) => refused(e, ctx, { en: `${deal.name} is already closed.`, it: `${deal.name} è già chiusa.` }))
           ctx.notify({ title: { en: `Deal won: ${deal.name}`, it: `Trattativa vinta: ${deal.name}` }, uri: ctx.uri("deal", deal.id) })
@@ -193,7 +187,6 @@ export function createCrmApp({ auth, store = new SqlStore((text, params) => data
         input: z.object({ stage: z.enum(["lead", "qualified", "proposal", "lost"]).meta({ label: { en: "Stage", it: "Fase" }, labels: stageLabels }) }),
         confirm: "optional",
         permission: "deals.edit",
-        expose: { plain: true },
         run: async (input, ctx, deal) => {
           await setStage(await tenant(ctx), deal.id, input.stage).catch((e) => refused(e, ctx, { en: "Closed deals don't move.", it: "Le trattative chiuse non si spostano." }))
           return { message: ctx.t({ en: `${deal.name}: now ${stageLabels[input.stage].en}.`, it: `${deal.name}: ora ${stageLabels[input.stage].it}.` }), record: deal.id }
@@ -206,7 +199,6 @@ export function createCrmApp({ auth, store = new SqlStore((text, params) => data
         icon: "phone",
         input: z.object({ note: z.string().min(1).max(500).meta({ label: { en: "Note", it: "Nota" } }) }),
         permission: "contacts.edit",
-        expose: { plain: true },
         run: async (input, ctx, contact) => {
           await logCall(await tenant(ctx), contact.id, { personId: ctx.person?.id ?? "unknown", note: input.note }).catch((e) => refused(e, ctx))
           return { message: ctx.t({ en: `Call with ${contact.name} logged.`, it: `Chiamata con ${contact.name} registrata.` }), record: contact.id }
@@ -220,7 +212,6 @@ export function createCrmApp({ auth, store = new SqlStore((text, params) => data
         input: z.object({ customer: ref.kind("organization").meta({ label: { en: "ERP customer", it: "Cliente nel gestionale" } }) }),
         confirm: "optional",
         permission: "deals.edit",
-        expose: { plain: true },
         run: async (input, ctx, company) => {
           await setErpCustomer(await tenant(ctx), company.id, input.customer).catch((e) => refused(e, ctx))
           return { message: ctx.t({ en: `${company.name} linked to ${input.customer}.`, it: `${company.name} collegata a ${input.customer}.` }), record: company.id }
@@ -237,7 +228,6 @@ export function createCrmApp({ auth, store = new SqlStore((text, params) => data
           company: ref("company").meta({ label: { en: "Company", it: "Azienda" } }),
         }),
         permission: "contacts.edit",
-        expose: { plain: true },
         run: async (input, ctx) => {
           const contact = await createContact(await tenant(ctx), input).catch((e) => refused(e, ctx))
           return { message: ctx.t({ en: `Contact ${contact.name} added.`, it: `Contatto ${contact.name} aggiunto.` }), record: ctx.uri("contact", contact.id) }
@@ -254,11 +244,9 @@ export function createCrmApp({ auth, store = new SqlStore((text, params) => data
           closeDate: z.iso.date().meta({ label: { en: "Close date", it: "Chiusura prevista" } }),
         }),
         permission: "deals.edit",
-        expose: { plain: true },
         run: async (input, ctx) => {
           const orgId = await tenant(ctx)
-          // A host's people are no users here: their name is kept with the tenant, so others see it.
-          const owner = { id: ctx.person?.id ?? "unknown", ...(isWorkspaceInstallation(orgId) && ctx.person?.name ? { name: ctx.person.name } : {}) }
+          const owner = { id: ctx.person?.id ?? "unknown" }
           const deal = await createDeal(orgId, owner, input).catch((e) => {
             if (e instanceof CrmError && e.code === "unknown_company") throw new AppError("invalid_input", ctx.t({ en: `Unknown company ${input.company}.`, it: `Azienda ${input.company} sconosciuta.` }))
             throw e
@@ -378,25 +366,11 @@ export function createCrmApp({ auth, store = new SqlStore((text, params) => data
       },
     },
   
-    // The host's navigation: selling first, then the people and companies we sell to.
+    // The host's navigation: selling first, then the companies and contacts we sell to.
     nav: [
       { section: { en: "Sales", it: "Vendite" }, pages: ["pipeline", "deals", "forecast"] },
       { section: { en: "Customers", it: "Clienti" }, pages: ["companies", "contacts"] },
     ],
-
-    // A workspace host tells the CRM when its installation is uninstalled, takes its data out, and deletes them
-    // (30 days later, or at once). Only a workspace installation's tenant is exported or deleted: an organization of
-    // the CRM's own users is never deleted through a host.
-    lifecycle: {
-      export: async (ctx) => {
-        if (!isWorkspaceInstallation(ctx.installation)) return null
-        return { name: "crm-export.json", contentType: "application/json", body: JSON.stringify(await tenantData(ctx.installation), null, 2) }
-      },
-      delete: async (ctx) => {
-        if (!isWorkspaceInstallation(ctx.installation)) return
-        return { counts: await deleteWorkspace(ctx.installation) }
-      },
-    },
 
     agents: {
       sales_assistant: {
@@ -410,4 +384,5 @@ export function createCrmApp({ auth, store = new SqlStore((text, params) => data
       },
     },
   })
+  return app
 }

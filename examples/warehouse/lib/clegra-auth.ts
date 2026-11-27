@@ -1,6 +1,6 @@
 import { oauthProviderAuthServerMetadata, oauthProviderOpenIdConfigMetadata } from "@better-auth/oauth-provider"
 import { createLocalJWKSet, decodeProtectedHeader, errors, jwtVerify, type JWK } from "jose"
-import { AuthError, clegraFromEnv, type AuthOptions, type ResolvedCaller } from "@clegra/sdk"
+import { AuthError, type AuthOptions, type ResolvedCaller } from "@clegra/sdk"
 
 import { CLEGRA_SCOPE, type Auth } from "./auth"
 import { sql } from "./db"
@@ -19,9 +19,8 @@ export async function callerFor(userId: string, organizationId: string): Promise
 }
 
 /**
- * Clegra apps' `auth` for this app. Clegra's core from CLEGRA_ISSUER and the rest of CLEGRA_* (`env`, `clegraFromEnv`): the
- * SDK verifies its tokens itself (DPoP, for this MCP server alone; the tenant `<company>@<issuer>`; the app's own roles). The app's own users: better-auth (its mcp plugin) issues the access tokens, the app
- * verifies them here. Such a token counts only when it is a JWT (`typ: at+jwt`) signed by better-auth's own keys, from its issuer, for this
+ * Clegra apps' `auth` for this app: its own users only. better-auth (its mcp plugin) issues the access tokens to any
+ * client the person consented to (Clegra, ChatGPT, Claude), the app verifies them here. Such a token counts only when it is a JWT (`typ: at+jwt`) signed by better-auth's own keys, from its issuer, for this
  * MCP server alone (`aud`), not expired (30 s of clock skew), not sender-bound (`cnf`), with the `clegra` scope
  * and the organization (`org`) — and the person is still a member of that organization.
  *
@@ -29,10 +28,9 @@ export async function callerFor(userId: string, organizationId: string): Promise
  * call never builds it (its mcp plugin accepts an http resource only on loopback, so a host in Docker that
  * reaches the app at http://host.docker.internal:3930 can use the app while its own sign-in needs https).
  */
-export function clegraAuth(getAuth: () => Promise<Auth>, env: Record<string, string | undefined> = process.env): AuthOptions {
+export function clegraAuth(getAuth: () => Promise<Auth>): AuthOptions {
   const issuer = `${publicUrl()}/api/auth`
   const resource = mcpResource()
-  const clegra = clegraFromEnv(env)
 
   // better-auth's keys, read in-process and cached; read again (at most every 10 s) for a key id not in them (rotation).
   let keys: { set: ReturnType<typeof createLocalJWKSet>; at: number } | null = null
@@ -55,7 +53,6 @@ export function clegraAuth(getAuth: () => Promise<Auth>, env: Record<string, str
   return {
     resource,
     authorizationServers: [issuer],
-    ...(clegra ? { clegra } : {}),
     resolve: async (token) => {
       try {
         decodeProtectedHeader(token)
@@ -92,4 +89,9 @@ export function clegraAuth(getAuth: () => Promise<Auth>, env: Record<string, str
       return metadata(request)
     },
   }
+}
+
+/** The workspace clients that frame the warehouse's site (CLEGRA_CLIENT_ORIGINS, separated by commas). */
+export function clientOriginsFrom(env: Record<string, string | undefined> = process.env): string[] {
+  return (env.CLEGRA_CLIENT_ORIGINS ?? "").split(",").map((o) => o.trim()).filter(Boolean)
 }

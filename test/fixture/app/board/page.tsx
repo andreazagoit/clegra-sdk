@@ -1,16 +1,16 @@
-import { getClegraCaller } from "@clegra/sdk/next"
 import Link from "next/link"
 
-import { app } from "../../clegra"
+import { currentPerson } from "../../clegra"
 
-// Who the site ticket signed in, or "signed out" (no ticket, a top-level visit, an expired session).
+// Who the app's own sign-in signed in, or a link to it.
 export const metadata = { title: "Board" }
 
 export default async function Board() {
-  const caller = await getClegraCaller(app)
+  const person = await currentPerson()
+  if (!person) return <a href="/signin?return=/board" data-signin>Sign in</a>
   return (
     <>
-      <p data-caller>{caller ? `${caller.person?.name} · ${caller.installation} · ${caller.can("notes.view") ? "notes.view" : "-"} · ${caller.theme ?? "-"} · ${caller.locale ?? "-"}` : "signed out"}</p>
+      <p data-caller>{`${person.name} · ${person.installation}`}</p>
       <Link href="/notes?status=open" data-next>
         Notes
       </Link>

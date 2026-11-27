@@ -41,7 +41,9 @@ export function createAuth(pool: Pool, options: AuthOptions = {}) {
     database: pool,
     // The client's address for rate limiting: on Vercel (and `next start` behind one proxy) x-real-ip / x-forwarded-for hold
     // the one address the platform saw; without it every client would share one bucket.
-    advanced: { ipAddress: { ipAddressHeaders: ["x-real-ip", "x-forwarded-for"] }, ...(options.validateSchema === false ? { database: { validateSchema: false } } : {}) },
+    // Over https the session cookie is SameSite=None; Secure; Partitioned (CHIPS): the person signs in to the
+    // warehouse also inside a workspace client's frame (its site, spec §5.1), the cookie kept in that frame's partition.
+    advanced: { ipAddress: { ipAddressHeaders: ["x-real-ip", "x-forwarded-for"] }, ...(options.validateSchema === false ? { database: { validateSchema: false } } : {}), ...(publicUrl().startsWith("https:") ? { defaultCookieAttributes: { sameSite: "none", secure: true, partitioned: true } } : {}) },
     // Staff accounts are made by an admin (here: the seed), not by a public sign-up form.
     emailAndPassword: { enabled: true, disableSignUp: true },
     session: { expiresIn: 60 * 60 * 24 * 7 },

@@ -2,9 +2,7 @@ import { createHash, randomUUID } from "node:crypto"
 
 import { calculateJwkThumbprint, exportJWK, generateKeyPair, SignJWT, type CryptoKey, type JWK } from "jose"
 
-import { APP_TOKEN_TYPE, CONFIRMATION_PROOF_TYPE, CONFIRMATION_TOKEN_TYPE, EVENT_TYPE, EVENTS_PATH, LATER_TOOL, META_KEY } from "../spec/src/protocol"
-import { argsHash } from "./auth"
-import type { ClegraEventKind, ClegraOptions, CompanyRole } from "./clegra"
+import { LATER_TOOL, META_KEY } from "../spec/src/protocol"
 import type { Person } from "./auth"
 import type { App } from "./define"
 
@@ -33,8 +31,8 @@ export type TestClientOptions = {
   /** The address the requests come from (default loopback: dev tokens count only there). */
   remoteAddress?: string
   /**
-   * A Clegra caller: the token is sent as `Authorization: DPoP <token>` with a proof signed by `key` for `htu` (the
-   * app's configured resource), and a `use_dpop_nonce` answer is retried once with the nonce, as a Clegra client does.
+   * A DPoP-bound token (the sign-in module's, RFC 9449): sent as `Authorization: DPoP <token>` with a proof signed by
+   * `key` for `htu` (the app's configured resource); a `use_dpop_nonce` answer is retried once with the nonce.
    */
   dpop?: { key: DeviceKey; htu: string }
   /** The `Origin` header of every request (a browser's). */
@@ -143,8 +141,6 @@ export type DeviceKey = {
   privateKey: CryptoKey
   /** A DPoP proof (RFC 9449) for one request. `iat` (epoch seconds) and `jti` for tests of refusals. */
   proof(input: { htm: string; htu: string; token: string; nonce?: string; iat?: number; jti?: string }): Promise<string>
-  /** The device's proof over a confirmation token (`clegra-confirmation-proof+jwt`). */
-  confirm(confirmationToken: string, input?: { iat?: number; jti?: string }): Promise<string>
 }
 
 const sha256 = (value: string) => createHash("sha256").update(value).digest("base64url")
@@ -165,119 +161,5 @@ export async function deviceKey(): Promise<DeviceKey> {
         .setIssuedAt(i.iat ?? now())
         .setJti(i.jti ?? randomUUID())
         .sign(privateKey),
-    confirm: (token, i = {}) =>
-      new SignJWT({ cth: sha256(token) })
-        .setProtectedHeader({ alg: "EdDSA", typ: CONFIRMATION_PROOF_TYPE, jwk: publicJwk })
-        .setIssuedAt(i.iat ?? now())
-        .setJti(i.jti ?? randomUUID())
-        .sign(privateKey),
   }
-}
-
-/** What a test app token says; every field can be bent to test a refusal. */
-export type TestAppToken = {
-  company: string
-  sub: string
-  role?: CompanyRole
-  name?: string
-  email?: string
-  /** The key the token is bound to (`cnf.jkt`): a device's, or a server's for a delegated or automation token. */
-  device: DeviceKey | string
-  /** `server:<id>` or `device-agent:<jkt>`. */
-  act?: string
-  personJkt?: string
-  grant?: string
-  tools?: string[]
-  /** Seconds (default 600, or 60 with a `server:` actor). */
-  lifetime?: number
-  iat?: number
-  aud?: string | string[]
-  iss?: string
-  typ?: string
-  kid?: string
-  jti?: string
-  locale?: string
-  /** Sign with another key (a forged token). */
-  signer?: { privateKey: CryptoKey; kid: string }
-}
-
-/**
- * Clegra's core for tests (spec §7, «Clegra tokens»): an `app` signing key published as a key set, and what the core
- * mints with it: app, delegated, automation run and device-agent tokens, confirmation tokens, events. `options()`
- * is the app's `auth.clegra` trusting it; `client()` is a Clegra client of the app.
- */
-export async function testCore(input: { resource: string; issuer?: string }) {
-  const issuer = input.issuer ?? "https://core.test"
-  const { resource } = input
-  const keyPair = async (kid: string, use = "app"): Promise<{ privateKey: CryptoKey; kid: string; publicJwk: JWK }> => {
-    const { privateKey, publicKey } = await generateKeyPair("EdDSA", { crv: "Ed25519", extractable: true })
-    return { privateKey, kid, publicJwk: { ...(await exportJWK(publicKey)), kid, alg: "EdDSA", use } as JWK }
-  }
-  const key = await keyPair("a-test-1")
-  const jwks = { keys: [key.publicJwk] }
-  const now = () => Math.floor(Date.now() / 1000)
-  const sign = (claims: Record<string, unknown>, header: { typ: string; kid?: string }, signer = key, iat = now(), lifetime = 600) =>
-    new SignJWT(claims)
-      .setProtectedHeader({ alg: "EdDSA", typ: header.typ, kid: header.kid ?? signer.kid })
-      .setIssuedAt(iat)
-      .setExpirationTime(iat + lifetime)
-      .sign(signer.privateKey)
-  const core = {
-    issuer,
-    resource,
-    jwks,
-    key,
-    /** Another key pair (rotation, or a key the core never published). `use` decides how it is published. */
-    keyPair,
-    /** The app's `auth.clegra` trusting this core (every company allowed unless `extra` says otherwise). */
-    options: (extra: Partial<ClegraOptions> = {}): ClegraOptions => ({ issuer, jwks, allowedCompanies: "any", registrationId: "11111111-2222-4333-8444-555555555555", ...extra }),
-    appToken: (t: TestAppToken) => {
-      const jkt = typeof t.device === "string" ? t.device : t.device.jkt
-      const server = t.act?.startsWith("server:")
-      return sign(
-        {
-          iss: t.iss ?? issuer,
-          aud: t.aud ?? resource,
-          sub: t.sub,
-          company: t.company,
-          company_role: t.role ?? "member",
-          email: t.email ?? `${t.sub}@clegra.test`,
-          name: t.name ?? t.sub,
-          cnf: { jkt },
-          jti: t.jti ?? randomUUID(),
-          ...(t.act ? { act: { sub: t.act } } : {}),
-          ...(t.personJkt ? { person_jkt: t.personJkt } : {}),
-          ...(t.grant ? { grant: t.grant } : {}),
-          ...(t.tools ? { tools: t.tools } : {}),
-          ...(t.locale ? { locale: t.locale } : {}),
-        },
-        { typ: t.typ ?? APP_TOKEN_TYPE, ...(t.kid ? { kid: t.kid } : {}) },
-        t.signer ? { ...key, ...t.signer } : key,
-        t.iat ?? now(),
-        t.lifetime ?? (server ? 60 : 600),
-      )
-    },
-    /** The core's confirmation token for one call of a sensitive tool, bound to the person's device. */
-    confirmation: (c: { company: string; sub: string; tool: string; args: unknown; device: DeviceKey | string; aud?: string; lifetime?: number; jti?: string; argsSha256?: string; signer?: { privateKey: CryptoKey; kid: string } }) =>
-      sign(
-        { iss: issuer, aud: c.aud ?? resource, sub: c.sub, company: c.company, tool: c.tool, args_sha256: c.argsSha256 ?? argsHash(c.args), cnf: { jkt: typeof c.device === "string" ? c.device : c.device.jkt }, jti: c.jti ?? randomUUID() },
-        { typ: CONFIRMATION_TOKEN_TYPE },
-        c.signer ? { ...key, ...c.signer } : key,
-        now(),
-        c.lifetime ?? 600,
-      ),
-    /** One event as the core signs it. */
-    /** A signed app event; `at` (ISO) when it happened, now by default (a late delivery: an earlier one). */
-    event: (kind: ClegraEventKind, e: { company: string; sub?: string; installation?: string; aud?: string; jti?: string; lifetime?: number; typ?: string; at?: string }) =>
-      sign({ iss: issuer, aud: e.aud ?? resource, jti: e.jti ?? randomUUID(), event: { kind, at: e.at ?? new Date().toISOString(), company: e.company, ...(e.sub ? { sub: e.sub } : {}), ...(e.installation ? { installation: e.installation } : {}) } }, { typ: e.typ ?? EVENT_TYPE }, key, now(), e.lifetime ?? 300),
-    /** Posts a signed event to the app's events endpoint, as the core's outbox does. */
-    deliver: (app: App, jwt: string) => app.fetch(new Request(`${new URL(resource).origin}${EVENTS_PATH}`, { method: "POST", headers: { "content-type": "application/jwt" }, body: jwt })),
-    /** A Clegra client of the app for one person: a fresh token per request (`token` bends it), DPoP-bound to `device`. */
-    client: async (app: App, who: Omit<TestAppToken, "device"> & { device?: DeviceKey; origin?: string }) => {
-      const device = who.device ?? (await deviceKey())
-      const { origin, ...claims } = who
-      return Object.assign(await testClient(app, { token: () => core.appToken({ ...claims, device }), dpop: { key: device, htu: resource }, ...(origin ? { origin } : {}), remoteAddress: "203.0.113.7" }), { device })
-    },
-  }
-  return core
 }

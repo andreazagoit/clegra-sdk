@@ -1,7 +1,7 @@
 # Shipments: an example Clegra app
 
 A courier's shipments and pickups as a Clegra app (`@clegra/sdk`): one `defineApp`
-object that the SDK serves as a manifest for Clegra (its people call it through Clegra's core)
+object that the SDK serves as a manifest for Clegra (its people sign in with the app's own sign-in)
 and as a plain MCP server for ChatGPT, Claude and any MCP client. It runs on
 Node's own HTTP server (`@clegra/sdk/node`), has no UI of its own, and keeps its
 invented data **in memory** (`MemoryStore` for writes, `src/courier.ts` for the
@@ -72,20 +72,16 @@ are English.
 
 ## Who may call
 
-People of Clegra companies only, through Clegra's core in the trusted-issuer
-mode (spec §7, «Clegra tokens»): app tokens bound to the caller's key (DPoP).
-A courier hosts one server for all its customer companies; the tenant is
-`<company>@<issuer>`, so two companies never reach each other's data, and
-`CLEGRA_ALLOWED_COMPANIES` says which companies it serves.
+The courier's customers' people, with the app's own sign-in (`@clegra/sdk/signin`, `src/auth.ts`): the courier has
+no login, so the SDK's password login is it. The courier makes the accounts (`login.accounts.create`, one tenant per
+customer company), so two companies never reach each other's data. Any client (Clegra, ChatGPT, Claude) acts with a
+delegation the person gave on the app's consent page, or with a personal key they made (`signIn.keys`).
 
 | Variable | Meaning |
 |---|---|
-| `SHIPMENTS_PUBLIC_URL` | The address the companies connect the app from (required); the MCP address, the only token audience, is `<url>/mcp` |
-| `CLEGRA_ISSUER` | Clegra's core (required) |
-| `CLEGRA_REGISTRATION_ID` | The id the core gave this server when it was registered (required) |
-| `CLEGRA_REGISTRATION_CHALLENGE` | The registration challenge, served at `/.well-known/clegra-app.json` while the core verifies the address |
-| `CLEGRA_ALLOWED_COMPANIES` | The companies it serves, comma-separated, or `any` (required) |
-| `CLEGRA_CLIENT_ORIGINS` | The Clegra clients' origins that call it from a browser (CORS), comma-separated |
+| `SHIPMENTS_PUBLIC_URL` | The app's public origin (required): the sign-in's issuer, its page at `<url>/signin`; the MCP address, the only token audience, is `<url>/mcp` |
+| `SHIPMENTS_SIGNIN_KEY` | The sign-in's signing key, a private Ed25519 JWK (`newSignInKey()` of `@clegra/sdk/signin`); required in production |
+| `CLEGRA_CLIENT_ORIGINS` | The workspace clients that may frame the consent and get its answer (`web_message`), comma-separated |
 | `SHIPMENTS_PORT` | Default `4319` |
 | `SHIPMENTS_HOST` | Default `0.0.0.0` (`npm start` only) |
 
@@ -97,8 +93,7 @@ From this folder, in the repository (`@clegra/sdk` is the repository's root, a w
 npm run dev      # 127.0.0.1:4319, signed in by the SDK's dev authority; prints a token and the check command
 npx @clegra/sdk check http://127.0.0.1:4319 --token <the printed token>   # Conformant.
 
-SHIPMENTS_PUBLIC_URL=https://shipments.example.com CLEGRA_ISSUER=https://core.example.com \
-  CLEGRA_REGISTRATION_ID=<id> CLEGRA_ALLOWED_COMPANIES=any npm start
+SHIPMENTS_PUBLIC_URL=https://shipments.example.com SHIPMENTS_SIGNIN_KEY='<private JWK>' npm start
 ```
 
 `npm run dev` is refused when `NODE_ENV` is `production` and answers loopback
@@ -120,7 +115,7 @@ this repository's workspace):
 | Export | What it is |
 |---|---|
 | `createShipmentsApp({ courier?, installation? })` | The app in-process, for `app.fetch(request, { remoteAddress: "127.0.0.1" })`: dev authority (`app.devToken()`, `app.devConfirmation()`, the clients of `@clegra/sdk/testing`), `MemoryStore`, data in memory |
-| `shipmentsManifest` | The manifest (`Manifest`, plain JSON) exactly as served at `/.well-known/clegra.json` by a server at `SHIPMENTS_URL` (`https://shipments.example.com`, MCP at `/mcp`) trusting Clegra's core `https://core.example.com`. The dev app's manifest differs only in `auth`, `events` and `rolesTool` |
+| `shipmentsManifest` | The manifest (`Manifest`, plain JSON) exactly as served at `/.well-known/clegra.json` by a server at `SHIPMENTS_URL` (`https://shipments.example.com`, MCP at `/mcp`) with its own sign-in. The dev app's manifest differs only in `auth` |
 | `SHIPMENTS_PEOPLE` | `ada` (all permissions, «Ada Rossi»), `bruno` (`shipments.view`, «Bruno Verdi») |
 | `SHIPMENTS_INSTALLATION` | `"test"`, the dev tokens' default installation |
 | `SHIPMENTS_SETTINGS` | `{ depot: "North depot" }`: what a host sends as `_meta.clegra.settings` (booking needs it) |

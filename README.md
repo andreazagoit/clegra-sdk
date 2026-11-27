@@ -21,7 +21,8 @@ says how the tarball is made, checked and published.
 | Entry | What |
 | --- | --- |
 | `@clegra/sdk` | `defineApp`, `AuthError`, `SqlStore`, `MemoryStore`, types. Framework-agnostic (`app.fetch(request)`) |
-| `@clegra/sdk/next` | `toNextHandlers`, `withClegra`, `clegraRewrites`; `siteProxy`, `siteGuard`, `getClegraCaller`, `<ClegraSite />` for the app's own site (`next` is an optional peer dependency) |
+| `@clegra/sdk/signin` | `createSignIn`, `passwordLogin`, `MemorySignInStore`, `SqlSignInStore`, `frameCookie`, `newSignInKey`: the app's own OAuth 2.1 server on its login (Web APIs only) |
+| `@clegra/sdk/next` | `toNextHandlers`, `withClegra`, `clegraRewrites`; `siteProxy`, `<ClegraSite />` for the app's own site (`next` is an optional peer dependency) |
 | `@clegra/sdk/node` | `listen(app)`: the app on Node's own HTTP server |
 | `@clegra/sdk/testing` | `testClient(app)`: JSON-RPC to `app.fetch` with dev tokens; `installationClient(app)` for schedules, later runs and lifecycle tools |
 | `@clegra/sdk/spec` | `checkApp`, `formatReport`: the conformance checks |
@@ -34,7 +35,7 @@ In an existing App Router app, `npx @clegra/sdk init` writes the three files bel
 random local bearer in `.env.local` (`CLEGRA_LOCAL_TOKEN`), which the generated `resolve` accepts only when
 `NODE_ENV` isn't `production`. It never overwrites a file, prints what it can't edit safely, and `--dry-run` writes
 nothing. Then `npm run dev` and `npx @clegra/sdk check http://localhost:3000 --token <CLEGRA_LOCAL_TOKEN>`.
-See [docs/quickstart.md](docs/quickstart.md).
+Two guides: [plain JavaScript](docs/start-javascript.md) and [Next.js](docs/start-next.md).
 
 ## Next.js: three files
 
@@ -90,33 +91,25 @@ export const app = defineApp({
 ## Your own site in Clegra
 
 An app with a website of its own is shown in Clegra's clients **as that site**: the client frames your real pages at
-your own origin, the person signed in without a word, and draws nothing around them (spec §5.1). The client asks
-your app for a one-minute, single-use ticket with the person's app token (`clegra_site`), posts it into its frame,
-and your app answers with a `Secure; HttpOnly; SameSite=None; Partitioned` session cookie for the whole site and a
-303 to the path. Needs `auth.clegra`.
+your own origin and draws nothing around them (spec §5.1). Clegra never signs anyone in to your app: the person signs
+in with your own sign-in inside the frame (your session cookie `Secure; HttpOnly; SameSite=None; Partitioned`), and
+links your app to Clegra's assistant in the same frame, through your consent (`response_mode=web_message`).
 
 ```ts
-// clegra.ts
-defineApp({ …, auth: { …, clegra: clegraFromEnv() }, site: { start: "/", secret: process.env.CLEGRA_SITE_SECRET } })
+// clegra/app.ts
+defineApp({ …, site: { start: "/" }, clientOrigins: ["https://app.clegra.com", "app://client"] })
 
-// proxy.ts: who may frame each page (the session's client only; nobody outside a Clegra session)
+// proxy.ts: every page framable by those client origins only
 export const proxy = siteProxy(app)
 export const config = { matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"] }
 
-// app/layout.tsx: the client's theme and language on <html>, and the bridge (address, theme, language, renewal)
-const caller = await getClegraCaller(app)
-<html lang={caller?.locale ?? "en"} data-theme={caller?.theme} className={caller?.theme === "dark" ? "dark" : undefined}>
-  <body>{children}<ClegraSite /></body>
-</html>
-
-// any page, server function or route handler: the person as a member of the tenant
-const caller = await getClegraCaller(app) // { installation, person, email, permissions, can(), admin, locale, theme } | null
+// app/layout.tsx: the bridge (where the person is; the client's theme and language)
+<body>{children}<ClegraSite /></body>
 ```
 
-`app.site.caller(request)` and `app.site.guard(request)` are the same, framework-neutral; `app.fetch` answers the
-site's own paths (`POST /clegra/site`, `/clegra/site/bridge.js`, `…/session`, `…/context`, `…/renewed`). Without a
-framework, load the bridge with `<script src="/clegra/site/bridge.js" async></script>`. The SDK's generated views stay
-for apps without a site and for every other host (ChatGPT, Claude).
+Without Next: `app.site.headers()` gives the framing policy for every page, and
+`<script src="/clegra/site/bridge.js" async></script>` loads the bridge. The SDK's generated views stay for apps
+without a site and for every other host (ChatGPT, Claude).
 
 ## Public URL behind proxies and on Vercel
 
@@ -139,43 +132,14 @@ The app verifies its own access tokens: those its sign-in (better-auth, Clerk, A
 
 Recipes for better-auth, Clerk, Auth0 and WorkOS: [docs/auth.md](docs/auth.md).
 
-## Clegra's people: `auth.clegra`
+## Your sign-in: `@clegra/sdk/signin`
 
-An app that Clegra companies use trusts Clegra's core as its one issuer (spec §7, «Clegra tokens»), beside its own
-sign-in or alone:
-
-```ts
-import { clegraFromEnv } from "@clegra/sdk"
-
-auth: {
-  resource: "https://crm.example.com/mcp",   // required: the only audience, and what DPoP proofs must name
-  clegra: clegraFromEnv()!,                  // CLEGRA_ISSUER, CLEGRA_REGISTRATION_ID, CLEGRA_REGISTRATION_CHALLENGE,
-                                             // CLEGRA_ALLOWED_COMPANIES (any | ids), CLEGRA_CLIENT_ORIGINS
-}
-```
-
-- The SDK verifies the core's app tokens itself: its `use: "app"` keys, `aud` exactly `resource`, DPoP-bound (with
-  nonce retry and replay in the store), the tenant `<company>@<issuer>`, `ctx.person.id` the person's pairwise id,
-  `ctx.actor` the agent acting for them (Clegra's on a server, or one on their device).
-- Who may do what is the app's own: a company administrator has every permission (`companyAdmin: "member"` to say
-  otherwise), others what an administrator assigned (`app.roles.assign(tenant, sub, { permissions })`, `ctx.admin`)
-  or the declared defaults. `clegra_roles` tells the administrator who has what. The store keeps it (`SqlStore`'s
-  third table: re-run `SqlStore.schema()` in a migration).
-- Sensitive writes (`confirm: "always"`) called by an agent need the person's confirmation from their device;
-  from a Clegra client, the UI asks and sends `_meta.clegra.confirmed: true`.
-- The core's signed events reach `/clegra/events` (`auth.clegra.events` handlers; roles dropped and older tokens
-  refused on `member.removed`, `app.unassigned`, `app.uninstalled`, `company.suspended`), and
-  `/.well-known/clegra-app.json` answers the registration challenge.
-- CORS answers the client origins only. `ctx.rateLimit(name, { max, seconds })` limits per person or tenant.
-- In production, without `registrationId` and `allowedCompanies` every request answers `500 misconfigured`, except
-  the manifest and `/.well-known/clegra-app.json`: registering at the core, which hands out the registration id,
-  reads them first (spec §7, «Registration»).
-- Tests: `testCore({ resource })` from `@clegra/sdk/testing` is a core (keys, app tokens, confirmations, events) and
-  `core.client(app, { company, sub, role })` a Clegra client with DPoP.
-
-Dev sign-in (`auth.dev`) answers loopback callers only. A Next route handler can't know the caller's address:
-`x-forwarded-for` is whatever the client sent. So `toNextHandlers` refuses an app with `auth.dev`. Locally,
-use init's bearer (`CLEGRA_LOCAL_TOKEN`) or your own sign-in, or run the app with `listen` from `@clegra/sdk/node`.
+An app without an OAuth server of its own gets one on top of its login: `createSignIn(definition, { issuer, resource,
+login, permissionsOf, store, keys, clientOrigins })`, then `auth: { signIn }` (spec §7, «Your sign-in»;
+[docs/auth.md](docs/auth.md)). Every client (Clegra, Claude, ChatGPT) acts for a person only with the delegation your
+app issued through your consent: `at+jwt` tokens for exactly your MCP address (DPoP-bound when the client proves a
+key), refresh rotation with reuse detection, RFC 7009, Client ID Metadata Documents, `web_message` for a framing
+client. Personal keys (`signIn.keys`) for background work; `passwordLogin` for an app with no login at all.
 
 ## Kinds and references across apps
 
@@ -286,7 +250,7 @@ The package is the repository's root; `.github/workflows/publish.yml` publishes 
 | --- | --- | --- |
 | `src/` | `@clegra/sdk`, `@clegra/sdk/next`, `@clegra/sdk/node`, `@clegra/sdk/testing` | built, as `dist/src` |
 | `spec/` | `@clegra/sdk/spec` (conformance checks), the CLI (`clegra`: `init`, `check`), the manifest's JSON Schema, `kinds.json` | built, as `dist/spec` |
-| `docs/` | The specification, quickstart, guides, release steps | `docs/spec.md` and `docs/quickstart.md` only |
+| `docs/` | The specification, the two getting-started guides, guides, release steps | `docs/spec.md`, `docs/start-javascript.md` and `docs/start-next.md` only |
 | `examples/` | `crm` and `warehouse` (Next.js), `shipments` (Node): npm workspaces of this repository using `@clegra/sdk` as `file:..` (its TypeScript source, no build step), run locally | no |
 | `test/` | The real Next.js test (`test/fixture`) | no |
 | `scripts/` | The build, `prepack`/`postpack`, the pack check, the JSON Schema writer | no |

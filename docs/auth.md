@@ -347,34 +347,50 @@ export const appAuth: AuthOptions = {
 The gaps: no permissions in the token, so there is one lookup per call (cache it). Not confirmed: whether the
 metadata announces CIMD once it is on, and which SDK call returns the person's name.
 
-## Your own site in Clegra: no second sign-in either
+## No OAuth server yet? The SDK's sign-in module
 
-Your site framed by a Clegra client (spec §5.1) never sees your session cookie: the frame is on another site, and
-browsers block that cookie there. You don't add a sign-in for it. The client, which already holds the person's app
-token, asks your app for a one-minute ticket (`clegra_site`); the ticket carries exactly the caller the token names
-(installation, person, email, the app's own permissions, admin, locale, theme). The frame posts it to `/clegra/site`
-and gets a partitioned cookie for the whole site.
+`@clegra/sdk/signin` is a complete OAuth 2.1 authorization server on top of the login you already have (spec §7,
+«Your sign-in»). You give it who is signed in on a request and where your sign-in page is; it gives every client
+(Clegra, Claude, ChatGPT) a delegation your app issued, through your own consent page, revocable in your app.
 
-- Your part: `site: { secret }` in `defineApp` (with `auth.clegra`), `siteProxy(app)` in `proxy.ts`, `<ClegraSite />`
-  in the root layout, `getClegraCaller(app)` wherever you read who is signed in (accept it as a member beside your
-  own session). The secret signs tickets and sessions (HKDF-derived keys: your one app secret, e.g. better-auth's, may
-  be reused). Without it the tool and the exchange answer `misconfigured`.
-- The permissions are the ticket's for the session's life (10 minutes by default, `site.sessionSeconds`; the client
-  renews it before it ends): a person removed from the company loses it at once (the core's events).
-- Used tickets are kept in the app's `store` (`SqlStore`'s `clegra_store` table): no new table.
+```ts
+import { createSignIn, passwordLogin, SqlSignInStore } from "@clegra/sdk/signin"
+
+const store = new SqlSignInStore(query)   // SqlSignInStore.schema() in a migration
+export const signIn = createSignIn(definition, {
+  issuer: "https://app.example.com",
+  resource: "https://app.example.com/mcp",
+  // Your login: who is signed in on this request (your session), and where your sign-in page is.
+  login: { session: (request) => currentUser(request), signInUrl: (returnTo) => `/login?next=${encodeURIComponent(returnTo)}` },
+  // Read live on every call: what the person may do now (null: no longer allowed).
+  permissionsOf: (person) => permissionsFor(person),
+  store,
+  keys: [JSON.parse(process.env.SIGNIN_KEY!)],   // newSignInKey() makes one
+  clientOrigins: ["https://app.clegra.com"],      // who may frame your site and get web_message answers
+})
+// then: serve the app with auth: { signIn }
+```
+
+- No login at all? `passwordLogin({ store, origin, title })` is one: accounts with an email and a password
+  (`login.accounts.create`), a sign-in page at `/signin`, a session cookie that works inside a client's frame. Give
+  `login.permissionsOf` as `permissionsOf`.
+- Background work (a nightly job, a script, an automation): the person makes a personal key in your app
+  (`signIn.keys.create(person, { name, scopes })`), shown once, revoked with `signIn.keys.revoke`.
+- Your «connected apps» screen: `signIn.links.list(person)` and `signIn.links.revoke(person, id)`; a person who
+  leaves: `signIn.forget(person)`.
+
+## Your own site in a client's frame
+
+A workspace client (Clegra) shows your site in a frame on its own site (spec §5.1). It never signs anyone in for you:
+the person signs in with your sign-in, inside the frame. For that your session cookie must be
+`Secure; HttpOnly; SameSite=None; Partitioned` over https (the sign-in module's `frameCookie` writes it; with
+better-auth: `advanced.defaultCookieAttributes`), and your pages must be framable by the client only (`siteProxy(app)`
+in `proxy.ts`, with `clientOrigins` and `site: { start }` in the app). `<ClegraSite />` in the root layout takes the
+client's theme and language and tells it where the person is.
 
 ## Locally, before any of this
 
 `npx @clegra/sdk init` writes a `resolve` that also accepts one bearer from `.env.local` (`CLEGRA_LOCAL_TOKEN`). It is
 refused whenever `NODE_ENV` is `production`, which `next build`, `next start` and every deployment set. Use it to see
 the app in the Inspector on day one, and keep it as you plug in one of the recipes above. The
-[quickstart](quickstart.md) has the details.
-
-## Clegra's people beside your own
-
-Your sign-in and Clegra's core can sit side by side: `auth: { resource, resolve, authorizationServers, clegra:
-clegraFromEnv()! }`. Your `resolve` keeps seeing only your own tokens; a token of Clegra's core (sent as
-`Authorization: DPoP …`) is verified by the SDK and never reaches it. Your protected-resource metadata keeps naming
-your own authorization server: Clegra's core is not one (spec §7, «Clegra tokens»). A Clegra company is a tenant of
-its own (`<company>@<issuer>`, never one of your organizations), and what its people may do is your app's roles
-(`app.roles`), not your sign-in's.
+[Next.js guide](start-next.md) has the details.

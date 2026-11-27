@@ -4,7 +4,7 @@ import { redirect } from "next/navigation"
 import { auth } from "@/lib/auth"
 import { DEMO_USERS } from "@/lib/demo-data"
 import { oauthQueryOf, restartable, restartAuthorization, TOO_OLD_MESSAGE } from "@/lib/oauth-pages"
-import { sessionMember } from "@/lib/session"
+import { currentMember } from "@/lib/session"
 
 import { buttonClass, Card, inputClass, Notice, param, secondaryButtonClass } from "../_components/ui"
 import { demoSignInAction, signInAction } from "./actions"
@@ -23,7 +23,7 @@ export default async function SignInPage({ searchParams }: { searchParams: Promi
     oauthQuery = null
     error = TOO_OLD_MESSAGE
   }
-  if (!oauthQuery && !error && (await sessionMember())) redirect("/")
+  if (!oauthQuery && !error && (await currentMember())) redirect("/")
   const demo = process.env.DEMO_SIGNIN === "1"
   return (
     <main className="mx-auto flex min-h-screen max-w-sm flex-col justify-center px-4 py-10">

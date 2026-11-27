@@ -1,6 +1,6 @@
 {
   "name": "@clegra/sdk",
-  "version": "0.1.0-next.12",
+  "version": "0.2.0-next.0",
   "clegra": {
     "kind": "public",
     "owner": "sdk"
@@ -39,6 +39,7 @@
     ".": "./src/index.ts",
     "./next": "./src/next/index.ts",
     "./node": "./src/node.ts",
+    "./signin": "./src/signin/index.ts",
     "./testing": "./src/testing.ts",
     "./spec": "./spec/src/conformance.ts",
     "./spec/protocol": "./spec/src/protocol.ts",
@@ -53,7 +54,8 @@
   "files": [
     "dist",
     "docs/spec.md",
-    "docs/quickstart.md",
+    "docs/start-javascript.md",
+    "docs/start-next.md",
     "docs/accents.svg",
     "!docs/README.md",
     "README.md",

@@ -15,11 +15,12 @@ Its artifacts reach hosts as A2UI 1.0 surfaces (spec §5.4); `funnel` is drawn b
 `StageFunnel` (`clegra/funnel-view.ts`), a page the host frames inside the surface and feeds the props, theme and
 language.
 
-In a Clegra client the CRM is shown as its own site (spec §5.1): the client frames the CRM's real pages (pipeline,
-board, deals, companies, contacts) at the CRM's origin, the person signed in with a one-minute site ticket. Only with
-Clegra's core configured (`CLEGRA_ISSUER`). `proxy.ts` (`siteProxy`) says who may frame each page, the root layout
-loads the bridge (`<ClegraSite />`) and starts in the client's theme and language, and `lib/session.ts` takes the
-Clegra caller as a member of its company's installation with the permissions the CRM's roles give them there.
+In a workspace client (Clegra's web and desktop clients, `CLEGRA_CLIENT_ORIGINS`) the CRM is shown as its own site
+(spec §5.1): the client frames the CRM's real pages (pipeline, board, deals, companies, contacts) at the CRM's origin,
+and the person signs in there with the CRM's own sign-in (better-auth; over https its session cookie is
+`SameSite=None; Secure; Partitioned`, kept in the frame's partition). `proxy.ts` (`siteProxy`) lets only those
+origins frame a page, the root layout loads the bridge (`<ClegraSite />`). Clegra, like any other MCP client, acts
+only with a token the CRM issued after the person consented: never with an account of its own.
 
 ```sh
 npm run setup      # .env.local (generated BETTER_AUTH_SECRET, DEMO_PASSWORD) if missing, then migrate + seed
@@ -68,9 +69,9 @@ organization.
 | Variable | |
 |---|---|
 | `CLEGRA_PUBLIC_URL` | The public origin. better-auth (`<origin>/api/auth`, the issuer) and MCP (`<origin>/mcp`) both derive from it. Required in production, https |
-| `BETTER_AUTH_SECRET` | Required. Long and random (32 characters at least). The keys of the site tickets and sessions (Clegra) are derived from it too |
+| `BETTER_AUTH_SECRET` | Required. Long and random (32 characters at least) |
 | `DATABASE_URL` | Postgres. Required in production (a Neon pooled URL with `sslmode=require` works) |
 | `DEMO_PASSWORD`, `DEMO_SIGNIN=1` | The demo accounts' password (used by the seed) and the one-click sign-in |
-| `CLEGRA_ISSUER` | Clegra's core, whose tokens are accepted (spec §7, «Clegra tokens»); with it `CLEGRA_REGISTRATION_ID`, `CLEGRA_REGISTRATION_CHALLENGE`, `CLEGRA_ALLOWED_COMPANIES` (`any` or ids) and `CLEGRA_CLIENT_ORIGINS` (the clients that may frame the site). Each company gets its own copy of the demo data |
+| `CLEGRA_CLIENT_ORIGINS` | The workspace clients that may frame the CRM's pages as its site, comma-separated; unset: no site |
 
 A missing variable is an error, never a silent fallback.

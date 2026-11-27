@@ -72,7 +72,10 @@ over MCP.
   organization. On its first call it gets its own copy of the demo data (`provisionWorkspace`: one transaction,
   idempotent). Its people are named from their tokens and remembered in `people` once they own a deal; what they may
   do is the CRM's own roles (a company administrator everything, a member the defaults until assigned more; the
-  `clegra_store_roles` table, migration `0006_clegra_store_roles.sql`).
+  `clegra_store_roles` table, migration `0006_clegra_store_roles.sql`). «People» shows them to the CRM's
+  administrators: the `member` entity (app-only, `people.manage`, which only an administrator has) over `app.roles`,
+  with `grant_permission` and `revoke_permission` to give or take one permission (a company administrator keeps
+  everything), and the site's `/people` page; the site's navigation shows a person only the pages they may open.
 
 Both are just values of `org_id`; `tenants` records which kind each one is.
 

@@ -9,8 +9,8 @@ import type { McpServer } from "@modelcontextprotocol/server"
 import { z } from "zod"
 
 import { defineApp, MemoryStore, type AuthOptions } from "../../src/index"
-import { deviceKey, testCore } from "../../src/testing"
-import { checkApp, type ClegraCaller, type Report } from "./conformance"
+import { createSignIn, MemorySignInStore, passwordLogin } from "../../src/signin"
+import { checkApp, type Report } from "./conformance"
 
 /** The checks of app-only items, the installation's tools and the manifest's new rules, from outside. */
 
@@ -120,114 +120,37 @@ describe("conformance: app-only items and the installation's tools", () => {
   })
 })
 
-describe("conformance: an app in the trusted-issuer mode, checked as a Clegra caller", async () => {
-  const RES = "https://deals.test/mcp"
-  const core = await testCore({ resource: RES })
-  const company = "co-conformance"
+describe("conformance: an app with its own sign-in, checked with a token it issued", async () => {
+  const ORIGIN = "https://deals.test"
+  const store = new MemorySignInStore()
+  const definition = {
+    name: "deals",
+    title: "Deals",
+    version: "1.0.0",
+    permissions: { "deals.view": { label: "See deals", default: true }, "deals.edit": { label: "Change deals" } },
+    entities: {
+      deal: { label: "Deal", permission: "deals.view", schema: z.object({ id: z.string(), title: z.string().meta({ role: "title", search: true }) }), get: (id: string) => (id === "d1" ? { id: "d1", title: "Fiber" } : null), list: () => ({ rows: [{ id: "d1", title: "Fiber" }] }) },
+    },
+    actions: { close_deal: { on: "deal", title: "Close", input: z.object({}), confirm: "always", permission: "deals.edit", run: () => {} } },
+    pages: { deals: { title: "Deals", list: "deal", columns: ["title"] } },
+  }
+  const login = passwordLogin({ store, origin: ORIGIN, title: { en: "Deals" }, iterations: 1000 })
+  const signIn = createSignIn(defineApp(definition as never), { issuer: ORIGIN, resource: `${ORIGIN}/mcp`, login, permissionsOf: (a) => login.permissionsOf(a), store })
+  const app = defineApp({ ...definition, store: new MemoryStore(), auth: { signIn } } as never)
+  const fetch = (request: Request) => app.fetch(request, { remoteAddress: "203.0.113.7" })
+  const account = await login.accounts.create({ email: "tester@example.com", name: "Tester", password: "a long test password", installation: "test-co", permissions: "all" })
+  const { key } = await signIn.keys.create(account, { name: "Conformance" })
 
-  /** «Deals», trusting Clegra's core alone: no authorization server of its own; one sensitive write on a record, one not. */
-  function dealsApp(options: { unguarded?: boolean } = {}) {
-    const deals = new Map([["d1", { id: "d1", title: "Fiber for the new office", amount: 1200 }]])
-    const ran: string[] = []
-    const app = defineApp({
-      name: "deals",
-      title: "Deals",
-      version: "1.0.0",
-      store: new MemoryStore(),
-      auth: { resource: RES, clegra: core.options() },
-      permissions: { "deals.view": { label: "See deals", default: true }, "deals.edit": { label: "Change deals" } },
-      entities: {
-        deal: {
-          label: "Deal",
-          permission: "deals.view",
-          schema: z.object({ id: z.string(), title: z.string().meta({ role: "title", search: true }), amount: z.number() }),
-          get: (id) => deals.get(id) ?? null,
-          list: () => ({ rows: [...deals.values()] }),
-        },
-      },
-      actions: {
-        add_deal: { title: "Add a deal", input: z.object({ title: z.string().min(3), amount: z.number().int().min(10) }), confirm: options.unguarded ? false : "always", permission: "deals.edit", run: (input) => void ran.push(`add ${input.title}`) },
-        close_deal: { on: "deal", title: "Close", input: z.object({}), confirm: "always", permission: "deals.edit", run: (_input, _ctx, deal) => void ran.push(`close ${deal.id}`) },
-        rename_deal: { on: "deal", title: "Rename", input: z.object({ title: z.string() }), confirm: false, permission: "deals.edit", run: () => {} },
-      },
-      pages: { deals: { title: "Deals", list: "deal", columns: ["title"] } },
-    })
-    return { app, ran }
-  }
-  const fetchOf = (app: ReturnType<typeof dealsApp>["app"]) => (request: Request) => app.fetch(request, { remoteAddress: "203.0.113.7" })
-  /** A company administrator from a Clegra client (no actor). */
-  const person = async (): Promise<ClegraCaller> => {
-    const device = await deviceKey()
-    return { token: () => core.appToken({ company, sub: "pw-ada", role: "admin", device }), proof: device.proof }
-  }
-  /** Clegra's agent for that person on a server: one delegated token per call, the person's device confirming. */
-  const agent = async (): Promise<ClegraCaller> => {
-    const node = await deviceKey()
-    const phone = await deviceKey()
-    return {
-      token: () => core.appToken({ company, sub: "pw-ada", role: "admin", device: node, act: "server:node-1", personJkt: phone.jkt }),
-      proof: node.proof,
-      confirmation: async ({ tool, args }) => {
-        const token = await core.confirmation({ company, sub: "pw-ada", tool, args, device: phone })
-        return { token, proof: await phone.confirm(token) }
-      },
-    }
-  }
-
-  test("auth.mcp takes protected-resource metadata without an authorization server; every check passes and the report is complete", async () => {
-    const { app, ran } = dealsApp()
-    const report = await checkApp({ url: "https://deals.test", fetch: fetchOf(app), clegra: await person() })
+  test("the protected-resource metadata names the app's own sign-in; every check passes with its token and the report is complete", async () => {
+    const report = await checkApp({ url: ORIGIN, fetch, token: key })
     assert.deepEqual(report.checks.filter((c) => !c.ok).map((c) => `${c.id}: ${c.detail}`), [])
     assert.equal(report.complete, true)
     assert.equal(byId(report, "auth.mcp").skipped, undefined)
-    assert.equal(byId(report, "mcp.tools").ok, true, "the writes a plain client is not given are a person's to see")
-    const confirm = byId(report, "mcp.confirm")
-    assert.equal(confirm.skipped, undefined, confirm.detail)
-    assert.deepEqual(ran, [], "the person's call without _meta.clegra.confirmed ran nothing")
   })
 
-  test("an agent: refused without a confirmation and with one of other arguments, run with the core's confirmation of its own", async () => {
-    const { app, ran } = dealsApp()
-    const report = await checkApp({ url: "https://deals.test", fetch: fetchOf(app), clegra: await agent() })
-    assert.deepEqual(report.checks.filter((c) => !c.ok).map((c) => `${c.id}: ${c.detail}`), [])
-    assert.equal(byId(report, "mcp.confirm").skipped, undefined)
-    assert.deepEqual(ran.sort(), ["add conformance", "close d1"])
-  })
-
-  test("a sensitive write that runs without a confirmation fails mcp.confirm", async () => {
-    const { app } = dealsApp({ unguarded: true })
-    const report = await run2(app, (m) => {
-      for (const a of m.actions as { name: string; confirm: string }[]) if (a.name === "add_deal") a.confirm = "always"
-    })
-    const c = byId(report, "mcp.confirm")
-    assert.equal(c.ok, false)
-    assert.match(c.detail!, /add_deal: ran without a confirmation/)
-  })
-
-  test("without a Clegra caller the app's MCP checks don't run; with only its own authorization server missing it is not conformant", async () => {
-    const { app } = dealsApp()
-    const report = await checkApp({ url: "https://deals.test", fetch: fetchOf(app) })
+  test("without a token only the public checks run", async () => {
+    const report = await checkApp({ url: ORIGIN, fetch })
     assert.equal(byId(report, "auth.mcp").ok, true)
     assert.equal(report.complete, false)
-    const plain = await checkApp({ url: "https://deals.test", fetch: async (request) => {
-      const response = await fetchOf(app)(request)
-      if (!request.url.endsWith("/.well-known/clegra.json")) return response
-      const m = (await response.json()) as Record<string, unknown>
-      delete m.events
-      delete m.rolesTool
-      return Response.json(m)
-    } })
-    assert.match(byId(plain, "auth.mcp").detail ?? "", /names no authorization server/)
   })
-
-  async function run2(app: ReturnType<typeof dealsApp>["app"], alter: (manifest: Record<string, unknown>) => void) {
-    const fetch = async (request: Request) => {
-      const response = await fetchOf(app)(request)
-      if (!request.url.endsWith("/.well-known/clegra.json")) return response
-      const manifest = (await response.json()) as Record<string, unknown>
-      alter(manifest)
-      return Response.json(manifest)
-    }
-    return checkApp({ url: "https://deals.test", fetch, clegra: await person() })
-  }
 })

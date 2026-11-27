@@ -2,7 +2,6 @@ import type { z } from "zod"
 
 import type { EntityKind, PropertyDef } from "../spec/src/kinds"
 import type { Caller, Person } from "./auth"
-import type { Actor } from "./clegra"
 import type { Label } from "./labels"
 import type { FieldInfo } from "./meaning"
 
@@ -21,10 +20,9 @@ export type Context = {
    * delegated or automation call) or an agent on the person's device (`{ kind: "device-agent", id }`); null when the
    * person calls themselves.
    */
-  readonly actor: Actor | null
   /** Whether the caller administers the app (a Clegra company administrator unless `companyAdmin: "member"`, or granted it): who may assign roles. */
   readonly admin: boolean
-  /** The installation's settings (spec §2), as a dev workspace host sent them, defaults filled in. Clegra callers and plain clients get the defaults: an app's settings live in the app. */
+  /** The installation's settings (spec §2), as a dev workspace host sent them, defaults filled in. Every other client gets the defaults: an app's settings live in the app. */
   readonly settings: Readonly<Record<string, unknown>>
   /** The call id (`_meta.clegra.call`), when the host sent one. */
   readonly call: string | null

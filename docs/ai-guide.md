@@ -54,7 +54,7 @@ export default withClegra(nextConfig)
 ## The whole shape
 
 ```ts
-import { AppError, clegraFromEnv, defineApp, ref } from "@clegra/sdk"
+import { AppError, defineApp, ref } from "@clegra/sdk"
 import { z } from "zod"
 
 export default defineApp({
@@ -72,7 +72,7 @@ export default defineApp({
     resolve: async (token, request, { resource }) => ({ installation: "org_1", person: { id, name }, permissions: [...] }), // your own users' tokens: verify (signature, exp, aud === resource), map to a caller, or null
     authorizationServers: ["https://crm.example.com/api/auth"], // your auth library's OAuth server, named in the protected-resource metadata
     serve: async (request) => null,                          // optional: answer your authorization server's RFC 8414 metadata at the root; null otherwise
-    clegra: clegraFromEnv()!,                                // optional: Clegra's people through Clegra's core (DPoP app tokens, tenant <company>@<issuer>, the app's own roles); CLEGRA_* variables
+    // or signIn: createSignIn(definition, { … }) from @clegra/sdk/signin: the SDK's own OAuth server on your login (no resolve needed)
   },
   path: "/api/clegra",             // optional, never under Next: where MCP lives with app.fetch elsewhere (default /mcp at the root)
   store: new SqlStore(query),        // optional: idempotency + one-time token ids in your Postgres (serverless, several instances)
@@ -321,8 +321,7 @@ export const app = defineApp({
   `fetch` leave the records out, agents can't `use` them. It hides from models; it is not a permission.
 - **Schedules** run as the *installation*: a development workspace host's token with no person and exactly the
   action's permission; `ctx.schedule` is the name. Nobody can confirm, so a `confirm: "always"` write can't be
-  scheduled (use `later`). Clegra's core issues no token without a person: an app with its own sign-in or with
-  `auth.clegra` runs its own cron; Clegra's lifecycle reaches it as signed events (`auth.clegra.events`).
+  scheduled (use `later`). No host has a token without a person: outside development an app runs its own cron.
 - **Notifications**: once you declare types, every `ctx.notify` names one (it throws otherwise). `to` defaults to the
   caller's person; a schedule must say `to`. `default: false` is off until the person turns it on.
 - **Targets** (global actions; at most 4 per action, 12 per app): `needs` lists the only fields you ever receive
@@ -332,9 +331,9 @@ export const app = defineApp({
 - **Later**: the confirmed call is stored (not run) and answered `{ data: { later: { id, at, until } } }`. The SDK adds
   the schedule and the notification type `clegra_later`; every 5 minutes the host runs the due runs once each,
   re-checking the stored proof; after `at + window` a run expires and its author is told. `ctx.cancelLater(id)`
-  cancels a pending run. With your own tokens or `auth.clegra` (no workspace host), call `app.runLater(tenant)` from
-  your cron and deliver the notifications it returns. `SqlStore.schema()` gives its tables (`clegra_store`,
-  `clegra_store_later`, `clegra_store_roles`): run it again in a new migration.
+  cancels a pending run. Outside development (no workspace host runs it), call `app.runLater(tenant)` from your cron and
+  deliver the notifications it returns. `SqlStore.schema()` gives its tables (`clegra_store`, `clegra_store_later`):
+  run it again in a new migration.
 - **Lifecycle**: the tools `clegra_installation`, `clegra_export` (one file, with its size and sha256) and
   `clegra_delete` are listed only to the installation. Export and delete must work after `uninstalled`. Without
   them the host only changes its own state and tells the administrator your data stay on your server.
@@ -371,9 +370,9 @@ change).
 8. Names (`entities`, `actions`, `artifacts`, `pages`, `agents` keys) are `[a-z][a-z0-9_]*`. Entities and artifacts share one namespace. Don't name a filter/sort field `query`, `sort`, `dir`, `cursor` or `limit`.
 9. A list page with `params` also needs `query: (params) => ({ filters, text, sort })`.
 10. Dev auth (`auth: { dev: true }`) is for `listen()` and tests only: off unless you set it, refused when `NODE_ENV=production`, answers only callers on a loopback address, refused by `toNextHandlers`. In production give `auth.resource`: your server's public MCP address, the only audience tokens are accepted for. In `resolve`, check signature, expiry, issuer and `aud === resource` (a single audience); return null or throw `AuthError` to refuse.
-11. `ctx.installation` is the tenant: what `auth.resolve` said (your organization id), or a Clegra company bound to Clegra's core (`<company>@<issuer>`). Use it as an opaque key; never take a tenant from a parameter. A Clegra caller's `ctx.person.id` is pairwise (another id in every app); their permissions are your app's roles (`app.roles`, `ctx.admin`; a company administrator has everything unless `companyAdmin: "member"`), and `ctx.actor` says when an agent acts for them.
+11. `ctx.installation` is the tenant: what `auth.resolve` said (your organization id), or the account's `installation` with the sign-in module. Use it as an opaque key; never take a tenant from a parameter. Permissions are what your sign-in says (`permissionsOf`, read live), narrowed to what the person consented to for that client; `ctx.admin` is your `resolve`'s `admin`.
 12. In `list`, search `query.text` only in `query.textFields`; in an artifact's `data`, leave out values the caller may not see (`ctx.can`): template data are yours, the SDK only drops items whose `uri` is out of the caller's reach.
-13. Your data access is yours (any DB/ORM). Your app's own website is shown in Clegra as it is (spec §5.1): `defineApp({ site: { secret } })` (needs `auth.clegra`; secret default `CLEGRA_SITE_SECRET`), `proxy.ts` = `export const proxy = siteProxy(app); export const config = { matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"] }`, `<ClegraSite />` in the root layout (theme and language from the caller on `<html>`), and in pages/actions/routes `const caller = await getClegraCaller(app)` (null → your own sign-in; else a member of `caller.installation` with `caller.permissions`). Never read your own session cookie in a Clegra frame: it is cross-site there.
+13. Your data access is yours (any DB/ORM). Your app's own website is shown in Clegra as it is (spec §5.1): `defineApp({ site: { start: "/" }, clientOrigins: [Clegra's client origins] })`, `proxy.ts` = `export const proxy = siteProxy(app); export const config = { matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"] }`, `<ClegraSite />` in the root layout. The person signs in with your own sign-in inside the frame: your session cookie must be `Secure; SameSite=None; Partitioned` over https (`frameCookie`).
 
 ## Common mistakes
 

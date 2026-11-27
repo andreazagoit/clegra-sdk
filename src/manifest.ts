@@ -85,6 +85,7 @@ export const actionSchema = z.object({
   icon: z.string().optional(),
   input: jsonSchema,
   readOnly: z.boolean(),
+  effect: z.enum(["read", "write", "irreversible"]).describe("The index profile's effect: read; write; irreversible (confirmed by the person before it runs, MCP destructiveHint)"),
   confirm: z.enum(["always", "optional", "never"]),
   public: z.literal(true).optional().describe("Callable without signing in (spec §7 «Public operations»): global, no permission; a write is always confirmed"),
   permission: z.string().optional(),
@@ -199,10 +200,10 @@ export const manifestSchema = z.object({
   site: z
     .object({
       start: z.string().describe("The path the site opens at"),
-      tool: toolRef.describe("The tool a Clegra client asks for a site ticket with (spec §5.1)"),
     })
+    .strict()
     .optional()
-    .describe("The app's own website, shown as it is in Clegra's clients (spec §5.1)"),
+    .describe("The app's own website, shown as it is in a workspace client's frame, signed in with the app's own sign-in (spec §5.1)"),
   components: z
     .record(
       z.string().regex(/^[A-Z][A-Za-z0-9]{0,39}$/),
@@ -233,12 +234,6 @@ export const manifestSchema = z.object({
   schedules: z.array(scheduleSchema).max(LIMITS.schedules + 1).optional().describe(`Actions a workspace host runs as the installation, with no person; the SDK adds \`${LATER_TOOL}\` for later runs`),
   notifications: z.array(notificationTypeSchema).optional().describe("The notification types the app sends; without them its notifications are untyped"),
   lifecycle: lifecycleSchema.optional(),
-  events: z
-    .object({ url: z.string().describe("On the app's own origin, relative to it") })
-    .strict()
-    .optional()
-    .describe("Where Clegra's core posts its signed events (clegra-event+jwt): member.removed, app.unassigned, company.suspended, app.installed, app.uninstalled"),
-  rolesTool: z.string().optional().describe("The read-only tool that says who has what inside the app, for a company administrator"),
 })
 
 export type Manifest = z.infer<typeof manifestSchema>

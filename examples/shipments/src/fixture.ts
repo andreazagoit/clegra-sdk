@@ -2,6 +2,7 @@ import { MemoryStore, type Manifest } from "@clegra/sdk"
 
 import { defineShipmentsApp, PERMISSIONS, type ShipmentsApp } from "./app"
 import { createCourier, type Courier } from "./courier"
+import { shipmentsAuth } from "./auth"
 
 /**
  * THE IN-PROCESS FIXTURE FOR HOST TESTS: the Shipments app, signed in by the
@@ -54,13 +55,12 @@ export const SHIPMENTS_URL = "https://shipments.example.com"
 
 /**
  * The manifest exactly as the app serves it at `/.well-known/clegra.json`, plain JSON, for a server at
- * `SHIPMENTS_URL` trusting Clegra's core (`https://core.example.com`). The dev fixture's manifest differs only in `auth`
- * and in what Clegra's core adds (`events`, `rolesTool`).
+ * `SHIPMENTS_URL` with its own sign-in (src/auth.ts). The dev fixture's manifest differs only in `auth`.
  */
 export const shipmentsManifest: Manifest = JSON.parse(
   JSON.stringify(
     defineShipmentsApp({
-      auth: { resource: `${SHIPMENTS_URL}/mcp`, clegra: { issuer: "https://core.example.com", registrationId: "00000000-0000-4000-8000-000000000000", allowedCompanies: "any" } },
+      auth: shipmentsAuth(defineShipmentsApp({}), { SHIPMENTS_PUBLIC_URL: SHIPMENTS_URL }).auth,
       store: new MemoryStore(),
       courier: createCourier(),
     }).manifest(),

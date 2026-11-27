@@ -38,39 +38,14 @@ export const SCHEMA_ID = `urn:${PROTOCOL_ID}:manifest:${SPEC_VERSION}`
 
 // The app's own site (spec §5.1): a Clegra client frames the app's real pages, the person signed in with a ticket.
 
-/** The tool a Clegra client asks for a site ticket with: app-only, hidden from models, only for a person's app token. */
-export const SITE_TOOL = `${PROTOCOL_ID}_site`
-/** The `typ` of a site ticket (a JWT, one minute, used once). */
-export const SITE_TICKET_TYPE = `${PROTOCOL_ID}-site+jwt`
-/** The `typ` of the site session a ticket is exchanged for (the cookie's value). */
-export const SITE_SESSION_TYPE = `${PROTOCOL_ID}-site-session+jwt`
-/** Where the SDK's side of the site lives, on the app's own origin: the exchange (`POST`), and under it the bridge's paths. */
+/** Where the SDK's side of the site lives, on the app's own origin. */
 export const SITE_PATH = `/${PROTOCOL_ID}/site`
-/** The bridge script a site page loads (spec §5.1 step 8). */
+/** The bridge script a site page loads (spec §5.1). */
 export const SITE_BRIDGE_PATH = `${SITE_PATH}/bridge.js`
-/** What the bridge reads of its session (`204` without one). */
-export const SITE_SESSION_PATH = `${SITE_PATH}/session`
-/** Where the bridge keeps a new theme or locale in the session. */
-export const SITE_CONTEXT_PATH = `${SITE_PATH}/context`
-/** Where a renewal's hidden frame lands: it tells the client the session's new end. */
-export const SITE_RENEWED_PATH = `${SITE_PATH}/renewed`
-/** The form field the ticket is posted in. */
-export const SITE_TICKET_FIELD = "ticket"
-/** The session cookie (`__Secure-`: always Secure), and the marker that says the partition is a Clegra client's. */
-export const SITE_COOKIE = `__Secure-${PROTOCOL_ID}-site`
-export const SITE_MARKER_COOKIE = `__Secure-${PROTOCOL_ID}-site-origin`
-/** How long the marker lives, in seconds. */
-export const SITE_MARKER_SECONDS = 12 * 3600
-/** How long a ticket lives at most, in seconds, and the clock skew allowed when it is checked. */
-export const SITE_TICKET_SECONDS = 60
-export const SITE_SKEW_SECONDS = 5
 /** The messages between a site's frame and the client (spec §5.1 step 8). */
 export const SITE_MESSAGES = {
   location: `${PROTOCOL_ID}/location`,
   context: `${PROTOCOL_ID}/context`,
-  renew: `${PROTOCOL_ID}/renew`,
-  renewed: `${PROTOCOL_ID}/renewed`,
-  signedOut: `${PROTOCOL_ID}/signed-out`,
 } as const
 
 // Views at the app's own origin (spec §5.3): a Clegra client frames them from the app itself, never from a host's page.
@@ -99,25 +74,3 @@ export const DELETE_TOOL = `${PROTOCOL_ID}_delete`
 /** Every reserved tool name of the installation-level caller. */
 export const INSTALLATION_TOOLS = [LATER_TOOL, INSTALLATION_TOOL, EXPORT_TOOL, DELETE_TOOL] as const
 
-// Clegra's core as the one trusted issuer (spec §7, «Clegra tokens»).
-
-/** Where the core publishes its keys; an app uses only those with `use: "app"`. */
-export const CORE_KEYS_PATH = `/.well-known/${PROTOCOL_ID}-keys.json`
-/** The `use` of the core's keys that sign what apps receive (app tokens, confirmation tokens, events). */
-export const CORE_APP_KEY_USE = "app"
-/** Where an app serves its registration document `{ registration_id, challenge, resource, issuer }` (the core reads it back). */
-export const REGISTRATION_PATH = `/.well-known/${PROTOCOL_ID}-app.json`
-/** The `typ` of an app token the core mints (also delegated, automation run and device-agent tokens). */
-export const APP_TOKEN_TYPE = `${PROTOCOL_ID}-app+jwt`
-/** The `typ` of the core's confirmation token: the person confirmed this tool with these arguments, on their device. */
-export const CONFIRMATION_TOKEN_TYPE = `${PROTOCOL_ID}-confirmation+jwt`
-/** The `typ` of the proof the person's device signs over a confirmation token. */
-export const CONFIRMATION_PROOF_TYPE = `${PROTOCOL_ID}-confirmation-proof+jwt`
-/** Where an app takes the core's events (under its `path`), as its manifest's `events.url` says. */
-export const EVENTS_PATH = `/${PROTOCOL_ID}/events`
-/** The `typ` of an event the core sends to an app's events endpoint. */
-export const EVENT_TYPE = `${PROTOCOL_ID}-event+jwt`
-/** The events the core sends. */
-export const EVENT_KINDS = ["member.removed", "app.unassigned", "company.suspended", "app.installed", "app.uninstalled"] as const
-/** The read-only tool that says who has what inside the app (for a company administrator). */
-export const ROLES_TOOL = `${PROTOCOL_ID}_roles`

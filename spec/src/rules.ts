@@ -6,7 +6,7 @@
  */
 
 import { KINDS, kindNameProblem, NAMESPACED_KIND, PROPERTY_NAME, propertyOf, type KindDef } from "./kinds"
-import { APP_ACCENTS, INSTALLATION_TOOLS, LATER_TOOL, ROLES_TOOL } from "./protocol"
+import { APP_ACCENTS, INSTALLATION_TOOLS, LATER_TOOL } from "./protocol"
 
 /** The bounds of the rules below (the JSON Schema carries the same ones). */
 export const LIMITS = {
@@ -144,7 +144,6 @@ export function manifestRuleProblems(m: RulesManifest): string[] {
   // Reserved tools: the installation-level caller's, never an app's own.
   const tools = [...m.entities.flatMap((e) => [e.tools.list.name, e.tools.get.name]), ...m.actions.map((a) => a.tool.name), ...m.pages.filter((x) => x.kind !== "record").map((x) => x.tool.name), ...m.artifacts.filter((f) => !f.entity).map((f) => f.tool.name)]
   for (const t of tools) if ((INSTALLATION_TOOLS as readonly string[]).includes(t)) p.push(`tool "${t}" is reserved (the installation's own tools)`)
-  for (const t of tools) if (t === ROLES_TOOL) p.push(`tool "${t}" is reserved (the app administrators' «who has what»)`)
 
   // The publisher: a claim, well-formed (spec §2).
   if (m.publisher) p.push(...publisherProblems(m.publisher))

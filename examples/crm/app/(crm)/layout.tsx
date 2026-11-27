@@ -1,17 +1,19 @@
 import Link from "next/link"
 import type { ReactNode } from "react"
 
+import type { Permission } from "@/lib/permissions"
 import { requireMember } from "@/lib/session"
 
 import { secondaryButtonClass } from "../_components/ui"
 import { signOutAction } from "./actions"
 
-const NAV = [
-  { href: "/", label: "Pipeline" },
-  { href: "/board", label: "Board" },
-  { href: "/deals", label: "Deals" },
-  { href: "/companies", label: "Companies" },
-  { href: "/contacts", label: "Contacts" },
+// Each page with the permission it needs: the navigation shows a person only what they may open.
+const NAV: { id: string; href: string; label: string; permission?: Permission }[] = [
+  { id: "pipeline", href: "/", label: "Pipeline", permission: "deals.view" },
+  { id: "board", href: "/board", label: "Board", permission: "deals.view" },
+  { id: "deals", href: "/deals", label: "Deals", permission: "deals.view" },
+  { id: "companies", href: "/companies", label: "Companies" },
+  { id: "contacts", href: "/contacts", label: "Contacts" },
 ]
 
 export default async function CrmLayout({ children }: { children: ReactNode }) {
@@ -23,9 +25,9 @@ export default async function CrmLayout({ children }: { children: ReactNode }) {
           <Link href="/" className="font-semibold tracking-tight">
             CRM <span className="font-normal text-zinc-500">· {member.organizationName}</span>
           </Link>
-          <nav className="flex gap-4">
-            {NAV.map((item) => (
-              <Link key={item.href} href={item.href} className="text-zinc-600 hover:text-zinc-900">
+          <nav className="flex gap-4" data-site-nav>
+            {NAV.filter((item) => (!item.permission || member.can(item.permission))).map((item) => (
+              <Link key={item.href} href={item.href} className="text-zinc-600 hover:text-zinc-900" data-testid={`nav-${item.id}`}>
                 {item.label}
               </Link>
             ))}
@@ -34,12 +36,9 @@ export default async function CrmLayout({ children }: { children: ReactNode }) {
             <span className="text-zinc-600">
               {member.user.name} <span className="text-zinc-400">({member.role})</span>
             </span>
-            {/* Shown by a Clegra client, the person signs in and out there. */}
-            {member.via === "crm" ? (
-              <form action={signOutAction}>
-                <button type="submit" className={secondaryButtonClass}>Sign out</button>
-              </form>
-            ) : null}
+            <form action={signOutAction}>
+              <button type="submit" className={secondaryButtonClass}>Sign out</button>
+            </form>
           </div>
         </div>
       </header>

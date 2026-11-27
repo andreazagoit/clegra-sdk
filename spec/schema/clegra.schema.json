@@ -141,36 +141,16 @@
       "description": "Hosts resolve record and artifact URIs with this tool"
     },
     "site": {
-      "description": "The app's own website, shown as it is in Clegra's clients (spec §5.1)",
+      "description": "The app's own website, shown as it is in a workspace client's frame, signed in with the app's own sign-in (spec §5.1)",
       "type": "object",
       "properties": {
         "start": {
           "type": "string",
           "description": "The path the site opens at"
-        },
-        "tool": {
-          "type": "object",
-          "properties": {
-            "name": {
-              "type": "string",
-              "description": "The MCP tool"
-            },
-            "plain": {
-              "type": "boolean",
-              "description": "Listed to plain MCP clients"
-            }
-          },
-          "required": [
-            "name",
-            "plain"
-          ],
-          "additionalProperties": false,
-          "description": "The tool a Clegra client asks for a site ticket with (spec §5.1)"
         }
       },
       "required": [
-        "start",
-        "tool"
+        "start"
       ],
       "additionalProperties": false
     },
@@ -643,6 +623,15 @@
           "readOnly": {
             "type": "boolean"
           },
+          "effect": {
+            "type": "string",
+            "enum": [
+              "read",
+              "write",
+              "irreversible"
+            ],
+            "description": "The index profile's effect: read; write; irreversible (confirmed by the person before it runs, MCP destructiveHint)"
+          },
           "confirm": {
             "type": "string",
             "enum": [
@@ -754,6 +743,7 @@
           "title",
           "input",
           "readOnly",
+          "effect",
           "confirm",
           "tool"
         ],
@@ -1379,24 +1369,6 @@
       },
       "additionalProperties": false,
       "description": "The app-only tools a workspace host calls as the installation: told of enable/disable/uninstall, export the tenant's data, delete it"
-    },
-    "events": {
-      "description": "Where Clegra's core posts its signed events (clegra-event+jwt): member.removed, app.unassigned, company.suspended, app.installed, app.uninstalled",
-      "type": "object",
-      "properties": {
-        "url": {
-          "type": "string",
-          "description": "On the app's own origin, relative to it"
-        }
-      },
-      "required": [
-        "url"
-      ],
-      "additionalProperties": false
-    },
-    "rolesTool": {
-      "description": "The read-only tool that says who has what inside the app, for a company administrator",
-      "type": "string"
     }
   },
   "required": [

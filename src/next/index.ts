@@ -1,5 +1,4 @@
 import type { App } from "../define"
-import type { SiteCaller } from "../site"
 import type { NextConfig } from "next"
 import type { ReactElement } from "react"
 
@@ -20,16 +19,15 @@ import type { ReactElement } from "react"
 /** Where the catch-all route lives by default (`app/api/clegra/[...path]/route.ts`). */
 export const DEFAULT_MOUNT = "/api/clegra"
 
-/** The paths rewritten to the route: MCP, the manifest, Clegra's registration document, events and views, the OAuth metadata (RFC 9728, RFC 8414, OpenID discovery). */
+/** The paths rewritten to the route: MCP, the manifest, views, the site's bridge, the sign-in module, the OAuth metadata (RFC 9728, RFC 8414, OpenID discovery). */
 const PUBLIC_PATHS = [
   "/mcp",
-  // MANIFEST_PATH, REGISTRATION_PATH, EVENTS_PATH and VIEWS_PATH (a test keeps them equal; not imported so that next.config does not load the SDK).
+  // MANIFEST_PATH, VIEWS_PATH and SITE_BRIDGE_PATH (a test keeps them equal; not imported so that next.config does not load the SDK).
   "/.well-known/clegra.json",
-  "/.well-known/clegra-app.json",
-  "/clegra/events",
   "/clegra/views/:path*",
-  "/clegra/site",
-  "/clegra/site/:path*",
+  "/clegra/site/bridge.js",
+  // The sign-in module (`@clegra/sdk/signin`): authorize, token, revoke, its keys.
+  "/oauth/:path*",
   "/.well-known/oauth-protected-resource/:path*",
   "/.well-known/oauth-authorization-server/:path*",
   "/.well-known/openid-configuration/:path*",
@@ -38,6 +36,8 @@ const PUBLIC_PATHS = [
 export type NextHandlerOptions = {
   /** Where the catch-all route is mounted (default `/api/clegra`): the same value as in `withClegra`. */
   mount?: string
+  /** The password login's page (`passwordLogin({ path })`), as given to `withClegra`. */
+  signInPath?: string
   /**
    * The site's public origin (`https://crm.example.com`), when the request alone can't say it (a proxy that
    * rewrites the host). Default: the `CLEGRA_PUBLIC_URL` environment variable; without either, the origin is
@@ -86,6 +86,7 @@ function publicOrigin(value: string | undefined, where: string): URL | null {
  */
 export function toNextHandlers(app: App, options: NextHandlerOptions = {}): NextHandlers {
   const mount = mountOf(options.mount)
+  const signInPath = options.signInPath ? mountOf(options.signInPath) : null
   const fixedOrigin = options.publicUrl !== undefined ? publicOrigin(options.publicUrl, "publicUrl") : publicOrigin(process.env.CLEGRA_PUBLIC_URL, "CLEGRA_PUBLIC_URL")
   if (app.devMode) {
     throw new Error(
@@ -101,7 +102,7 @@ export function toNextHandlers(app: App, options: NextHandlerOptions = {}): Next
     const url = new URL(request.url)
     let path = url.pathname
     if (path === mount || path.startsWith(`${mount}/`)) path = path.slice(mount.length) || "/"
-    else if (path !== "/mcp" && path !== "/clegra/events" && !path.startsWith("/clegra/views/") && path !== "/clegra/site" && !path.startsWith("/clegra/site/") && !path.startsWith("/.well-known/")) {
+    else if (path !== "/mcp" && !path.startsWith("/clegra/views/") && path !== "/clegra/site/bridge.js" && !path.startsWith("/oauth/") && !path.startsWith("/.well-known/") && !(signInPath && (path === signInPath || path === `${signInPath}/out`))) {
       // The route file is somewhere else than `mount` says: a configuration error, said instead of guessed around.
       return new Response(JSON.stringify({ error: "misconfigured", error_description: `@clegra/sdk/next: request for ${path} reached the clegra route, but its mount is ${mount} (set the same mount in toNextHandlers and withClegra)` }), {
         status: 500,
@@ -150,65 +151,35 @@ const siteOf = async (source: AppSource) => {
 const OWN = /^\/(?:mcp$|clegra\/|\.well-known\/|api\/clegra(?:\/|$))/
 
 /**
- * proxy.ts for the app's own site (spec §5.1 step 7), in front of every page:
+ * proxy.ts for the app's own site (spec §5.1), in front of every page:
  *
  * ```ts
  * export const proxy = siteProxy(app)
  * export const config = { matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"] }
  * ```
  *
- * A page opened in a Clegra client with a session gets `Content-Security-Policy: frame-ancestors 'self' <the
- * client's origin>`; a frame of a Clegra client's partition whose session is gone gets the signed-out page (the
- * client opens the site again); anything else gets `otherwise` (default `frame-ancestors 'none'`: the site's own
- * sign-in, consent and settings are never framed). The SDK's own paths are left to the clegra route. An app that
- * declares no site (Clegra not configured) gets `otherwise` everywhere. Options:
- * `publicUrl` as in `toNextHandlers`; `otherwise`: the CSP of a page outside a Clegra session (null: none set).
+ * Every page of the site gets `Content-Security-Policy: frame-ancestors 'self' <the app's client origins>`: a
+ * workspace client (Clegra's web and desktop clients) may frame it, no other site. Who is signed in is the app's own
+ * session (its sign-in works inside the frame: `frameCookie` of `@clegra/sdk/signin`). The SDK's own paths are left
+ * to the clegra route. An app that declares no site gets `otherwise` (default `frame-ancestors 'none'`; null: none set).
  */
-export function siteProxy(source: AppSource, options: { publicUrl?: string; otherwise?: string | null } = {}): (request: Request) => Promise<Response> {
-  const fixedOrigin = options.publicUrl !== undefined ? publicOrigin(options.publicUrl, "publicUrl") : publicOrigin(process.env.CLEGRA_PUBLIC_URL, "CLEGRA_PUBLIC_URL")
+export function siteProxy(source: AppSource, options: { otherwise?: string | null } = {}): (request: Request) => Promise<Response> {
   const otherwise = options.otherwise === undefined ? "frame-ancestors 'none'" : options.otherwise
   return async (request) => {
     const { NextResponse } = await import("next/server")
     const { pathname } = new URL(request.url)
     if (OWN.test(pathname)) return NextResponse.next()
     const site = await siteOf(source)
-    const { headers, response } = site ? await site.guard(new Request(request.url, { headers: publicHeaders(request.headers, fixedOrigin) })) : { headers: null, response: null }
-    if (response) return response
     const next = NextResponse.next()
-    const policy = headers?.["content-security-policy"] ?? otherwise
+    const policy = site ? site.headers()["content-security-policy"] : otherwise
     if (policy) next.headers.set("content-security-policy", policy)
     return next
   }
 }
 
-/** The headers a page's guard returns for this request, for an app that writes its own proxy (`app.site.guard`). */
-export async function siteGuard(source: AppSource, request: Request, options: { publicUrl?: string } = {}): Promise<{ headers: Record<string, string> | null; response: Response | null }> {
-  const fixedOrigin = options.publicUrl !== undefined ? publicOrigin(options.publicUrl, "publicUrl") : publicOrigin(process.env.CLEGRA_PUBLIC_URL, "CLEGRA_PUBLIC_URL")
-  const site = await siteOf(source)
-  if (!site) return { headers: null, response: null }
-  return site.guard(new Request(request.url, { headers: publicHeaders(request.headers, fixedOrigin) }))
-}
-
-/**
- * Who looks at this page from a Clegra client (spec §5.1 step 6), in a server component, route handler or server
- * function: the person the site ticket was issued to, with the tenant (`installation`, as handlers' `ctx`), their
- * permissions in the app, locale and theme; null outside a Clegra session (the app's own sign-in applies then).
- */
-export async function getClegraCaller(source: AppSource, options: { publicUrl?: string } = {}): Promise<SiteCaller | null> {
-  const fixedOrigin = options.publicUrl !== undefined ? publicOrigin(options.publicUrl, "publicUrl") : publicOrigin(process.env.CLEGRA_PUBLIC_URL, "CLEGRA_PUBLIC_URL")
-  // The request first: it makes the page dynamic before the app (its database, its auth) is touched, never at build time.
-  const { headers } = await import("next/headers")
-  const given = publicHeaders(new Headers(await headers()), fixedOrigin)
-  if (!given.get("cookie")?.includes("clegra-site=")) return null
-  const site = await siteOf(source)
-  if (!site) return null
-  const proto = given.get("x-forwarded-proto") ?? "http"
-  return site.caller(new Request(`${proto}://${given.get("x-forwarded-host") ?? given.get("host") ?? "localhost"}/`, { headers: given }))
-}
-
 /**
  * The bridge between a page of the site and the Clegra client that frames it (spec §5.1 step 8): put it once in the
- * root layout. It does nothing outside a Clegra session. Without React: `<script src="/clegra/site/bridge.js" async>`.
+ * root layout. It does nothing outside a frame of one of the app's client origins. Without React: `<script src="/clegra/site/bridge.js" async>`.
  */
 export async function ClegraSite(): Promise<ReactElement> {
   const { createElement } = await import("react")
@@ -224,12 +195,15 @@ type ConfigFunction = (phase: string, context: { defaultConfig: NextConfig }) =>
 export type WithClegraOptions = {
   /** Where the catch-all route is mounted (default `/api/clegra`): the same value as in `toNextHandlers`. */
   mount?: string
+  /** The sign-in module's password login page (`passwordLogin({ path })`, e.g. `/signin`): it and `<path>/out` go to the route too. */
+  signInPath?: string
 }
 
 /** The rewrites `withClegra` adds (in `beforeFiles`, so no page or public file can shadow them). */
 export function clegraRewrites(options: WithClegraOptions = {}): Rewrite[] {
   const mount = mountOf(options.mount)
-  return PUBLIC_PATHS.map((source) => ({ source, destination: `${mount}${source}` }))
+  const signIn = options.signInPath ? mountOf(options.signInPath) : null
+  return [...PUBLIC_PATHS, ...(signIn ? [signIn, `${signIn}/out`] : [])].map((source) => ({ source, destination: `${mount}${source}` }))
 }
 
 function withConfig(config: NextConfig, options: WithClegraOptions): NextConfig {

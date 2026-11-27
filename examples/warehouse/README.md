@@ -57,27 +57,8 @@ The same rules apply in the pages and over MCP.
   - it was issued for this MCP server alone (`aud`) and has not expired;
   - it is not DPoP-bound and carries the `clegra` scope and the organization;
   - the person is still a member of that organization, with their role read live.
-- **People of Clegra companies** (Clegra's core, `CLEGRA_ISSUER` and the other `CLEGRA_*` variables): the SDK verifies
-  the core's tokens itself (DPoP). Their tenant is `<company>@<issuer>`, never an organization (`lib/tenants.ts`). Each
-  company gets its own copy of the demo data (Aurora Hardware) on its first call, in one transaction. A Clegra person
-  is not a better-auth user: their name comes from the token and is kept in `person` when they change something, so
-  lists show who did it. What they may do is the warehouse's own roles (`SqlStore`'s third table, migration
-  `007_clegra_roles.sql`): a company administrator has everything, a member the defaults until an administrator
-  assigns more (`app.roles`).
-- **What a host runs as the installation** (the SDK's dev authority's workspace host with no person, in development
-  and tests):
-  - the schedule `low_stock_check` (every 60 minutes) runs the app-only action `check_low_stock`. It sends a
-    notification of the declared type `low_stock` to the company's administrators (`to: "admins"`), once per
-    product at or under its reorder level, until it is back in stock (`stock_alert`);
-  - the lifecycle: `clegra_installation` keeps the state the host last told (`installation_state`), `clegra_export`
-    gives the installation's data as one JSON file, and `clegra_delete` deletes them (idempotent, with counts). These
-    are for a workspace host's installations only; an organization's data belong to its own sign-in.
-    `db/migrations/006_clegra_lifecycle.sql` also re-runs `SqlStore.schema()`: the SDK's second table (later runs)
-    is cleared by every delete.
-- **Page actions**: «New order» on the orders list.
-- **Wiring**: `app/api/clegra/[...path]/route.ts` (`toNextHandlers`) and `withClegra` in
-  `next.config.ts`. The rewrites put `/mcp`, `/.well-known/clegra.json` and the OAuth metadata
-  at the root of the site.
+- **Every client acts with the warehouse's own tokens.** Clegra, ChatGPT and Claude alike: the person signs in to the
+  warehouse and consents; nobody signs in with an account of another system.
 
 ## Connect an MCP client
 
@@ -116,17 +97,15 @@ person then goes through these steps:
 ## Runtime
 
 Nothing is written to disk at runtime: sessions, OAuth clients, signing keys, rate limits and
-the SDK's idempotency store (`clegra_store`, also the used site tickets) all live in Postgres.
+the SDK's idempotency store (`clegra_store`) all live in Postgres.
 
-## In a Clegra client: the app's own site
+## In a workspace client: the app's own site
 
-With Clegra's core configured (`CLEGRA_ISSUER`), a Clegra client shows the warehouse as its own site (spec §5.1): it
-frames the real pages (dashboard, stock board, products, movements, orders) at the app's origin, the person signed in
-with a one-minute site ticket. `proxy.ts` (`siteProxy`) is the one place that says who may frame a page: the
-session's client only, and no one outside a Clegra session, so sign-in and consent can't be clickjacked. The root
-layout loads the bridge (`<ClegraSite />`) and starts in the client's theme and language. `lib/session.ts` takes the
-Clegra caller (`getClegraCaller`) as a viewer of its company's installation, with the permissions the warehouse's
-roles give them there; their changes are recorded with their name.
+With client origins configured (`CLEGRA_CLIENT_ORIGINS`), a workspace client (Clegra's web and desktop clients) shows
+the warehouse as its own site (spec §5.1): it frames the real pages (dashboard, stock board, products, movements,
+orders) at the app's origin, and the person signs in there with the warehouse's own sign-in (over https its session
+cookie is `SameSite=None; Secure; Partitioned`, kept in the frame's partition). `proxy.ts` (`siteProxy`) is the one
+place that says who may frame a page: those origins only. The root layout loads the bridge (`<ClegraSite />`).
 
 ## Tests
 
@@ -142,5 +121,5 @@ roles give them there; their changes are recorded with their name.
 - the token checks (another audience, tampered, expired, opaque, DPoP-bound, missing scope or organization);
 - role changes and removed members, with tokens issued before;
 - the consent steps;
-- the app's own site: a site ticket exchanged once for the session, the caller a viewer of the company's installation;
-- the conformance suite, also as a Clegra company's person (the site's checks).
+- the app's own site: in the manifest and framable by the client origins only;
+- the conformance suite.

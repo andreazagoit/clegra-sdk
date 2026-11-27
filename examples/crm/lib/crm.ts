@@ -9,7 +9,7 @@ import type { PgColumn } from "drizzle-orm/pg-core"
 import { calls, companies, contacts, deals, INDUSTRIES, member, people, STAGES, tenants, user } from "@/db/schema"
 
 import { db, type Tx } from "./db"
-import { OWNER_NAMES, SALES_TEAM_DATA, type DemoData, type OwnerKey } from "./demo-data"
+import { type DemoData, type OwnerKey } from "./demo-data"
 
 export { INDUSTRIES, STAGES }
 export type Stage = (typeof STAGES)[number]
@@ -258,17 +258,13 @@ export async function markWon(orgId: string, dealId: string, input: { note?: str
   })
 }
 
-/**
- * A new deal at the `lead` stage, owned by `owner`. `owner.name` is kept only when given: for people
- * a workspace host signed in, whom the CRM can't name from its own users.
- */
-export async function createDeal(orgId: string, owner: { id: string; name?: string }, input: { name: string; company: string; value: number; closeDate: string }): Promise<Deal> {
+/** A new deal at the `lead` stage, owned by `owner` (a user of the CRM). */
+export async function createDeal(orgId: string, owner: { id: string }, input: { name: string; company: string; value: number; closeDate: string }): Promise<Deal> {
   return db().transaction(async (tx) => {
     const [company] = await tx.select({ id: companies.id }).from(companies).where(and(eq(companies.orgId, orgId), eq(companies.id, input.company)))
     if (!company) throw new CrmError("unknown_company", `Unknown company ${input.company}`)
     const deal: Deal = { id: newId("d"), name: input.name.trim(), company: input.company, stage: "lead", value: input.value, closeDate: input.closeDate, owner: owner.id }
     await tx.insert(deals).values({ orgId, id: deal.id, name: deal.name, companyId: deal.company, stage: deal.stage, value: deal.value, closeDate: deal.closeDate, ownerId: deal.owner })
-    if (owner.name) await tx.insert(people).values({ orgId, id: owner.id, name: owner.name }).onConflictDoUpdate({ target: [people.orgId, people.id], set: { name: owner.name } })
     return deal
   })
 }
@@ -316,7 +312,7 @@ export async function boardDeals(orgId: string): Promise<Deal[]> {
 
 // ------------------------------------------------------------------ people
 
-/** Names by person id: the organization's members (better-auth users), then people a workspace host signed in. */
+/** Names by person id: the organization's members (better-auth users), then the demo data's named owners. */
 export async function personNames(orgId: string, ids: string[]): Promise<Record<string, string>> {
   if (!ids.length) return {}
   const [members, others] = await Promise.all([
@@ -332,9 +328,6 @@ export async function personNames(orgId: string, ids: string[]): Promise<Record<
 
 // ------------------------------------------------------------------ tenants
 
-/** A workspace host's installation (`<installation>@<issuer>`): never a better-auth organization id. */
-export const isWorkspaceInstallation = (id: string) => id.includes("@")
-
 /** A tenant's starting data, its owners mapped to person ids. Inside the transaction that creates the tenant. */
 export async function insertTenantData(tx: Tx, orgId: string, data: DemoData, owners: Record<OwnerKey, string>) {
   // Rows in a stable order: lists without a sort show them as the data lists them.
@@ -346,58 +339,5 @@ export async function insertTenantData(tx: Tx, orgId: string, data: DemoData, ow
   if (called.length) await tx.insert(calls).values(called.map((c) => ({ orgId, id: `call-${c.id}`, contactId: c.id, personId: owners.alice, note: c.lastNote ?? null, calledOn: c.lastCall! })))
   if (data.deals.length)
     await tx.insert(deals).values(data.deals.map((d, i) => ({ orgId, id: d.id, name: d.name, companyId: d.company, stage: d.stage, value: d.value, closeDate: d.closeDate, ownerId: owners[d.owner], createdAt: at(i) })))
-}
-
-const provisioned = new Set<string>()
-
-/**
- * A workspace host's installation gets its own copy of the sales team's data the first time it calls:
- * one transaction, idempotent (a second caller finds the tenant and adds nothing).
- */
-export async function provisionWorkspace(installation: string): Promise<void> {
-  if (!isWorkspaceInstallation(installation)) throw new Error(`"${installation}" is not a workspace installation`)
-  if (provisioned.has(installation)) return
-  await db().transaction(async (tx) => {
-    const created = await tx.insert(tenants).values({ id: installation, kind: "workspace" }).onConflictDoNothing().returning({ id: tenants.id })
-    if (!created.length) return
-    // The host's people are named by their ids there; the demo owners keep theirs.
-    const owners = { alice: "alice", ben: "ben", emma: "emma" } satisfies Record<OwnerKey, string>
-    await insertTenantData(tx, installation, SALES_TEAM_DATA, owners)
-    await tx.insert(people).values(Object.entries(OWNER_NAMES).map(([id, name]) => ({ orgId: installation, id, name })))
-  })
-  provisioned.add(installation)
-}
-
-/** Everything the CRM keeps for one tenant, as plain rows: what a workspace host's export holds. */
-export async function tenantData(orgId: string) {
-  const [companyRows, contactRows, dealRows, callRows, peopleRows] = await Promise.all([
-    db().select(companyFields).from(companies).where(eq(companies.orgId, orgId)).orderBy(asc(companies.createdAt), asc(companies.id)),
-    db().select(contactFields).from(contacts).where(eq(contacts.orgId, orgId)).orderBy(asc(contacts.createdAt), asc(contacts.id)),
-    db().select({ ...dealFields, wonNote: deals.wonNote }).from(deals).where(eq(deals.orgId, orgId)).orderBy(asc(deals.createdAt), asc(deals.id)),
-    db().select({ id: calls.id, contact: calls.contactId, person: calls.personId, note: calls.note, calledOn: calls.calledOn }).from(calls).where(eq(calls.orgId, orgId)).orderBy(asc(calls.calledOn), asc(calls.id)),
-    db().select({ id: people.id, name: people.name }).from(people).where(eq(people.orgId, orgId)).orderBy(asc(people.id)),
-  ])
-  return { companies: companyRows.map(toCompany), contacts: contactRows.map(toContact), deals: dealRows, calls: callRows, people: peopleRows }
-}
-
-/**
- * Deletes a workspace installation's tenant and, through its foreign keys, every row it has. Idempotent: a second
- * call finds nothing and answers zeros. A later call of the same installation gets a fresh copy of the demo data.
- */
-export async function deleteWorkspace(installation: string): Promise<Record<"companies" | "contacts" | "deals" | "calls", number>> {
-  if (!isWorkspaceInstallation(installation)) throw new Error(`"${installation}" is not a workspace installation`)
-  const counts = await db().transaction(async (tx) => {
-    const n = async (table: typeof companies | typeof contacts | typeof deals | typeof calls) => (await tx.select({ n: count() }).from(table).where(eq(table.orgId, installation)))[0]?.n ?? 0
-    const counted = { companies: await n(companies), contacts: await n(contacts), deals: await n(deals), calls: await n(calls) }
-    await tx.delete(tenants).where(eq(tenants.id, installation))
-    return counted
-  })
-  provisioned.delete(installation)
-  return counts
-}
-
-/** For tests: forget which installations were provisioned in this process. */
-export function forgetProvisioned() {
-  provisioned.clear()
 }
 

@@ -3,7 +3,7 @@
 import type { App } from "@clegra/sdk"
 
 import { createCrmApp } from "./app"
-import { crmAuth } from "./auth"
+import { crmAuth, crmClientOrigins } from "./auth"
 
 let app: App | undefined
-export const crmApp = (): App => (app ??= createCrmApp({ auth: crmAuth() }))
+export const crmApp = (): App => (app ??= createCrmApp({ auth: crmAuth(), clientOrigins: crmClientOrigins() }))

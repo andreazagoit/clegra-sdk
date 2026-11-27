@@ -23,12 +23,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
             <span className="text-stone-600">
               {viewer.name} <span className="text-stone-400">· {viewer.role}</span>
             </span>
-            {/* Shown by a Clegra client, the person signs in and out there. */}
-            {viewer.via === "warehouse" ? (
-              <button type="submit" className="text-stone-500 hover:text-stone-900">
-                Sign out
-              </button>
-            ) : null}
+            <button type="submit" className="text-stone-500 hover:text-stone-900">
+              Sign out
+            </button>
           </form>
         </div>
       </header>

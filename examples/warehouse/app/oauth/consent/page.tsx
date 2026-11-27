@@ -6,7 +6,7 @@ import { consentAction } from "@/app/actions"
 import { ActionForm } from "@/components/action-form"
 import { getAuth } from "@/lib/auth"
 import { oauthQueryHolds, oauthQueryOf, restartable, restartAuthorization, TOO_OLD_MESSAGE } from "@/lib/auth-http"
-import { sessionViewer } from "@/lib/session"
+import { getViewer } from "@/lib/session"
 
 export const metadata: Metadata = { title: "Connect an app" }
 
@@ -30,7 +30,7 @@ export default async function ConsentPage({ searchParams }: { searchParams: Prom
     if (!restartable(oauthQuery)) return <Shell><p role="alert" className="text-sm text-red-700">{TOO_OLD_MESSAGE}</p></Shell>
     redirect(restartAuthorization(oauthQuery, { signedIn: false }))
   }
-  const viewer = await sessionViewer()
+  const viewer = await getViewer()
   if (!viewer) redirect(oauthQuery ? `/sign-in?${oauthQuery}` : "/sign-in")
   if (!oauthQuery || typeof sp.client_id !== "string") return <Shell><p className="text-sm text-stone-600">This page is part of connecting an app; open it from the app that asks.</p></Shell>
   const clientId = sp.client_id

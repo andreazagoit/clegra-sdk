@@ -5,8 +5,7 @@ import { listPage, type ListPage, type ListQuery, type ListSpec } from "./sql-li
 
 /**
  * The warehouse itself: every read and write of the app, in plain SQL, always
- * scoped by the tenant: a better-auth organization (the app's own users) or a
- * workspace host's installation (`<installation>@<issuer>`). The pages, the server actions and the app
+ * scoped by the tenant: a better-auth organization (the app's own users). The pages, the server actions and the app
  * definition all call these same functions.
  */
 

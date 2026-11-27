@@ -71,25 +71,6 @@ const contract = (name: string, store: () => IdempotencyStore) =>
       assert.equal(await s.hit(`${counter}-short`, 1000), 1, "a new window")
     })
 
-    test("roles: assigned and seen per person per tenant, removed one by one or all", async () => {
-      const roles = store().roles!
-      const tenant = `co-${Math.random()}@https://core.test`
-      assert.equal(await roles.get(tenant, "pw-1"), null)
-      await roles.seen(tenant, "pw-1", { name: "Zed", email: "zed@clegra.test", companyRole: "member" })
-      await roles.assign(tenant, "pw-2", { admin: false, permissions: ["b.x", "a.y", "a.y"] })
-      await roles.seen(tenant, "pw-2", { name: "Ann", email: null, companyRole: "admin" })
-      const one = await roles.get(tenant, "pw-1")
-      assert.deepEqual([one?.assigned, one?.name, one?.companyRole, one?.permissions], [false, "Zed", "member", []])
-      const two = await roles.get(tenant, "pw-2")
-      assert.deepEqual([two?.assigned, two?.permissions, two?.companyRole, typeof two?.seenAt], [true, ["a.y", "b.x"], "admin", "string"], "seen keeps what was assigned")
-      assert.deepEqual((await roles.list(tenant)).map((g) => g.sub), ["pw-2", "pw-1"], "by name")
-      assert.deepEqual(await roles.list(`other@https://core.test`), [])
-      assert.equal(await roles.remove(tenant, "pw-1"), true)
-      assert.equal(await roles.remove(tenant, "pw-1"), false)
-      assert.equal(await roles.clear(tenant), 1)
-      assert.deepEqual(await roles.list(tenant), [])
-    })
-
     test("two begins at the same moment: exactly one runs", async () => {
       const s = store()
       const key = `k-${Math.random()}`
@@ -167,13 +148,13 @@ const laterContract = (name: string, store: () => IdempotencyStore) =>
 laterContract("MemoryStore", () => new MemoryStore())
 laterContract("SqlStore (Postgres, PGlite)", () => sql)
 
-test("SqlStore.schema creates its three tables, and can run again (a new migration)", async () => {
+test("SqlStore.schema creates its two tables, and can run again (a new migration)", async () => {
   const db = new PGlite()
   try {
     await db.exec(SqlStore.schema("app_store"))
     await db.exec(SqlStore.schema("app_store"))
     const tables = (await db.query<{ table_name: string }>("SELECT table_name FROM information_schema.tables WHERE table_name LIKE 'app_store%' ORDER BY table_name")).rows.map((r) => r.table_name)
-    assert.deepEqual(tables, ["app_store", "app_store_later", "app_store_roles"])
+    assert.deepEqual(tables, ["app_store", "app_store_later"])
   } finally {
     await db.close()
   }
@@ -188,4 +169,32 @@ test("SqlStore refuses a table name that isn't a plain SQL name", () => {
 test("SqlStore takes a driver that answers with an array of rows", async () => {
   const s = new SqlStore(async (text, params) => (await pg.query(text, params)).rows as Record<string, unknown>[])
   assert.equal(await s.once(`jti-${Math.random()}`, 60_000), true)
+})
+
+test("SqlSignInStore (PGlite): get, set with expiry, take once, list by prefix, once, hit", async () => {
+  const { SqlSignInStore } = await import("./signin/store")
+  const db = new PGlite()
+  try {
+    await db.exec(SqlSignInStore.schema())
+    await db.exec(SqlSignInStore.schema())
+    const s = new SqlSignInStore((text, params) => db.query(text, params) as never)
+    await s.set("link:a:1", { id: "1" }, null)
+    await s.set("link:a:2", { id: "2" }, 60_000)
+    await s.set("link:b:1", { id: "3" }, 60_000)
+    await s.set("gone", 1, 1)
+    await new Promise((r) => setTimeout(r, 10))
+    assert.equal(await s.get("gone"), null)
+    assert.deepEqual((await s.list("link:a:")).map((e) => e.key), ["link:a:1", "link:a:2"])
+    assert.deepEqual(await s.take("link:a:2"), { id: "2" })
+    assert.equal(await s.take("link:a:2"), null)
+    assert.equal(await s.once("j1", 60_000), true)
+    assert.equal(await s.once("j1", 60_000), false)
+    assert.equal(await s.hit("h", 60_000), 1)
+    assert.equal(await s.hit("h", 60_000), 2)
+    await s.set("x_%", true, null)
+    assert.deepEqual((await s.list("x_%")).map((e) => e.key), ["x_%"])
+    assert.deepEqual(await s.list("x__"), [])
+  } finally {
+    await db.close()
+  }
 })

@@ -260,15 +260,16 @@ export type AppDefinition<E extends Schemas, A extends Schemas, F extends Schema
    */
   people?: PeopleResolver
   /**
-   * The app's own website (spec §5.1): Clegra's clients show the app as that site, the person signed in with a
-   * one-minute ticket. `start` (default `/`), the signing secret (default `CLEGRA_SITE_SECRET`), `sessionSeconds`.
-   * Needs `auth.clegra`. The site's pages read the caller with `getClegraCaller` (`@clegra/sdk/next`).
+   * The app's own website (spec §5.1): a workspace client shows the app as that site, in a frame, where the person
+   * signs in with the app's own sign-in. `start` (default `/`).
    */
   site?: SiteOptions
+  /** The origins of the workspace clients that frame the app's site and views (Clegra's web and desktop clients). */
+  clientOrigins?: string[]
 }
 
 /** What defineApp returns: the app, ready to serve. */
-export type App = Pick<AppServer, "name" | "locale" | "manifest" | "fetch" | "start" | "devMode" | "uri" | "artifactUri" | "parseUri" | "createMcpServer" | "devToken" | "devConfirmation" | "site" | "runLater" | "roles">
+export type App = Pick<AppServer, "name" | "locale" | "manifest" | "fetch" | "start" | "devMode" | "uri" | "artifactUri" | "parseUri" | "createMcpServer" | "devToken" | "devConfirmation" | "site" | "runLater">
 
 const confirmOf = (c: boolean | Confirm | undefined): Confirm | undefined => (c === true ? "always" : c === false ? "never" : c)
 

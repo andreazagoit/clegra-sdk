@@ -8,10 +8,9 @@ import { createShipmentsApp, SHIPMENTS_INSTALLATION } from "./fixture"
  * Starts the Shipments app server (MCP at /mcp, the manifest at /.well-known/clegra.json).
  * The data are invented and in memory: a restart starts again from the seed.
  *
- *   npm start      for Clegra companies (src/auth.ts):
- *                    SHIPMENTS_PUBLIC_URL  the address the companies connect it from (required; MCP at <url>/mcp)
- *                    CLEGRA_ISSUER, CLEGRA_REGISTRATION_ID, CLEGRA_ALLOWED_COMPANIES (required),
- *                    CLEGRA_REGISTRATION_CHALLENGE, CLEGRA_CLIENT_ORIGINS
+ *   npm start      with the app's own sign-in (src/auth.ts):
+ *                    SHIPMENTS_PUBLIC_URL  the app's public address (required; MCP at <url>/mcp, sign-in at <url>/signin)
+ *                    SHIPMENTS_SIGNIN_KEY  the sign-in's signing key (required in production), CLEGRA_CLIENT_ORIGINS
  *                    SHIPMENTS_HOST        default 0.0.0.0
  *   npm run dev    on 127.0.0.1 only, signed in by the SDK's dev authority (test people, a printed token); never in production
  *   SHIPMENTS_PORT default 4319
@@ -27,10 +26,11 @@ async function main() {
     stopOn(running.close)
     return
   }
-  const auth = shipmentsAuth()
+  // The sign-in reads the app's definition (its title and permissions as scopes), then the app is served with it.
+  const { auth } = shipmentsAuth(defineShipmentsApp({}))
   const app = defineShipmentsApp({ auth })
   const running = await listen(app, { port, host: process.env.SHIPMENTS_HOST ?? "0.0.0.0" })
-  console.log(`Shipments on ${running.url}: MCP address ${auth.resource}, trusting ${auth.clegra.issuer}`)
+  console.log(`Shipments on ${running.url}: MCP address ${auth.resource}, signed in at ${new URL("/signin", auth.resource)}`)
   stopOn(running.close)
 }
 

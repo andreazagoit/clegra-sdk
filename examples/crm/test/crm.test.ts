@@ -7,7 +7,7 @@ import { users } from "./setup"
 import { and, eq } from "drizzle-orm"
 
 import { companies, deals, tenants } from "../db/schema"
-import { createDeal, CrmError, forgetProvisioned, getDeal, listContacts, listDeals, logCall, markWon, personNames, provisionWorkspace, setStage } from "../lib/crm"
+import { createDeal, CrmError, getDeal, listContacts, listDeals, logCall, markWon, personNames, setStage } from "../lib/crm"
 import { db } from "../lib/db"
 import { permissionsForRole } from "../lib/permissions"
 
@@ -68,26 +68,6 @@ test("closed deals stay closed; a call updates the contact and its history", asy
   const contact = await logCall(ORBIT, "ct2", { personId: users.ben, note: "Interested in the pilot" })
   assert.equal(contact.lastNote, "Interested in the pilot")
   assert.equal(contact.lastCall, new Date().toISOString().slice(0, 10))
-})
-
-test("a workspace installation gets its own copy of the demo data, once, even when called at the same time", async () => {
-  const installation = "acme-node@https://node.example"
-  await Promise.all([provisionWorkspace(installation), provisionWorkspace(installation), provisionWorkspace(installation)])
-  forgetProvisioned()
-  await provisionWorkspace(installation)
-  const all = await listDeals(installation, { limit: 50 })
-  assert.equal(all.total, 5)
-  assert.equal(all.rows.find((d) => d.id === "d1")!.owner, "alice")
-  const [tenant] = await db().select().from(tenants).where(eq(tenants.id, installation))
-  assert.equal(tenant!.kind, "workspace")
-  // Its own copy: a change there is not the organization's.
-  await markWon(installation, "d1")
-  assert.equal((await getDeal(ORBIT, "d1"))!.stage, "proposal")
-  assert.deepEqual(await personNames(installation, ["alice", "ben", "nobody"]), { alice: "Alice Morgan", ben: "Ben Carter" })
-  const [co] = await db().select().from(companies).where(and(eq(companies.orgId, installation), eq(companies.id, "co1")))
-  assert.equal(co!.name, "Hartley Engineering")
-  // An organization id is never provisioned this way.
-  await assert.rejects(provisionWorkspace("org_new"))
 })
 
 test("people are named from the organization's members only", async () => {

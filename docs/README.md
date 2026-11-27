@@ -18,7 +18,8 @@ export default defineApp({ name, title, version, locale, auth, permissions, sett
 | Read | For |
 |---|---|
 | [spec.md](spec.md) | The specification (normative, short) |
-| [quickstart.md](quickstart.md) | Next.js in 5 minutes (`npx @clegra/sdk init`), a day to ship; standalone Node; tests |
+| [start-javascript.md](start-javascript.md) | Getting started in plain JavaScript (any runtime with Fetch; `listen` on Node); pages, tests, your data layer, kinds |
+| [start-next.md](start-next.md) | Getting started with Next.js: 5 minutes (`npx @clegra/sdk init`), a day to ship, your site in Clegra |
 | [kinds.md](kinds.md) | Kinds: when they pay off, third parties' dotted kinds, the promotion rule |
 | [auth.md](auth.md) | Your sign-in as the authorization server, your `auth.resolve`: better-auth, Clerk, Auth0, WorkOS |
 | `@clegra/ui` | Clegra's design system, a separate package on npm with its own guide; `npx @clegra/sdk init --ui` adds it to a Next.js app |

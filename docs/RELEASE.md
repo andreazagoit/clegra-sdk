@@ -24,8 +24,8 @@ The package is this repository's root. Versions before 1.0 are prereleases on th
   To decide before publishing: `zod` `^4.2.0`, the MCP SDK's own range (it depends on zod ^4.2.0; an app on zod
   4.0/4.1 gets a second copy for the SDK).
 - `publishConfig.access: public` (a scoped package is private by default).
-- Files: `dist`, `docs/spec.md` and `docs/quickstart.md` (read from the installed package, e.g. by Clegra's site:
-  `node_modules/@clegra/sdk/docs/{spec,quickstart}.md`), `README.md`, `LICENSE` (MIT, «Copyright (c) 2026 Clegra»),
+- Files: `dist`, `docs/spec.md`, `docs/start-javascript.md` and `docs/start-next.md` (read from the installed package, e.g. by Clegra's site:
+  `node_modules/@clegra/sdk/docs/{spec,start-javascript,start-next}.md`), `README.md`, `LICENSE` (MIT, «Copyright (c) 2026 Clegra»),
   `NOTICE.md`, `CHANGELOG.md`, `package.json`. Not: `examples/`, the other docs, `scripts/`, tests.
 
 ## The guard

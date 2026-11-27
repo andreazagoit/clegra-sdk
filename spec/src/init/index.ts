@@ -107,7 +107,7 @@ export function runInit(options: InitOptions): InitResult {
     `npm run dev   (then ${base}/.well-known/clegra.json is the manifest, ${base}/mcp the MCP server)`,
     `npx @clegra/sdk check ${base} --token ${shown}`,
     `MCP Inspector: npx @modelcontextprotocol/inspector, Streamable HTTP, ${base}/mcp, header Authorization: Bearer ${shown}`,
-    `A day to ship: your data in get/list/run, your sign-in in auth.resolve and authorizationServers, CLEGRA_PUBLIC_URL in production (the TODOs in ${existingApp ?? appFile}; docs: quickstart.md and auth.md)`,
+    `A day to ship: your data in get/list/run, your sign-in in auth.signIn (@clegra/sdk/signin) or auth.resolve, CLEGRA_PUBLIC_URL in production (the TODOs in ${existingApp ?? appFile}; docs: start-next.md and auth.md)`,
   ]
   return { project, steps, warnings, next, token: write ? token : null }
 }

@@ -2037,6 +2037,7 @@
           }
         },
         "readOnly": false,
+        "effect": "irreversible",
         "confirm": "always",
         "permission": "deals.edit"
       },
@@ -2099,6 +2100,7 @@
           ]
         },
         "readOnly": false,
+        "effect": "write",
         "confirm": "optional",
         "permission": "deals.edit"
       },
@@ -2136,6 +2138,7 @@
           ]
         },
         "readOnly": false,
+        "effect": "irreversible",
         "confirm": "always",
         "permission": "contacts.edit"
       },
@@ -2175,6 +2178,7 @@
           ]
         },
         "readOnly": false,
+        "effect": "write",
         "confirm": "optional",
         "permission": "deals.edit"
       },
@@ -2230,6 +2234,7 @@
           ]
         },
         "readOnly": false,
+        "effect": "irreversible",
         "confirm": "always",
         "permission": "contacts.edit"
       },
@@ -2295,6 +2300,7 @@
           ]
         },
         "readOnly": false,
+        "effect": "irreversible",
         "confirm": "always",
         "permission": "deals.edit"
       }
@@ -3182,10 +3188,6 @@
           "contacts"
         ]
       }
-    ],
-    "lifecycle": {
-      "export": "clegra_export",
-      "delete": "clegra_delete"
-    }
+    ]
   }
 }

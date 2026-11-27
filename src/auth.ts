@@ -17,17 +17,16 @@ import {
 } from "jose"
 
 import { CONFIRMATION_TYPE, OAUTH_SCOPE, PROTOCOL_ID, TOKEN_CLAIM } from "../spec/src/protocol"
-import type { ClegraCaller, ClegraOptions } from "./clegra"
+import type { SignIn } from "./signin"
 
 /**
- * AUTH (spec §7). Two kinds of access token reach an app:
+ * AUTH (spec §7). An app's callers are its own: nobody signs in to it with someone else's accounts.
  *
- * - **its own** (an app with its own users): issued by the app's own authorization server (better-auth, Clerk, …)
- *   to an MCP client such as ChatGPT or Claude. The SDK does not read them: the app verifies them in
- *   `auth.resolve(token, request, { resource })` and says who is calling (tenant, person, permissions).
- * - **Clegra's core's** (`auth.clegra`, clegra.ts): app tokens bound to the caller's key (DPoP), for exactly this
- *   app's address (`auth.resource`), the tenant `<company>@<issuer>`; the person's permissions are the app's own
- *   (roles per person per tenant, the store's `roles`).
+ * - **its sign-in module** (`auth.signIn`, `@clegra/sdk/signin`): the delegations the app issues over its own login
+ *   to any client (Clegra, Claude, ChatGPT), and the personal keys its people make;
+ * - **its own authorization server** (`auth.resolve`): tokens of the app's auth library (better-auth, Clerk, …),
+ *   verified by the app, mapped to a caller (tenant, person, permissions);
+ * - **the public caller** (`auth.public`): no token, only the actions declared `public`.
  *
  * Dev mode: the SDK is its own authorization server with a local key (DevAuthority below), for callers on a
  * loopback address only. Its tokens carry the `clegra` claim and can stand in for a workspace host (`host:
@@ -61,8 +60,8 @@ export type Caller = {
   host: "workspace" | "plain"
   issuer: string
   subject: string
-  /** A caller from Clegra's core (`auth.clegra`): its company, company role, device key, actor and grant. */
-  clegra?: ClegraCaller
+  /** An administrator of the app, as its own sign-in says (`ctx.admin`). */
+  admin?: boolean
   /** A caller with no token (`auth.public`): it reaches only the actions declared `public`. */
   public?: true
 }
@@ -90,6 +89,8 @@ export type ResolvedCaller = {
   locale?: string
   /** A stable id of who is calling (default the person's id): idempotency is kept per subject. */
   subject?: string
+  /** An administrator of the app (`ctx.admin`: the lifecycle and settings an administrator may change). */
+  admin?: boolean
 }
 
 /** What `auth.resolve` is told about the request beside the token. */
@@ -106,6 +107,11 @@ export type ResolveInfo = {
 export type CallerResolver = (token: string, request: Request, info: ResolveInfo) => Promise<ResolvedCaller | null> | ResolvedCaller | null
 
 export type AuthOptions = {
+  /**
+   * The app's own sign-in (`createSignIn` of `@clegra/sdk/signin`): the delegations it issues are verified here, the
+   * protected-resource metadata names it, its routes are served on the app's address.
+   */
+  signIn?: SignIn
   /** The app's own access tokens (spec §7, «The app's own tokens»): verified by the app, mapped to a caller. */
   resolve?: CallerResolver
   /**
@@ -114,20 +120,14 @@ export type AuthOptions = {
    */
   serve?: (request: Request) => Promise<Response | null> | Response | null
   /**
-   * Clegra's core as the one trusted issuer (spec §7, «Clegra tokens»): its app tokens with DPoP, the tenant
-   * `<company>@<issuer>`, the app's own roles, confirmations, events, CORS. Needs `resource`. `clegraFromEnv()` reads it
-   * from `CLEGRA_*` variables.
-   */
-  clegra?: ClegraOptions
-  /**
    * This server's public MCP address, exactly as clients reach it (`https://crm.example.com/mcp`): the only audience
-   * (`aud`) accepted, and what the DPoP proofs of Clegra calls must name (`htu`). Required with `clegra`, and in
-   * production with `resolve`.
+   * (`aud`) accepted, and what DPoP proofs must name (`htu`). Default the sign-in module's; required in production
+   * with `resolve`.
    */
   resource?: string
   /**
-   * The authorization servers named in the protected-resource metadata: the app's own (its sign-in), never
-   * Clegra's core (whose tokens a client gets from Clegra, not by OAuth). Default none.
+   * The authorization servers named in the protected-resource metadata, with `resolve`: the app's own (its sign-in).
+   * With `signIn` it is the sign-in module. Default none.
    */
   authorizationServers?: string[]
   /**
@@ -192,7 +192,7 @@ export function argsHash(args: unknown): string {
 /** What one request allows: whether dev tokens are accepted (a loopback caller) and the address it came to. */
 export type RequestTrust = { dev: boolean; requestResource: string | null }
 
-/** The dev authority's tokens: verified here (Clegra's core's are clegra.ts's, the app's own its `resolve`'s). */
+/** The dev authority's tokens: verified here (the sign-in module's by it, the app's own by its `resolve`). */
 export class TokenVerifier {
   readonly #resource: string | null
   readonly #once: (key: string, ttlMs: number) => Promise<boolean>
@@ -692,6 +692,112 @@ async function readCapped(response: Response, max: number, what: string): Promis
 }
 
 /**
+ * Clients known by their Client ID Metadata Document (fetched, checked, cached by its Cache-Control) and, for a client
+ * with a key pair, its `private_key_jwt` assertions (RFC 7523: its keys, one use per `jti`). Shared by the dev
+ * authority and the sign-in module (`@clegra/sdk/signin`).
+ */
+export class ClientDirectory {
+  /** Client documents by client_id, oldest first; a failed fetch is kept too, briefly, so a broken client cannot make this server hammer a host. */
+  readonly #clients = new Map<string, { until: number; result: Promise<ClientMetadata> }>()
+  /** Key sets of private_key_jwt clients by jwks_uri, oldest first (a failure is kept briefly too). */
+  readonly #keySets = new Map<string, { fetchedAt: number; until: number; result: Promise<{ keys: JWK[] }> }>()
+  /** Client assertion ids already used, until their expiry (ms): an assertion is good for one request. */
+  readonly #usedAssertions = new Map<string, number>()
+
+  constructor(readonly transport: ClientMetadataTransport = {}) {}
+
+  /** The checked metadata document of a URL `client_id`, from the cache or fetched. Throws ClientMetadataError. */
+  client(clientId: string): Promise<ClientMetadata> {
+    const kept = this.#clients.get(clientId)
+    if (kept && kept.until > Date.now()) return kept.result
+    this.#clients.delete(clientId)
+    // An address that is refused without a request costs nothing to refuse again: only what was fetched is kept.
+    if (clientMetadataUrlProblem(clientId)) return fetchClientMetadata(clientId, this.transport).then((r) => r.metadata)
+    while (this.#clients.size >= CLIENT_CACHE_ENTRIES) this.#clients.delete(this.#clients.keys().next().value!)
+    const entry = { until: Date.now() + CLIENT_CACHE_FAILED_SECONDS * 1000, result: Promise.resolve(null as unknown as ClientMetadata) }
+    entry.result = fetchClientMetadata(clientId, this.transport).then(({ metadata, cacheSeconds }) => {
+      // `no-store`: requests already waiting share this answer, the next one fetches again.
+      if (!cacheSeconds) {
+        if (this.#clients.get(clientId) === entry) this.#clients.delete(clientId)
+      } else entry.until = Date.now() + cacheSeconds * 1000
+      return metadata
+    })
+    entry.result.catch(() => {})
+    this.#clients.set(clientId, entry)
+    return entry.result
+  }
+
+  /** The key set of a private_key_jwt client: inline, or from its jwks_uri (kept a few minutes; `fresh` fetches again unless it was fetched in the last 10 seconds). */
+  #clientKeys(client: ClientMetadata, fresh = false): Promise<{ keys: JWK[] }> {
+    if (client.jwks) return Promise.resolve(client.jwks)
+    const uri = client.jwks_uri!
+    const now = Date.now()
+    const kept = this.#keySets.get(uri)
+    if (kept && (fresh ? now - kept.fetchedAt < CLIENT_JWKS_REFETCH_MS : kept.until > now)) return kept.result
+    this.#keySets.delete(uri)
+    while (this.#keySets.size >= CLIENT_CACHE_ENTRIES) this.#keySets.delete(this.#keySets.keys().next().value!)
+    const entry = { fetchedAt: now, until: now + CLIENT_CACHE_FAILED_SECONDS * 1000, result: Promise.resolve({ keys: [] as JWK[] }) }
+    entry.result = fetchClientJwks(uri, this.transport).then(({ jwks, cacheSeconds }) => {
+      entry.until = Date.now() + Math.min(cacheSeconds, CLIENT_JWKS_CACHE_SECONDS) * 1000
+      return jwks
+    })
+    entry.result.catch(() => {})
+    this.#keySets.set(uri, entry)
+    return entry.result
+  }
+
+  /** Whether an assertion id is new (and from now on used, until `untilMs`). */
+  #firstUse(key: string, untilMs: number): boolean {
+    const now = Date.now()
+    for (const [k, until] of this.#usedAssertions) if (until <= now) this.#usedAssertions.delete(k)
+    if (this.#usedAssertions.has(key)) return false
+    this.#usedAssertions.set(key, untilMs)
+    return true
+  }
+
+  /**
+   * Client authentication with a signed JWT (RFC 7523 §2.2, `private_key_jwt`):
+   * signed with the client's algorithm by a key of its key set, `iss` = `sub`
+   * = its client_id, `aud` this server's token endpoint or issuer, short-lived,
+   * with a `jti` that is used once. Returns why not, or null when it holds.
+   */
+  async authenticate(client: ClientMetadata, form: URLSearchParams, audiences: string[]): Promise<string | null> {
+    const assertion = form.get("client_assertion") ?? ""
+    if (!assertion) return "this client authenticates with private_key_jwt: client_assertion is required"
+    if (form.get("client_assertion_type") !== CLIENT_ASSERTION_TYPE) return `client_assertion_type must be ${CLIENT_ASSERTION_TYPE}`
+    const alg = client.token_endpoint_auth_signing_alg ?? "RS256"
+    let header: ReturnType<typeof decodeProtectedHeader>
+    try {
+      header = decodeProtectedHeader(assertion)
+    } catch {
+      return "client_assertion is not a JWT"
+    }
+    if (header.alg !== alg) return `client_assertion must be signed with ${alg} (the client's token_endpoint_auth_signing_alg)`
+    const options = { algorithms: [alg], issuer: client.client_id, subject: client.client_id, audience: audiences, clockTolerance: CLIENT_ASSERTION_SKEW_SECONDS, requiredClaims: ["exp", "jti"] }
+    let payload: JWTPayload
+    try {
+      try {
+        ;({ payload } = await jwtVerify(assertion, createLocalJWKSet(await this.#clientKeys(client)), options))
+      } catch (error) {
+        // A key the cached set does not have: the client may have rotated its keys, so its jwks_uri is asked once more.
+        if (!client.jwks_uri || (error as { code?: string }).code !== "ERR_JWKS_NO_MATCHING_KEY") throw error
+        ;({ payload } = await jwtVerify(assertion, createLocalJWKSet(await this.#clientKeys(client, true)), options))
+      }
+    } catch (error) {
+      if (error instanceof ClientMetadataError) return error.message
+      return `client_assertion: ${(error as { code?: string }).code === "ERR_JWKS_NO_MATCHING_KEY" ? "no key of the client's key set matches it" : error instanceof Error ? error.message : "invalid"}`
+    }
+    const now = Math.floor(Date.now() / 1000)
+    const exp = payload.exp!
+    if (exp - now > CLIENT_ASSERTION_MAX_SECONDS + CLIENT_ASSERTION_SKEW_SECONDS || (typeof payload.iat === "number" && exp - payload.iat > CLIENT_ASSERTION_MAX_SECONDS)) return `a client_assertion lives ${CLIENT_ASSERTION_MAX_SECONDS / 60} minutes at most`
+    if (typeof payload.jti !== "string" || !payload.jti) return "client_assertion needs a jti"
+    if (!this.#firstUse(`${client.client_id}\n${payload.jti}`, (exp + CLIENT_ASSERTION_SKEW_SECONDS) * 1000)) return "this client_assertion was already used (its jti is for one request)"
+    return null
+  }
+
+}
+
+/**
  * A minimal OAuth 2.1 authorization server for development (spec §7): clients
  * identify themselves with a Client ID Metadata Document URL (fetched and
  * checked, above) or register dynamically (any client); authorization code
@@ -711,14 +817,9 @@ export class DevAuthority {
   #wrongCodes = 0
   publicKey!: CryptoKey
   readonly #origins = new Set<string>([DEV_ISSUER])
-  /** Client documents by client_id, oldest first; a failed fetch is kept too, briefly, so a broken client cannot make this server hammer a host. */
-  readonly #clients = new Map<string, { until: number; result: Promise<ClientMetadata> }>()
-  /** Key sets of private_key_jwt clients by jwks_uri, oldest first (a failure is kept briefly too). */
-  readonly #keySets = new Map<string, { fetchedAt: number; until: number; result: Promise<{ keys: JWK[] }> }>()
-  /** Client assertion ids already used, until their expiry (ms): an assertion is good for one request. */
-  readonly #usedAssertions = new Map<string, number>()
 
   constructor(readonly options: DevOptions, private readonly app: { name: string; title: string; allPermissions: () => string[] }) {
+    this.#directory = new ClientDirectory(options.clientMetadata)
     this.code = options.code ?? randomBytes(4).toString("hex").toUpperCase()
     this.people = options.people?.length ? options.people : [{ id: "test-person", name: "Test person", permissions: "all" }]
     this.installation = options.installation ?? "dev"
@@ -785,94 +886,7 @@ export class DevAuthority {
     })
   }
 
-  /** The checked metadata document of a URL `client_id`, from the cache or fetched. Throws ClientMetadataError. */
-  #client(clientId: string): Promise<ClientMetadata> {
-    const kept = this.#clients.get(clientId)
-    if (kept && kept.until > Date.now()) return kept.result
-    this.#clients.delete(clientId)
-    // An address that is refused without a request costs nothing to refuse again: only what was fetched is kept.
-    if (clientMetadataUrlProblem(clientId)) return fetchClientMetadata(clientId, this.options.clientMetadata).then((r) => r.metadata)
-    while (this.#clients.size >= CLIENT_CACHE_ENTRIES) this.#clients.delete(this.#clients.keys().next().value!)
-    const entry = { until: Date.now() + CLIENT_CACHE_FAILED_SECONDS * 1000, result: Promise.resolve(null as unknown as ClientMetadata) }
-    entry.result = fetchClientMetadata(clientId, this.options.clientMetadata).then(({ metadata, cacheSeconds }) => {
-      // `no-store`: requests already waiting share this answer, the next one fetches again.
-      if (!cacheSeconds) {
-        if (this.#clients.get(clientId) === entry) this.#clients.delete(clientId)
-      } else entry.until = Date.now() + cacheSeconds * 1000
-      return metadata
-    })
-    entry.result.catch(() => {})
-    this.#clients.set(clientId, entry)
-    return entry.result
-  }
-
-  /** The key set of a private_key_jwt client: inline, or from its jwks_uri (kept a few minutes; `fresh` fetches again unless it was fetched in the last 10 seconds). */
-  #clientKeys(client: ClientMetadata, fresh = false): Promise<{ keys: JWK[] }> {
-    if (client.jwks) return Promise.resolve(client.jwks)
-    const uri = client.jwks_uri!
-    const now = Date.now()
-    const kept = this.#keySets.get(uri)
-    if (kept && (fresh ? now - kept.fetchedAt < CLIENT_JWKS_REFETCH_MS : kept.until > now)) return kept.result
-    this.#keySets.delete(uri)
-    while (this.#keySets.size >= CLIENT_CACHE_ENTRIES) this.#keySets.delete(this.#keySets.keys().next().value!)
-    const entry = { fetchedAt: now, until: now + CLIENT_CACHE_FAILED_SECONDS * 1000, result: Promise.resolve({ keys: [] as JWK[] }) }
-    entry.result = fetchClientJwks(uri, this.options.clientMetadata).then(({ jwks, cacheSeconds }) => {
-      entry.until = Date.now() + Math.min(cacheSeconds, CLIENT_JWKS_CACHE_SECONDS) * 1000
-      return jwks
-    })
-    entry.result.catch(() => {})
-    this.#keySets.set(uri, entry)
-    return entry.result
-  }
-
-  /** Whether an assertion id is new (and from now on used, until `untilMs`). */
-  #firstUse(key: string, untilMs: number): boolean {
-    const now = Date.now()
-    for (const [k, until] of this.#usedAssertions) if (until <= now) this.#usedAssertions.delete(k)
-    if (this.#usedAssertions.has(key)) return false
-    this.#usedAssertions.set(key, untilMs)
-    return true
-  }
-
-  /**
-   * Client authentication with a signed JWT (RFC 7523 §2.2, `private_key_jwt`):
-   * signed with the client's algorithm by a key of its key set, `iss` = `sub`
-   * = its client_id, `aud` this server's token endpoint or issuer, short-lived,
-   * with a `jti` that is used once. Returns why not, or null when it holds.
-   */
-  async #authenticate(client: ClientMetadata, form: URLSearchParams, origin: string): Promise<string | null> {
-    const assertion = form.get("client_assertion") ?? ""
-    if (!assertion) return "this client authenticates with private_key_jwt: client_assertion is required"
-    if (form.get("client_assertion_type") !== CLIENT_ASSERTION_TYPE) return `client_assertion_type must be ${CLIENT_ASSERTION_TYPE}`
-    const alg = client.token_endpoint_auth_signing_alg ?? "RS256"
-    let header: ReturnType<typeof decodeProtectedHeader>
-    try {
-      header = decodeProtectedHeader(assertion)
-    } catch {
-      return "client_assertion is not a JWT"
-    }
-    if (header.alg !== alg) return `client_assertion must be signed with ${alg} (the client's token_endpoint_auth_signing_alg)`
-    const options = { algorithms: [alg], issuer: client.client_id, subject: client.client_id, audience: [`${origin}/oauth/token`, origin], clockTolerance: CLIENT_ASSERTION_SKEW_SECONDS, requiredClaims: ["exp", "jti"] }
-    let payload: JWTPayload
-    try {
-      try {
-        ;({ payload } = await jwtVerify(assertion, createLocalJWKSet(await this.#clientKeys(client)), options))
-      } catch (error) {
-        // A key the cached set does not have: the client may have rotated its keys, so its jwks_uri is asked once more.
-        if (!client.jwks_uri || (error as { code?: string }).code !== "ERR_JWKS_NO_MATCHING_KEY") throw error
-        ;({ payload } = await jwtVerify(assertion, createLocalJWKSet(await this.#clientKeys(client, true)), options))
-      }
-    } catch (error) {
-      if (error instanceof ClientMetadataError) return error.message
-      return `client_assertion: ${(error as { code?: string }).code === "ERR_JWKS_NO_MATCHING_KEY" ? "no key of the client's key set matches it" : error instanceof Error ? error.message : "invalid"}`
-    }
-    const now = Math.floor(Date.now() / 1000)
-    const exp = payload.exp!
-    if (exp - now > CLIENT_ASSERTION_MAX_SECONDS + CLIENT_ASSERTION_SKEW_SECONDS || (typeof payload.iat === "number" && exp - payload.iat > CLIENT_ASSERTION_MAX_SECONDS)) return `a client_assertion lives ${CLIENT_ASSERTION_MAX_SECONDS / 60} minutes at most`
-    if (typeof payload.jti !== "string" || !payload.jti) return "client_assertion needs a jti"
-    if (!this.#firstUse(`${client.client_id}\n${payload.jti}`, (exp + CLIENT_ASSERTION_SKEW_SECONDS) * 1000)) return "this client_assertion was already used (its jti is for one request)"
-    return null
-  }
+  readonly #directory: ClientDirectory
 
   /** Answers the authorization server's paths; null for any other path. */
   async handle(request: Request, origin: string, resource: string): Promise<Response | null> {
@@ -939,7 +953,7 @@ export class DevAuthority {
     if (!p("redirect_uri") || !p("code_challenge") || p("code_challenge_method") !== "S256") return new Response("redirect_uri and a S256 code_challenge are required", { status: 400 })
     if (claimsUrl(p("client_id"))) {
       try {
-        client = await this.#client(p("client_id"))
+        client = await this.#directory.client(p("client_id"))
       } catch (error) {
         return refuse(error instanceof ClientMetadataError ? error.message : "its metadata document could not be read")
       }
@@ -1015,14 +1029,14 @@ export class DevAuthority {
     if (claimsUrl(client)) {
       let metadata: ClientMetadata
       try {
-        metadata = await this.#client(client)
+        metadata = await this.#directory.client(client)
       } catch (error) {
         return fail("invalid_client", error instanceof ClientMetadataError ? error.message : "the client's metadata document could not be read")
       }
       if (redirect !== null && !redirectUriAllowed(redirect, metadata.redirect_uris)) return fail("invalid_grant", "redirect_uri is no longer one of the client's redirect_uris")
       // A client with a key pair proves it is itself on every grant; a public client has nothing to prove.
       if (metadata.token_endpoint_auth_method === "private_key_jwt") {
-        const why = await this.#authenticate(metadata, form, origin)
+        const why = await this.#directory.authenticate(metadata, form, [`${origin}/oauth/token`, origin])
         if (why) return json({ error: "invalid_client", error_description: why }, 401)
       }
     }
