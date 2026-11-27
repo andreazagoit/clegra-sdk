@@ -4,6 +4,17 @@ Clegra apps and the `@clegra/sdk` package. Newest first. Versions before 1.0 are
 npm dist-tag `next`. Entries below «Two scoped packages» keep the names of their time (the unscoped `clegra` package
 and its `clegra/ui`, the `modelapp` package, docs/map): they are history.
 
+## 0.4.0-next.2 (2026-11-27)
+
+- `SqlSignInStore` writes its values as a `text` parameter cast in SQL (`$n::text::jsonb`). Over postgres.js, which
+  encodes a parameter by the type the server infers for it, a value sent to `$n::jsonb` was JSON-encoded a second time:
+  an account was stored as a jsonb string and the password login refused it («wrong email or password»). Over
+  postgres.js every value 0.4.0-next.1 or earlier wrote with `set` is such a string; repair a table once, before the
+  new version writes to it: `UPDATE clegra_signin SET value = (value #>> '{}')::jsonb WHERE jsonb_typeof(value) = 'string'`.
+  PGlite and node-postgres were not affected.
+- The SQL stores (`SqlStore`, `SqlSignInStore`) are tested on PGlite and on a real Postgres through postgres.js,
+  prepared or not (`npm run test:postgres`, a scratch container).
+
 ## 0.4.0-next.1 (2026-11-27)
 
 - `SqlSignInStore` reads its `jsonb` values as text, so a driver that parses `jsonb` itself (postgres.js, PGlite) no

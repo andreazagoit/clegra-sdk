@@ -319,24 +319,6 @@ describe("sign-in module", () => {
 })
 
 describe("stores and the password login", () => {
-  test("SqlSignInStore on Postgres: values round-trip whatever the driver does with jsonb", async () => {
-    const { PGlite } = await import("@electric-sql/pglite")
-    const { SqlSignInStore } = await import("./store")
-    const db = new PGlite()
-    await db.exec(SqlSignInStore.schema())
-    const store = new SqlSignInStore((text, params) => db.query(text, params) as never)
-    await store.set("a", "plain string", null)
-    await store.set("b", { n: 1 }, 60_000)
-    assert.equal(await store.get("a"), "plain string")
-    assert.deepEqual(await store.get("b"), { n: 1 })
-    assert.deepEqual((await store.list("b")).map((e) => e.value), [{ n: 1 }])
-    assert.equal(await store.take("a"), "plain string")
-    assert.equal(await store.get("a"), null)
-    assert.equal(await store.hit("h", 60_000), 1)
-    assert.equal(await store.hit("h", 60_000), 2)
-    await db.close()
-  })
-
   test("the password login counts only wrong attempts", async () => {
     const { passwordLogin } = await import("./password")
     const { MemorySignInStore } = await import("./store")

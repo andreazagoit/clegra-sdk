@@ -1,12 +1,12 @@
 {
   "name": "@clegra/sdk",
-  "version": "0.4.0-next.1",
+  "version": "0.4.0-next.2",
   "clegra": {
     "kind": "public",
     "owner": "sdk"
   },
   "type": "module",
-  "description": "Clegra apps: a web app's MCP server (revision 2026-07-28) with the web-map and app-share extensions and the session-transfer, access and app-agents profiles: records at their own web URLs, pages for people, the app's own confirmation of irreversible calls, one sign-in for the MCP grant and the site. Definitions one per file (defineEntity, defineTool, definePage, \u2026) assembled with defineApp and served on Web APIs with serve(app, \u2026); the app's own OAuth 2.1 sign-in; Node, Express and Next.js adapters; a test client; the conformance check CLI.",
+  "description": "Clegra apps: a web app's MCP server (revision 2026-07-28) with the web-map and app-share extensions and the session-transfer, access and app-agents profiles: records at their own web URLs, pages for people, the app's own confirmation of irreversible calls, one sign-in for the MCP grant and the site. Definitions one per file (defineEntity, defineTool, definePage, …) assembled with defineApp and served on Web APIs with serve(app, …); the app's own OAuth 2.1 sign-in; Node, Express and Next.js adapters; a test client; the conformance check CLI.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -67,7 +67,8 @@
     "typecheck": "tsc -p tsconfig.json",
     "test": "tsx --test \"src/**/*.test.ts\"",
     "test:next": "tsx --test test/next.test.ts",
-    "test:all": "npm test && npm run test:next",
+    "test:postgres": "node scripts/test-postgres.mjs",
+    "test:all": "npm test && npm run test:next && npm run test:postgres",
     "pack:check": "tsx scripts/pack-check.mjs",
     "clegra:check": "tsx src/cli/index.ts check",
     "prepack": "node scripts/prepack.mjs",
@@ -96,6 +97,7 @@
     "next": "16.4.6",
     "playwright": "1.64.1",
     "postcss": "8.5.32",
+    "postgres": "3.4.9",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "tailwindcss": "4.3.3",

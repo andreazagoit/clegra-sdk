@@ -112,8 +112,14 @@ export class SqlSignInStore implements SignInStore {
     if (++this.#calls % 200 === 0) await this.#rows(`DELETE FROM ${this.#table} WHERE expires_at < now()`, []).catch(() => undefined)
   }
 
+  /**
+   * Values cross the driver as JSON text both ways: written as a `text` parameter cast in SQL (`$n::text::jsonb`), read
+   * as `value::text`. A driver that encodes a parameter by the type the server infers (postgres.js JSON-encodes a
+   * `jsonb` one) or parses `jsonb` results itself (postgres.js, PGlite) never sees a jsonb value.
+   */
   #value(v: unknown) {
-    return typeof v === "string" ? (JSON.parse(v) as unknown) : v
+    if (typeof v !== "string") throw new Error(`SqlSignInStore: the driver returned a ${typeof v} for value::text`)
+    return JSON.parse(v) as unknown
   }
 
   async get(key: string) {
@@ -124,7 +130,7 @@ export class SqlSignInStore implements SignInStore {
   async set(key: string, value: unknown, ttlMs: number | null) {
     await this.#sweep()
     await this.#rows(
-      `INSERT INTO ${this.#table} (key, value, expires_at) VALUES ($1, $2::jsonb, CASE WHEN $3::bigint IS NULL THEN NULL ELSE now() + ($3::bigint * interval '1 millisecond') END)
+      `INSERT INTO ${this.#table} (key, value, expires_at) VALUES ($1, $2::text::jsonb, CASE WHEN $3::bigint IS NULL THEN NULL ELSE now() + ($3::bigint * interval '1 millisecond') END)
        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, expires_at = EXCLUDED.expires_at`,
       [key, JSON.stringify(value), ttlMs === null ? null : Math.max(1, Math.round(ttlMs))],
     )
@@ -165,6 +171,6 @@ export class SqlSignInStore implements SignInStore {
        RETURNING value::text AS value`,
       [`#hit#${key}`, Math.max(1, Math.round(windowMs))],
     )
-    return Number(this.#value(row?.value) ?? 1)
+    return Number(this.#value(row?.value))
   }
 }
