@@ -1,43 +1,37 @@
 import assert from "node:assert/strict"
-import { randomUUID } from "node:crypto"
-import { rmSync } from "node:fs"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
-import { after, describe, test } from "node:test"
+import { describe, test } from "node:test"
 
 import type { McpServer } from "@modelcontextprotocol/server"
 import { z } from "zod"
 
-import { defineApp, MemoryStore, type AuthOptions } from "../../src/index"
-import { createSignIn, MemorySignInStore, passwordLogin } from "../../src/signin"
+import { defineAction, defineApp, defineEntity, definePage, MemoryStore, serve } from "../../src/index"
+import { createSignIn, devSignIn, MemorySignInStore, passwordLogin } from "../../src/signin"
 import { checkApp, type Report } from "./conformance"
 
 /** The checks of app-only items, the installation's tools and the manifest's new rules, from outside. */
 
-const keyFile = join(tmpdir(), `clegra-conformance-key-${randomUUID()}.json`)
-after(() => rmSync(keyFile, { force: true }))
 const local = { remoteAddress: "127.0.0.1" }
+
+const task = defineEntity({ name: "task", label: "Task", schema: z.object({ id: z.string(), title: z.string().meta({ role: "title", search: true }) }), get: (id) => (id === "t1" ? { id: "t1", title: "Plan" } : null), list: () => ({ rows: [{ id: "t1", title: "Plan" }] }) })
+const log = defineEntity({ name: "log", label: "Log", visibility: "app", schema: z.object({ id: z.string(), line: z.string().meta({ role: "title", search: true }) }), get: () => ({ id: "l1", line: "Plan opened" }), list: () => ({ rows: [{ id: "l1", line: "Plan opened" }] }) })
+const add = defineAction({ name: "add", title: "Add", input: z.object({ title: z.string() }), confirm: false, run: () => {} })
+const send = defineAction({ name: "send", title: "Send", input: z.object({ when: z.iso.datetime() }), later: { at: "when" }, run: () => {} })
+const refresh = defineAction({ name: "refresh", title: "Refresh", input: z.object({}), readOnly: true, visibility: "app", run: () => {} })
+const tasks = definePage({ name: "tasks", title: "Tasks", list: task, columns: ["title"], actions: [add] })
 
 function makeApp(options: { full?: boolean; mcp?: (server: McpServer) => void } = {}) {
   const full = options.full !== false
-  return defineApp({
+  const app = defineApp({
     name: "checked",
     title: "Checked",
     version: "1.0.0",
-    auth: { dev: { keyFile, code: "CONF1" } } as AuthOptions,
-    ...(options.mcp ? { mcp: options.mcp } : {}),
-    entities: {
-      task: { label: "Task", schema: z.object({ id: z.string(), title: z.string().meta({ role: "title", search: true }) }), get: (id) => (id === "t1" ? { id: "t1", title: "Plan" } : null), list: () => ({ rows: [{ id: "t1", title: "Plan" }] }) },
-      ...(full ? { log: { label: "Log", visibility: "app" as const, schema: z.object({ id: z.string(), line: z.string().meta({ role: "title", search: true }) }), get: () => ({ id: "l1", line: "Plan opened" }), list: () => ({ rows: [{ id: "l1", line: "Plan opened" }] }) } } : {}),
-    },
-    actions: {
-      add: { title: "Add", input: z.object({ title: z.string() }), confirm: false, run: () => {} },
-      ...(full ? { send: { title: "Send", input: z.object({ when: z.iso.datetime() }), later: { at: "when" }, run: () => {} }, refresh: { title: "Refresh", input: z.object({}), readOnly: true, visibility: "app" as const, run: () => {} } } : {}),
-    },
-    pages: { tasks: { title: "Tasks", list: "task", columns: ["title"], actions: ["add"] } },
-    nav: [{ pages: ["tasks"] }],
+    entities: full ? [task, log] : [task],
+    actions: full ? [add, send, refresh] : [add],
+    pages: [tasks],
+    nav: [{ pages: [tasks] }],
     ...(full ? { lifecycle: { export: () => null, delete: () => {} } } : {}),
   })
+  return serve(app, { auth: { signIn: devSignIn(app, { code: "CONF1", issuer: "http://127.0.0.1:3930" }) }, ...(options.mcp ? { mcp: options.mcp } : {}) })
 }
 
 const byId = (report: Report, id: string) => report.checks.find((c) => c.id === id)!
@@ -49,7 +43,7 @@ const run = async (app: ReturnType<typeof makeApp>, alter?: (manifest: Record<st
     alter(manifest)
     return new Response(JSON.stringify(manifest), { status: 200, headers: { "content-type": "application/json" } })
   }
-  return checkApp({ url: "http://127.0.0.1:3930", fetch, token: await app.devToken() })
+  return checkApp({ url: "http://127.0.0.1:3930", fetch, token: await app.dev!.token() })
 }
 
 describe("conformance: app-only items and the installation's tools", () => {
@@ -123,20 +117,20 @@ describe("conformance: app-only items and the installation's tools", () => {
 describe("conformance: an app with its own sign-in, checked with a token it issued", async () => {
   const ORIGIN = "https://deals.test"
   const store = new MemorySignInStore()
-  const definition = {
+  const deal = defineEntity({ name: "deal", label: "Deal", permission: "deals.view", schema: z.object({ id: z.string(), title: z.string().meta({ role: "title", search: true }) }), get: (id) => (id === "d1" ? { id: "d1", title: "Fiber" } : null), list: () => ({ rows: [{ id: "d1", title: "Fiber" }] }) })
+  const closeDeal = defineAction({ name: "close_deal", on: deal, title: "Close", input: z.object({}), confirm: "always", permission: "deals.edit", run: () => {} })
+  const definition = defineApp({
     name: "deals",
     title: "Deals",
     version: "1.0.0",
     permissions: { "deals.view": { label: "See deals", default: true }, "deals.edit": { label: "Change deals" } },
-    entities: {
-      deal: { label: "Deal", permission: "deals.view", schema: z.object({ id: z.string(), title: z.string().meta({ role: "title", search: true }) }), get: (id: string) => (id === "d1" ? { id: "d1", title: "Fiber" } : null), list: () => ({ rows: [{ id: "d1", title: "Fiber" }] }) },
-    },
-    actions: { close_deal: { on: "deal", title: "Close", input: z.object({}), confirm: "always", permission: "deals.edit", run: () => {} } },
-    pages: { deals: { title: "Deals", list: "deal", columns: ["title"] } },
-  }
+    entities: [deal],
+    actions: [closeDeal],
+    pages: [definePage({ name: "deals", title: "Deals", list: deal, columns: ["title"] })],
+  })
   const login = passwordLogin({ store, origin: ORIGIN, title: { en: "Deals" }, iterations: 1000 })
-  const signIn = createSignIn(defineApp(definition as never), { issuer: ORIGIN, resource: `${ORIGIN}/mcp`, login, permissionsOf: (a) => login.permissionsOf(a), store })
-  const app = defineApp({ ...definition, store: new MemoryStore(), auth: { signIn } } as never)
+  const signIn = createSignIn(definition, { issuer: ORIGIN, resource: `${ORIGIN}/mcp`, login, permissionsOf: (a) => login.permissionsOf(a), store })
+  const app = serve(definition, { store: new MemoryStore(), auth: { signIn } })
   const fetch = (request: Request) => app.fetch(request, { remoteAddress: "203.0.113.7" })
   const account = await login.accounts.create({ email: "tester@example.com", name: "Tester", password: "a long test password", installation: "test-co", permissions: "all" })
   const { key } = await signIn.keys.create(account, { name: "Conformance" })

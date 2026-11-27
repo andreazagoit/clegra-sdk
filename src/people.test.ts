@@ -1,13 +1,10 @@
 import assert from "node:assert/strict"
-import { randomUUID } from "node:crypto"
-import { rmSync } from "node:fs"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
-import { after, describe, test } from "node:test"
+import { describe, test } from "node:test"
 
 import { z } from "zod"
 
-import { defineApp, type AuthOptions, type PeopleResolver } from "./index"
+import { defineAction, defineApp, defineEntity, serve, type PeopleResolver } from "./index"
+import { devSignIn } from "./signin"
 import { testClient } from "./testing"
 import { viewHtml } from "./view"
 
@@ -17,9 +14,6 @@ import { viewHtml } from "./view"
  * draws the app's labels in the reader's language, whatever the token said.
  */
 
-const keyFile = join(tmpdir(), `clegra-test-key-${randomUUID()}.json`)
-after(() => rmSync(keyFile, { force: true }))
-
 type Ticket = { id: string; title: string; owner: string; status: "open" | "closed" }
 const tickets: Ticket[] = [
   { id: "t1", title: "Printer", owner: "u-ada", status: "open" },
@@ -27,31 +21,27 @@ const tickets: Ticket[] = [
   { id: "t3", title: "Badge", owner: "u-me", status: "open" },
 ]
 
-function makeApp(people?: PeopleResolver, dev: AuthOptions["dev"] | false = { keyFile, code: "TEST1", people: [{ id: "u-me", name: "Test caller", permissions: "all" }] }) {
-  return defineApp({
-    name: "desk",
-    title: { en: "Help desk", it: "Assistenza" },
-    version: "1.0.0",
-    locale: "en",
-    auth: dev ? { dev } : { anonymous: { installation: "x", person: { id: "u-me", name: "Me" }, permissions: "all" } },
+const ticket = defineEntity({
+  name: "ticket",
+  label: { en: "Ticket", it: "Richiesta" },
+  plural: { en: "Tickets", it: "Richieste" },
+  schema: z.object({
+    id: z.string(),
+    title: z.string().meta({ role: "title", label: { en: "Title", it: "Titolo" } }),
+    owner: z.string().meta({ role: "person", label: { en: "Owner", it: "Responsabile" } }),
+    status: z.enum(["open", "closed"]).meta({ role: "status", label: { en: "Status", it: "Stato" }, labels: { open: { en: "Open", it: "Aperta" }, closed: { en: "Closed", it: "Chiusa" } } }),
+  }),
+  get: (id) => tickets.find((t) => t.id === id) ?? null,
+  list: () => ({ rows: tickets }),
+})
+const close = defineAction({ name: "close", on: ticket, title: { en: "Close", it: "Chiudi" }, input: z.object({}), confirm: "optional", expose: { plain: true }, run: (_i, ctx, t) => ({ message: ctx.t({ en: `${t.title} closed.`, it: `${t.title} chiusa.` }) }) })
+const desk = defineApp({ name: "desk", title: { en: "Help desk", it: "Assistenza" }, version: "1.0.0", locale: "en", entities: [ticket], actions: [close] })
+
+/** The app with a development sign-in that names its caller (`dev`), or none: a local demo's anonymous caller. */
+function makeApp(people?: PeopleResolver, dev = true) {
+  return serve(desk, {
+    auth: dev ? { signIn: devSignIn(desk, { code: "TEST1", people: [{ id: "u-me", name: "Test caller", permissions: "all" }] }) } : { anonymous: { installation: "x", person: { id: "u-me", name: "Me" }, permissions: "all" } },
     ...(people ? { people } : {}),
-    entities: {
-      ticket: {
-        label: { en: "Ticket", it: "Richiesta" },
-        plural: { en: "Tickets", it: "Richieste" },
-        schema: z.object({
-          id: z.string(),
-          title: z.string().meta({ role: "title", label: { en: "Title", it: "Titolo" } }),
-          owner: z.string().meta({ role: "person", label: { en: "Owner", it: "Responsabile" } }),
-          status: z.enum(["open", "closed"]).meta({ role: "status", label: { en: "Status", it: "Stato" }, labels: { open: { en: "Open", it: "Aperta" }, closed: { en: "Closed", it: "Chiusa" } } }),
-        }),
-        get: (id) => tickets.find((t) => t.id === id) ?? null,
-        list: () => ({ rows: tickets }),
-      },
-    },
-    actions: {
-      close: { on: "ticket", title: { en: "Close", it: "Chiudi" }, input: z.object({}), confirm: "optional", expose: { plain: true }, run: (_i, ctx, t) => ({ message: ctx.t({ en: `${t.title} closed.`, it: `${t.title} chiusa.` }) }) },
-    },
   })
 }
 

@@ -1,7 +1,8 @@
 # Shipments: an example Clegra app
 
-A courier's shipments and pickups as a Clegra app (`@clegra/sdk`): one `defineApp`
-object that the SDK serves as a manifest for Clegra (its people sign in with the app's own sign-in)
+A courier's shipments and pickups as a Clegra app (`@clegra/sdk`): one file per
+entity, action, artifact, page and agent, assembled in one pure `defineApp` that
+`serve(app, …)` runs as a manifest for Clegra (its people sign in with the app's own sign-in)
 and as a plain MCP server for ChatGPT, Claude and any MCP client. It runs on
 Node's own HTTP server (`@clegra/sdk/node`), has no UI of its own, and keeps its
 invented data **in memory** (`MemoryStore` for writes, `src/courier.ts` for the
@@ -14,9 +15,10 @@ It is also an **in-process fixture for a workspace host's tests** (below).
 
 | File | What it is |
 |---|---|
-| `src/app.ts` | The app: `defineShipmentsApp({ auth, store?, courier? })` |
+| `src/clegra/` | The app's definition, one thing per file: `entities/` (`shipment`, `pickup`), `actions/` (`book_pickup`, `cancel_pickup`, `check_deliveries`), `artifacts/`, `pages/`, `agents/`; `app.ts` assembles them (`shipmentsApp`); `labels.ts` (permissions, status labels, the kind's name); `courier.ts` (the data source the handlers read) |
+| `src/serve.ts` | The app at work: `serveShipments({ auth, store?, courier? })`, `serve(shipmentsApp, …)` with the courier's data |
 | `src/courier.ts` | The courier's data in memory, one set per tenant, and the list query over it |
-| `src/auth.ts` | Who may call: `SHIPMENTS_PUBLIC_URL` and the `CLEGRA_*` variables |
+| `src/auth.ts` | Who may call: the app's own sign-in (`SHIPMENTS_PUBLIC_URL`, `SHIPMENTS_SIGNIN_KEY`, `CLEGRA_CLIENT_ORIGINS`) |
 | `src/main.ts` | Runs it (`npm start`, `npm run dev`) |
 | `src/fixture.ts` | The fixture for host tests |
 | `test/app.test.ts` | In-process tests, the conformance checks included |
@@ -90,7 +92,7 @@ delegation the person gave on the app's consent page, or with a personal key the
 From this folder, in the repository (`@clegra/sdk` is the repository's root, a workspace):
 
 ```sh
-npm run dev      # 127.0.0.1:4319, signed in by the SDK's dev authority; prints a token and the check command
+npm run dev      # 127.0.0.1:4319, signed in by the SDK's development sign-in (devSignIn); prints a token and the check command
 npx @clegra/sdk check http://127.0.0.1:4319 --token <the printed token>   # Conformant.
 
 SHIPMENTS_PUBLIC_URL=https://shipments.example.com SHIPMENTS_SIGNIN_KEY='<private JWK>' npm start
@@ -114,12 +116,13 @@ this repository's workspace):
 
 | Export | What it is |
 |---|---|
-| `createShipmentsApp({ courier?, installation? })` | The app in-process, for `app.fetch(request, { remoteAddress: "127.0.0.1" })`: dev authority (`app.devToken()`, `app.devConfirmation()`, the clients of `@clegra/sdk/testing`), `MemoryStore`, data in memory |
+| `createShipmentsApp({ courier?, installation?, issuer? })` | The served app in-process, for `served.fetch(request, { remoteAddress: "127.0.0.1" })`: the development sign-in (`served.dev.token()`, `served.dev.confirmation()`, the clients of `@clegra/sdk/testing`; its MCP address `<issuer>/mcp`, default `http://localhost:3000/mcp`), `MemoryStore`, data in memory |
+| `shipmentsApp` | The app's definition (`defineApp`), for what reads it without serving it (a sign-in, a manifest) |
 | `shipmentsManifest` | The manifest (`Manifest`, plain JSON) exactly as served at `/.well-known/clegra.json` by a server at `SHIPMENTS_URL` (`https://shipments.example.com`, MCP at `/mcp`) with its own sign-in. The dev app's manifest differs only in `auth` |
 | `SHIPMENTS_PEOPLE` | `ada` (all permissions, «Ada Rossi»), `bruno` (`shipments.view`, «Bruno Verdi») |
 | `SHIPMENTS_INSTALLATION` | `"test"`, the dev tokens' default installation |
 | `SHIPMENTS_SETTINGS` | `{ depot: "North depot" }`: what a host sends as `_meta.clegra.settings` (booking needs it) |
-| `devTenant(installation?)` | The tenant the handlers see for a dev token's installation: `<installation>@clegra-dev` |
+| `devTenant(installation?)` | The tenant the handlers see for a development token's installation: `<installation>@clegra-dev` |
 | `createCourier()`, `Courier` | The data; `courier.report(tenant, id, status)` plays the courier (a delivery, a delay) before a `delivery_check` run |
 | `PERMISSIONS` | The permission ids and labels |
 

@@ -5,6 +5,7 @@ import { test } from "node:test"
 
 import "./setup"
 
+import { devSignIn } from "@clegra/sdk/signin"
 import { testClient } from "@clegra/sdk/testing"
 import { checkApp, formatReport } from "@clegra/sdk/spec"
 import { and, eq } from "drizzle-orm"
@@ -14,23 +15,25 @@ import { boardDeals, insertTenantData } from "../lib/crm"
 import { SALES_TEAM_DATA } from "../lib/demo-data"
 import { db } from "../lib/db"
 import { PERMISSIONS } from "../lib/permissions"
-import { createCrmApp } from "../clegra/app"
+import { crmApp } from "../clegra/app"
 import { crmAuth, crmClientOrigins } from "../clegra/auth"
+import { serveCrm } from "../clegra/index"
 
 const INSTALLATIONS = ["annotations", "conformance", "cross", "dashboard", "demo", "kinds", "names", "pages", "snapshot", "untrusted", "values", "won"]
 
-// Callers signed by the SDK's dev authority (tests only: the app itself has no dev sign-in).
-const app = createCrmApp({
+const SITE = "http://127.0.0.1:3920"
+// Callers signed by the SDK's development sign-in (tests only: the app itself signs in with better-auth).
+const app = serveCrm({
   auth: {
-    dev: {
+    signIn: devSignIn(crmApp, {
+      issuer: SITE,
       people: [
         { id: "alice", name: "Alice Morgan (sales manager)", permissions: "all" },
         { id: "ben", name: "Ben Carter (sales rep)", permissions: ["deals.view", "deals.edit", "contacts.edit"] },
       ],
       installation: "demo",
       code: "TEST",
-      keyFile: false,
-    },
+    }),
   },
 })
 // Each test its own installation of the dev host: its own fresh copy of the demo data, seeded here (the CRM itself
@@ -45,7 +48,6 @@ for (const installation of INSTALLATIONS) {
     await tx.insert(people).values(Object.entries(OWNERS).map(([id, name]) => ({ orgId, id, name })))
   })
 }
-const SITE = "http://127.0.0.1:3920"
 const site = (r: Request) => app.fetch(r, { remoteAddress: "127.0.0.1" })
 
 test("the manifest lists the CRM", () => {
@@ -127,7 +129,7 @@ test("pages people use every day: the deals page offers «New deal» prefilled b
 })
 
 test("the app passes the conformance checks", async () => {
-  const token = await app.devToken({ person: "alice", permissions: "all", installation: "conformance" })
+  const token = await app.dev!.token({ person: "alice", permissions: "all", installation: "conformance" })
   const report = await checkApp({ url: SITE, token, fetch: site })
   assert.ok(report.ok && report.complete, formatReport(report))
   // Every check ran but the site's (this app is made without client origins: no site) and the lifecycle's (it has none).
@@ -193,7 +195,7 @@ test("one public address names the MCP server and the CRM's own issuer; the site
 })
 
 test("with client origins the CRM's pages are its site: in the manifest, framable by those origins only", () => {
-  const framed = createCrmApp({ auth: crmAuth({}), clientOrigins: ["https://app.clegra.test"] })
+  const framed = serveCrm({ auth: crmAuth({}), clientOrigins: ["https://app.clegra.test"] })
   assert.deepEqual(framed.manifest().site, { start: "/" })
   assert.equal(framed.site!.headers()["content-security-policy"], "frame-ancestors 'self' https://app.clegra.test")
   assert.equal(app.manifest().site, undefined)

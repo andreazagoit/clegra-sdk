@@ -53,20 +53,23 @@ describe("clegra init", () => {
     const result = runInit({ cwd: root })
     assert.deepEqual(
       result.steps.map((s) => `${s.verb} ${s.path}`),
-      ["create clegra.ts", "create app/api/clegra/[...path]/route.ts", "edit next.config.ts", "create .env.local"],
+      ["create clegra/task.ts", "create clegra/complete.ts", "create clegra/tasks.ts", "create clegra/app.ts", "create clegra/index.ts", "create app/api/clegra/[...path]/route.ts", "edit next.config.ts", "create .env.local"],
     )
     assert.deepEqual(result.warnings, [])
-    assert.match(read(root, "app/api/clegra/[...path]/route.ts"), /import \{ app \} from "@\/clegra"/)
-    assert.match(read(root, "app/api/clegra/[...path]/route.ts"), /export const \{ GET, POST, DELETE, OPTIONS \} = toNextHandlers\(app\)/)
+    assert.match(read(root, "app/api/clegra/[...path]/route.ts"), /import \{ served \} from "@\/clegra"/)
+    assert.match(read(root, "app/api/clegra/[...path]/route.ts"), /export const \{ GET, POST, DELETE, OPTIONS \} = toNextHandlers\(served\)/)
     assert.equal(
       read(root, "next.config.ts"),
       NEXT_TS.replace('from "next";\n', 'from "next";\nimport { withClegra } from "@clegra/sdk/next";\n').replace("export default nextConfig;", "export default withClegra(nextConfig);"),
     )
-    const app = read(root, "clegra.ts")
+    const app = read(root, "clegra/app.ts")
     assert.match(app, /name: "acme-tasks"/)
     assert.match(app, /title: "Acme Tasks"/)
-    assert.match(app, /TODO\(your data\)/)
-    assert.match(app, /TODO\(your sign-in\)/)
+    assert.match(app, /entities: \[task\]/)
+    assert.match(read(root, "clegra/complete.ts"), /on: task,/)
+    assert.match(read(root, "clegra/task.ts"), /TODO\(your data\)/)
+    assert.match(read(root, "clegra/index.ts"), /TODO\(your sign-in\)/)
+    assert.match(read(root, "clegra/index.ts"), /export const served = serve\(app, \{/)
     const token = /^CLEGRA_LOCAL_TOKEN=(.+)$/m.exec(read(root, ".env.local"))?.[1]
     assert.equal(token, result.token)
     assert.match(token!, /^[A-Za-z0-9_-]{43}$/)
@@ -75,7 +78,7 @@ describe("clegra init", () => {
     assert.match(printed, new RegExp(`npx @clegra/sdk check http://localhost:3000 --token ${token}`))
   })
 
-  test("next.config.mjs and src/app with an alias to src/: clegra.ts goes to src/", () => {
+  test("next.config.mjs and src/app with an alias to src/: clegra/ goes to src/", () => {
     const mjs = `/** @type {import('next').NextConfig} */\nconst nextConfig = {};\n\nexport default nextConfig;\n`
     const root = project({
       "package.json": pkg({ scripts: { dev: "next dev --turbopack -p 4100" } }),
@@ -85,7 +88,7 @@ describe("clegra init", () => {
       ".gitignore": ".env*.local\n",
     })
     const result = runInit({ cwd: root })
-    assert.deepEqual(result.steps.map((s) => `${s.verb} ${s.path}`), ["create src/clegra.ts", "create src/app/api/clegra/[...path]/route.ts", "edit next.config.mjs", "create .env.local"])
+    assert.deepEqual(result.steps.map((s) => `${s.verb} ${s.path}`), ["create src/clegra/task.ts", "create src/clegra/complete.ts", "create src/clegra/tasks.ts", "create src/clegra/app.ts", "create src/clegra/index.ts", "create src/app/api/clegra/[...path]/route.ts", "edit next.config.mjs", "create .env.local"])
     assert.match(read(root, "src/app/api/clegra/[...path]/route.ts"), /from "~\/clegra"/)
     // No import to follow: the import goes first; the file's own quotes and semicolons are kept.
     assert.equal(read(root, "next.config.mjs"), `import { withClegra } from '@clegra/sdk/next';\n${mjs.replace("export default nextConfig;", "export default withClegra(nextConfig);")}`)
@@ -104,8 +107,8 @@ describe("clegra init", () => {
   test("already initialized: nothing is overwritten, every step is a skip", () => {
     const root = project({ "package.json": pkg(), "tsconfig.json": TSCONFIG, "next.config.ts": NEXT_TS, "app/page.tsx": "", ".gitignore": ".env*\n" })
     const first = runInit({ cwd: root })
-    writeFileSync(join(root, "clegra.ts"), "// mine\n")
-    const before = Object.fromEntries(["clegra.ts", "app/api/clegra/[...path]/route.ts", "next.config.ts", ".env.local"].map((p) => [p, read(root, p)]))
+    writeFileSync(join(root, "clegra/app.ts"), "// mine\n")
+    const before = Object.fromEntries(["clegra/app.ts", "app/api/clegra/[...path]/route.ts", "next.config.ts", ".env.local"].map((p) => [p, read(root, p)]))
     const second = runInit({ cwd: root })
     assert.deepEqual(second.steps.map((s) => s.verb), ["skip", "skip", "skip", "skip"])
     for (const [p, text] of Object.entries(before)) assert.equal(read(root, p), text, p)
@@ -134,9 +137,9 @@ describe("clegra init", () => {
     const cjs = `/** @type {import('next').NextConfig} */\nconst nextConfig = { basePath: "/docs" }\nmodule.exports = nextConfig\n`
     const root = project({ "package.json": pkg({ dependencies: { next: "^16.0.0" } }), "next.config.js": cjs, "app/page.jsx": "", "proxy.js": "export function proxy() {}\n" })
     const result = runInit({ cwd: root })
-    assert.deepEqual(result.steps.map((s) => `${s.verb} ${s.path}`), ["create clegra.js", "create app/api/clegra/[...path]/route.js", "edit next.config.js", "create .env.local"])
+    assert.deepEqual(result.steps.map((s) => `${s.verb} ${s.path}`), ["create clegra/task.js", "create clegra/complete.js", "create clegra/tasks.js", "create clegra/app.js", "create clegra/index.js", "create app/api/clegra/[...path]/route.js", "edit next.config.js", "create .env.local"])
     assert.equal(read(root, "next.config.js"), `const { withClegra } = require("@clegra/sdk/next")\n${cjs.replace("module.exports = nextConfig", "module.exports = withClegra(nextConfig)")}`)
-    assert.doesNotMatch(read(root, "clegra.js"), /: string|type Task|ResolvedCaller/)
+    for (const f of ["task", "complete", "tasks", "app", "index"]) assert.doesNotMatch(read(root, `clegra/${f}.js`), /: string|type Task|ResolvedCaller|as keyof/, f)
     assert.match(read(root, "app/api/clegra/[...path]/route.js"), /from "\.\.\/\.\.\/\.\.\/\.\.\/clegra"/)
     assert.equal(result.warnings.length, 3)
     assert.match(result.warnings.join("\n"), /basePath/)
@@ -148,8 +151,8 @@ describe("clegra init", () => {
   test("--dry-run writes nothing", () => {
     const root = project({ "package.json": pkg(), "tsconfig.json": TSCONFIG, "next.config.ts": NEXT_TS, "app/page.tsx": "", ".gitignore": ".env*\n" })
     const result = runInit({ cwd: root, dryRun: true })
-    assert.equal(result.steps.length, 4)
-    for (const p of ["clegra.ts", "app/api", ".env.local"]) assert.equal(existsSync(join(root, p)), false, p)
+    assert.equal(result.steps.length, 8)
+    for (const p of ["clegra", "app/api", ".env.local"]) assert.equal(existsSync(join(root, p)), false, p)
     assert.equal(read(root, "next.config.ts"), NEXT_TS)
     assert.match(formatInit(result, true), /--dry-run \(nothing written\)[\s\S]*--token <generated on a real run>/)
   })
@@ -159,7 +162,7 @@ describe("clegra init", () => {
     assert.throws(() => runInit({ cwd: project({ "package.json": JSON.stringify({ name: "x", dependencies: { express: "5" } }) }) }), (e: unknown) => e instanceof InitError && /has no "next" dependency/.test(e.message))
     const pages = project({ "package.json": pkg(), "pages/index.tsx": "" })
     assert.throws(() => runInit({ cwd: pages }), (e: unknown) => e instanceof InitError && /needs the App Router/.test(e.message))
-    assert.equal(existsSync(join(pages, "clegra.ts")), false)
+    assert.equal(existsSync(join(pages, "clegra")), false)
   })
 
   test("helpers: config edits only when certain, app ids, JSON with comments", () => {
@@ -175,7 +178,7 @@ describe("clegra init", () => {
   })
 })
 
-describe("the generated clegra.ts", () => {
+describe("the generated clegra/", () => {
   // Written inside this package so that `@clegra/sdk` and `zod` resolve; removed afterwards.
   const here = dirname(fileURLToPath(import.meta.url))
   // Writable here (Next's types make NODE_ENV read-only).
@@ -194,7 +197,7 @@ describe("the generated clegra.ts", () => {
     env.NODE_ENV = "development"
     process.env.CLEGRA_LOCAL_TOKEN = token!
     delete process.env.CLEGRA_PUBLIC_URL
-    const { app } = (await import(join(root, "clegra.ts"))) as { app: { fetch: (r: Request) => Promise<Response> } }
+    const { served: app } = (await import(join(root, "clegra/index.ts"))) as { served: { fetch: (r: Request) => Promise<Response> } }
     const report = await checkApp({ url: "http://localhost:3000", token: token!, fetch: (r) => app.fetch(r) })
     const failed = report.checks.filter((c) => !c.ok)
     assert.deepEqual(failed.map((c) => c.id), ["auth.mcp"], JSON.stringify(failed))
@@ -215,8 +218,8 @@ describe("the generated clegra.ts", () => {
     assert.equal((await call(token!, "task_list", {})).status, 500)
     process.env.CLEGRA_PUBLIC_URL = "https://tasks.example.test"
     // A second copy of the module: `resource` is read when the module loads.
-    writeFileSync(join(root, "clegra-production.ts"), read(root, "clegra.ts"))
-    const { app: prod } = (await import(join(root, "clegra-production.ts"))) as { app: { fetch: (r: Request) => Promise<Response> } }
+    writeFileSync(join(root, "clegra/production.ts"), read(root, "clegra/index.ts"))
+    const { served: prod } = (await import(join(root, "clegra/production.ts"))) as { served: { fetch: (r: Request) => Promise<Response> } }
     const refused = await prod.fetch(new Request("https://tasks.example.test/mcp", { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }) }))
     assert.equal(refused.status, 401)
   })

@@ -46,11 +46,12 @@ The same rules apply in the pages and over MCP.
 - **The app's functions** (`lib/warehouse.ts`), such as `listProducts`, `registerMovement` and
   `confirmOrder`, are always scoped by the tenant: an organization, or a Clegra
   company. The pages and server actions call them.
-- **The app definition** is `lib/clegra.ts`. It is one `defineApp`, and its handlers call
-  those same functions with the tenant the SDK verified (`ctx.installation`):
-  - entities `product`, `movement` and `order`;
-  - actions `register_movement`, `confirm_order` (always confirmed first) and `create_order`;
-  - artifacts, pages and an agent.
+- **The app definition** is `clegra/`, one file per thing: `entities/` (`product`, `movement`, `order`),
+  `actions/` (`register_movement`, `confirm_order` (always confirmed first), `create_order`, the scheduled
+  `check_low_stock`), `artifacts/`, `pages/` and `agents/`, each a `define*` handle naming the others by import.
+  `clegra/app.ts` assembles them in one pure `defineApp`; `clegra/serve.ts` runs it (`serve(warehouse, { auth,
+  store, people, site, clientOrigins })`), and `lib/app.ts` makes it once for the route and `proxy.ts`. Every
+  handler calls those same functions with the tenant the SDK verified (`ctx.installation`).
 - **Who is calling** (`lib/clegra-auth.ts`): the app verifies better-auth's access tokens
   itself in `auth.resolve`, in about 40 lines with `jose`. A token counts only if all of these hold:
   - it is a JWT (`typ: at+jwt`) signed with better-auth's own keys, by its issuer;

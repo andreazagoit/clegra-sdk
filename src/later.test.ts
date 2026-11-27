@@ -1,14 +1,11 @@
 import assert from "node:assert/strict"
-import { randomUUID } from "node:crypto"
-import { rmSync } from "node:fs"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
 import { after, before, beforeEach, describe, mock, test } from "node:test"
 
 import { PGlite } from "@electric-sql/pglite"
 import { z } from "zod"
 
-import { argsHash, defineApp, MemoryStore, SqlStore, type AuthOptions, type IdempotencyStore, type LaterInfo } from "./index"
+import { argsHash, defineAction, defineApp, defineEntity, MemoryStore, serve, SqlStore, type IdempotencyStore, type LaterInfo } from "./index"
+import { devSignIn } from "./signin"
 import { installationClient, testClient, type ToolCallResult } from "./testing"
 
 /**
@@ -16,7 +13,7 @@ import { installationClient, testClient, type ToolCallResult } from "./testing"
  * `clegra_later` schedule when it is due — once, exactly as confirmed, within its deadline.
  */
 
-const keyFile = join(tmpdir(), `clegra-later-key-${randomUUID()}.json`)
+const randomUUID = () => crypto.randomUUID()
 const pg = new PGlite()
 before(async () => {
   await pg.exec(SqlStore.schema("posts_store"))
@@ -24,7 +21,6 @@ before(async () => {
   await pg.exec(SqlStore.schema("posts_store"))
 })
 after(async () => {
-  rmSync(keyFile, { force: true })
   await pg.close()
 })
 
@@ -34,32 +30,33 @@ beforeEach(() => void (published.length = 0))
 
 const WINDOW = 30
 
+const post = defineEntity({ name: "post", label: "Post", schema: z.object({ id: z.string(), text: z.string().meta({ role: "title" }) }), get: () => null, list: () => ({ rows: [] }) })
+
 function makeApp(store: IdempotencyStore) {
-  return defineApp({
+  const publish = defineAction({
+    name: "publish",
+    title: "Publish",
+    input: z.object({ text: z.string().meta({ label: "Text" }), when: z.iso.datetime().meta({ label: "When" }) }),
+    permission: "posts.publish",
+    later: { at: "when", window: WINDOW },
+    expose: { plain: true },
+    run: (input, ctx) => {
+      published.push({ text: input.text, person: ctx.person?.id ?? null, later: ctx.later, schedule: ctx.schedule, settings: ctx.settings.signature })
+      ctx.notify({ title: `Published ${input.text}` })
+      return { message: "Published." }
+    },
+  })
+  const withdraw = defineAction({ name: "withdraw", title: "Withdraw", input: z.object({ id: z.string() }), confirm: false, run: async (input, ctx) => ({ message: String(await ctx.cancelLater(input.id)) }) })
+  const app = defineApp({
     name: "posts",
     title: "Posts",
     version: "1.0.0",
-    auth: { dev: { keyFile, code: "LATER1" } } as AuthOptions,
-    store,
     permissions: { "posts.publish": { label: "Publish posts" } },
     settings: { signature: { label: "Signature", type: "text", default: "—" } },
-    entities: { post: { label: "Post", schema: z.object({ id: z.string(), text: z.string().meta({ role: "title" }) }), get: () => null, list: () => ({ rows: [] }) } },
-    actions: {
-      publish: {
-        title: "Publish",
-        input: z.object({ text: z.string().meta({ label: "Text" }), when: z.iso.datetime().meta({ label: "When" }) }),
-        permission: "posts.publish",
-        later: { at: "when", window: WINDOW },
-        expose: { plain: true },
-        run: (input, ctx) => {
-          published.push({ text: input.text, person: ctx.person?.id ?? null, later: ctx.later, schedule: ctx.schedule, settings: ctx.settings.signature })
-          ctx.notify({ title: `Published ${input.text}` })
-          return { message: "Published." }
-        },
-      },
-      withdraw: { title: "Withdraw", input: z.object({ id: z.string() }), confirm: false, run: async (input, ctx) => ({ message: String(await ctx.cancelLater(input.id)) }) },
-    },
+    entities: [post],
+    actions: [publish, withdraw],
   })
+  return serve(app, { auth: { signIn: devSignIn(app, { code: "LATER1" }) }, store })
 }
 
 const minutes = (n: number) => new Date(Date.now() + n * 60_000).toISOString()
@@ -194,7 +191,7 @@ describe("later runs: what is kept is checked again", () => {
 
     const second = await confirmOne("original")
     const evil2 = { text: "evil", when: second.kept.at }
-    await pg.query("UPDATE posts_store_later SET args = $2, args_hash = $3 WHERE id = $1", [second.kept.id, JSON.stringify(evil2), argsHash(evil2)])
+    await pg.query("UPDATE posts_store_later SET args = $2, args_hash = $3 WHERE id = $1", [second.kept.id, JSON.stringify(evil2), await argsHash(evil2)])
     const r2 = await (await installationClient(second.app)).runLater()
     assert.deepEqual(runs(r2).map((x) => [x.status, x.message]), [["refused", "the proof is for other arguments"]])
     assert.equal(published.length, 0)
@@ -212,16 +209,9 @@ describe("later runs: what is kept is checked again", () => {
 
   test("deleting the tenant's data deletes its later runs too", async () => {
     const store = sql()
-    const app = defineApp({
-      name: "posts2",
-      title: "Posts",
-      version: "1",
-      auth: { dev: { keyFile, code: "LATER1" } } as AuthOptions,
-      store,
-      entities: { post: { label: "Post", schema: z.object({ id: z.string(), text: z.string().meta({ role: "title" }) }), get: () => null, list: () => ({ rows: [] }) } },
-      actions: { publish: { title: "Publish", input: z.object({ when: z.iso.datetime() }), later: { at: "when" }, run: () => {} } },
-      lifecycle: { delete: () => ({ counts: { posts: 0 } }) },
-    })
+    const publish = defineAction({ name: "publish", title: "Publish", input: z.object({ when: z.iso.datetime() }), later: { at: "when" }, run: () => {} })
+    const defined = defineApp({ name: "posts2", title: "Posts", version: "1", entities: [post], actions: [publish], lifecycle: { delete: () => ({ counts: { posts: 0 } }) } })
+    const app = serve(defined, { auth: { signIn: devSignIn(defined, { code: "LATER1" }) }, store })
     assert.equal(app.manifest().actions[0]!.later!.window, 60, "the default window")
     await (await testClient(app, { host: "workspace", installation: "deleting" })).confirmed("publish", { when: minutes(30) })
     const inst = await installationClient(app, { installation: "deleting" })

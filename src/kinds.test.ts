@@ -5,14 +5,16 @@ import { describe, test } from "node:test"
 
 import { z } from "zod"
 
-import { defineApp, manifestSchema, type AuthOptions, type Query } from "./index"
+import { defineApp, defineEntity, manifestSchema, serve, type App, type Query } from "./index"
+import { devSignIn } from "./signin"
 import { checkApp, formatReport, type Report } from "../spec/src/conformance"
 import { kindsDocument, normaliseKey, valueProblem, KINDS } from "../spec/src/kinds"
 import { MANIFEST_PATH, SPEC_VERSION } from "../spec/src/protocol"
 import { testClient } from "./testing"
 
 const local = { remoteAddress: "127.0.0.1" }
-const auth = { dev: { keyFile: false, code: "TEST1" } } as AuthOptions
+/** Served with the development sign-in, at the address the conformance checks reach it by. */
+const served = (app: App) => serve(app, { auth: { signIn: devSignIn(app, { issuer: "http://127.0.0.1:3961", code: "TEST1" }) } })
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- rows of several shapes
 type Row = any
@@ -47,74 +49,80 @@ const upper = (v: string) => normaliseKey(v, "uppercase-no-spaces")
 
 function kindApp(over: { contactList?: (q: Query) => { rows: Row[] }; contactRows?: () => Row[] } = {}) {
   const rows = over.contactRows ?? (() => contacts)
-  return defineApp({
-    name: "people",
-    title: { en: "People", it: "Persone" },
-    version: "1.0.0",
-    locale: "en",
-    auth,
-    kinds: { "com.example.shipment": { label: "Shipment", properties: { trackingNumber: { type: "string", key: true }, weight: { type: "number" } } } },
-    entities: {
-      contact: {
-        label: { en: "Contact", it: "Contatto" },
-        kind: "person",
-        schema: z.object({
-          id: z.string(),
-          name: z.string().meta({ role: "title", search: true }),
-          email: z.string().meta({ as: "email", label: { en: "Email", it: "Posta" }, filter: true, search: true }),
-          phone: z.string().optional().meta({ as: "telephone" }),
-          updated: z.string().meta({ as: "dateModified" }),
-        }),
-        get: (id) => rows().find((r) => r.id === id) ?? null,
-        list: over.contactList ?? lister(rows, { email: lower }),
-      },
-      customer: {
-        label: "Customer",
-        kind: { by: "type", map: { company: "organization", private: "person" } },
-        schema: z.object({
-          id: z.string(),
-          type: z.enum(["company", "private"]),
-          name: z.string().meta({ role: "title", search: true }),
-          vat: z.string().optional().meta({ as: "vatID", filter: true }),
-          emails: z.array(z.string()).meta({ as: "email", filter: true }),
-        }),
-        get: (id) => customers.find((r) => r.id === id) ?? null,
-        list: lister(() => customers, { vat: upper, emails: lower }),
-      },
-      product: {
-        label: "Product",
-        kind: "product",
-        schema: z.object({ id: z.string(), name: z.string().meta({ role: "title" }), sku: z.string().meta({ as: "sku" }), gtin: z.string().meta({ as: "gtin", filter: true }), price: z.number().meta({ as: "price", currency: "EUR" }) }),
-        get: (id) => products.find((r) => r.id === id) ?? null,
-        list: lister(() => products, { gtin: (v) => normaliseKey(v, "digits") }),
-      },
-      meeting: {
-        label: "Meeting",
-        kind: "event",
-        schema: z.object({ id: z.string(), title: z.string().meta({ role: "title" }), start: z.string().meta({ as: "startDate" }), uid: z.string().meta({ as: "uid", filter: true }) }),
-        get: (id) => meetings.find((r) => r.id === id) ?? null,
-        list: lister(() => meetings),
-      },
-      shipment: {
-        label: "Shipment",
-        kind: "com.example.shipment",
-        schema: z.object({ id: z.string(), code: z.string().meta({ role: "title", as: "trackingNumber", filter: true }), kg: z.number().meta({ as: "weight" }) }),
-        get: () => null,
-        list: () => ({ rows: [{ id: "s1", code: "TRK-1", kg: 2 }] }),
-      },
-      note: {
-        label: "Note",
-        schema: z.object({ id: z.string(), text: z.string().meta({ role: "title", search: true }) }),
-        get: () => null,
-        list: () => ({ rows: [{ id: "n1", text: "Ada called" }] }),
-      },
-    },
+  const contact = defineEntity({
+    name: "contact",
+    label: { en: "Contact", it: "Contatto" },
+    kind: "person",
+    schema: z.object({
+      id: z.string(),
+      name: z.string().meta({ role: "title", search: true }),
+      email: z.string().meta({ as: "email", label: { en: "Email", it: "Posta" }, filter: true, search: true }),
+      phone: z.string().optional().meta({ as: "telephone" }),
+      updated: z.string().meta({ as: "dateModified" }),
+    }),
+    get: (id) => rows().find((r) => r.id === id) ?? null,
+    list: over.contactList ?? lister(rows, { email: lower }),
   })
+  const customer = defineEntity({
+    name: "customer",
+    label: "Customer",
+    kind: { by: "type", map: { company: "organization", private: "person" } },
+    schema: z.object({
+      id: z.string(),
+      type: z.enum(["company", "private"]),
+      name: z.string().meta({ role: "title", search: true }),
+      vat: z.string().optional().meta({ as: "vatID", filter: true }),
+      emails: z.array(z.string()).meta({ as: "email", filter: true }),
+    }),
+    get: (id) => customers.find((r) => r.id === id) ?? null,
+    list: lister(() => customers, { vat: upper, emails: lower }),
+  })
+  const product = defineEntity({
+    name: "product",
+    label: "Product",
+    kind: "product",
+    schema: z.object({ id: z.string(), name: z.string().meta({ role: "title" }), sku: z.string().meta({ as: "sku" }), gtin: z.string().meta({ as: "gtin", filter: true }), price: z.number().meta({ as: "price", currency: "EUR" }) }),
+    get: (id) => products.find((r) => r.id === id) ?? null,
+    list: lister(() => products, { gtin: (v) => normaliseKey(v, "digits") }),
+  })
+  const meeting = defineEntity({
+    name: "meeting",
+    label: "Meeting",
+    kind: "event",
+    schema: z.object({ id: z.string(), title: z.string().meta({ role: "title" }), start: z.string().meta({ as: "startDate" }), uid: z.string().meta({ as: "uid", filter: true }) }),
+    get: (id) => meetings.find((r) => r.id === id) ?? null,
+    list: lister(() => meetings),
+  })
+  const shipment = defineEntity({
+    name: "shipment",
+    label: "Shipment",
+    kind: "com.example.shipment",
+    schema: z.object({ id: z.string(), code: z.string().meta({ role: "title", as: "trackingNumber", filter: true }), kg: z.number().meta({ as: "weight" }) }),
+    get: () => null,
+    list: () => ({ rows: [{ id: "s1", code: "TRK-1", kg: 2 }] }),
+  })
+  const note = defineEntity({
+    name: "note",
+    label: "Note",
+    schema: z.object({ id: z.string(), text: z.string().meta({ role: "title", search: true }) }),
+    get: () => null,
+    list: () => ({ rows: [{ id: "n1", text: "Ada called" }] }),
+  })
+  return served(
+    defineApp({
+      name: "people",
+      title: { en: "People", it: "Persone" },
+      version: "1.0.0",
+      locale: "en",
+      kinds: { "com.example.shipment": { label: "Shipment", properties: { trackingNumber: { type: "string", key: true }, weight: { type: "number" } } } },
+      entities: [contact, customer, product, meeting, shipment, note],
+    }),
+  )
 }
 
 /** An entity definition with one schema, for the definition errors. */
 const one = (kind: unknown, schema: z.ZodObject, extra: Record<string, unknown> = {}) => () =>
-  defineApp({ name: "k1", title: "K", version: "1", ...extra, entities: { e: { label: "E", kind: kind as never, schema, get: () => null, list: () => ({ rows: [] }) } } })
+  defineApp({ name: "k1", title: "K", version: "1", ...extra, entities: [defineEntity({ name: "e", label: "E", kind: kind as never, schema, get: () => null, list: () => ({ rows: [] }) })] })
 const title = z.string().meta({ role: "title" })
 
 describe("kinds: definition", () => {
@@ -184,7 +192,7 @@ describe("kinds: definition", () => {
     assert.throws(own({ "com.example.ticket": { label: "T", properties: { "Bad-Name": { type: "string" } } } }), /not a name/)
     assert.throws(own({ "com.example.ticket": { label: "T", properties: { size: { type: "number", key: true } } } }), /must be a string property/)
     assert.doesNotThrow(() =>
-      defineApp({ name: "k2", title: "K", version: "1", kinds: { "com.example.ticket": { label: "T", properties: { priority: { type: "string" } } } }, entities: { e: { label: "E", kind: "com.example.ticket", schema: z.object({ id: z.string(), n: title, p: z.string().meta({ as: "priority" }) }), get: () => null, list: () => ({ rows: [] }) } } }),
+      defineApp({ name: "k2", title: "K", version: "1", kinds: { "com.example.ticket": { label: "T", properties: { priority: { type: "string" } } } }, entities: [defineEntity({ name: "e", label: "E", kind: "com.example.ticket", schema: z.object({ id: z.string(), n: title, p: z.string().meta({ as: "priority" }) }), get: () => null, list: () => ({ rows: [] }) })] }),
     )
   })
 
@@ -339,7 +347,7 @@ const KIND_CHECKS = ["kinds.known", "kinds.properties", "kinds.tools", "kinds.ke
 const byId = (report: Report, id: string) => report.checks.find((c) => c.id === id)!
 
 async function run(app: ReturnType<typeof kindApp>, change?: Parameters<typeof tampered>[1]) {
-  return checkApp({ url: "http://127.0.0.1:3961", token: await app.devToken(), fetch: change ? tampered(app, change) : (r) => app.fetch(r, local) })
+  return checkApp({ url: "http://127.0.0.1:3961", token: await app.dev!.token(), fetch: change ? tampered(app, change) : (r) => app.fetch(r, local) })
 }
 
 describe("kinds: conformance", () => {
@@ -350,8 +358,8 @@ describe("kinds: conformance", () => {
   })
 
   test("an app without kinds: the kinds checks are neutral (skipped), and the app is conformant", async () => {
-    const app = defineApp({ name: "plainapp", title: "P", version: "1", auth, entities: { note: { label: "Note", schema: z.object({ id: z.string(), t: z.string().meta({ role: "title", search: true }) }), get: () => null, list: () => ({ rows: [{ id: "n1", t: "x" }] }) } } })
-    const report = await checkApp({ url: "http://127.0.0.1:3961", token: await app.devToken(), fetch: (r) => app.fetch(r, local) })
+    const app = served(defineApp({ name: "plainapp", title: "P", version: "1", entities: [defineEntity({ name: "note", label: "Note", schema: z.object({ id: z.string(), t: z.string().meta({ role: "title", search: true }) }), get: () => null, list: () => ({ rows: [{ id: "n1", t: "x" }] }) })] }))
+    const report = await checkApp({ url: "http://127.0.0.1:3961", token: await app.dev!.token(), fetch: (r) => app.fetch(r, local) })
     assert.ok(report.ok && report.complete, formatReport(report))
     for (const id of KIND_CHECKS) assert.ok(byId(report, id).skipped, `${id} is skipped`)
     assert.match(formatReport(report), /\nConformant\.$/)

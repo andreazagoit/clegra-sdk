@@ -1,14 +1,11 @@
 import assert from "node:assert/strict"
-import { randomUUID } from "node:crypto"
-import { rmSync } from "node:fs"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
 import { after, before, describe, test } from "node:test"
 
 import { chromium, type Browser, type FrameLocator, type Page } from "playwright"
 import { z } from "zod"
 
-import { defineApp, type AuthOptions } from "./index"
+import { defineAction, defineApp, defineArtifact, defineEntity, definePage, serve } from "./index"
+import { devSignIn } from "./signin"
 import { testClient, type ToolCallResult } from "./testing"
 import { viewHtml } from "./view"
 
@@ -27,66 +24,53 @@ import { viewHtml } from "./view"
  * inline widget: what the view says after a click must be inside what the person sees.
  */
 
-const keyFile = join(tmpdir(), `clegra-view-key-${randomUUID()}.json`)
-
 type Deal = { id: string; name: string; stage: "open" | "won"; value: number; openedAt: string }
 const names = ["Hartley Engineering", "Acme Tools", "Birch Labs", "Cobalt Retail", "Delta Foods", "Ember Studio", "Fjord Logistics", "Granite Works", "Harbor Clinic", "Iris Media", "Juniper Farms", "Kestrel Air"]
 
 function makeApp(deals: Deal[]) {
-  return defineApp({
-    name: "sales",
-    title: "Sales",
-    version: "1.0.0",
-    locale: "en",
-    auth: { dev: { keyFile, code: "VIEW1" } } as AuthOptions,
-    entities: {
-      deal: {
-        label: "Deal",
-        plural: { en: "Deals", it: "Trattative" },
-        schema: z.object({
-          id: z.string(),
-          name: z.string().meta({ role: "title", label: "Deal", search: true, untrusted: true }),
-          stage: z.enum(["open", "won"]).meta({ role: "status", label: "Stage", labels: { open: "Open", won: "Won" }, tones: { won: "success" } }),
-          value: z.number().meta({ role: "amount", currency: "EUR", label: "Value" }),
-          openedAt: z.iso.datetime().meta({ label: "Opened" }),
-        }),
-        get: (id) => deals.find((d) => d.id === id) ?? null,
-        list: () => ({ rows: deals }),
-      },
-    },
-    actions: {
-      mark_won: {
-        on: "deal",
-        title: "Mark as won",
-        input: z.object({ note: z.string().max(200).optional().meta({ label: "Note" }) }),
-        confirm: true,
-        expose: { plain: true },
-        run: (input, _ctx, deal) => {
-          const d = deals.find((x) => x.id === deal.id)!
-          d.stage = "won"
-          return { message: `${d.name} marked as won.${input.note ? ` (${input.note})` : ""}`, record: d.id }
-        },
-      },
-      add_deal: {
-        title: "Add deal",
-        input: z.object({ name: z.string().min(1).meta({ label: "Name" }), stage: z.enum(["open", "won"]).meta({ label: "Stage", labels: { open: "Open", won: "Won" } }) }),
-        confirm: false,
-        expose: { plain: true },
-        run: (input) => {
-          deals.push({ id: `d${deals.length + 1}`, name: input.name, stage: input.stage, value: 0, openedAt: "2026-03-15T08:00:00.000Z" })
-          return { message: `${input.name} added.` }
-        },
-      },
-    },
-    artifacts: {
-      open_deals: { title: "Open deals", description: "How many deals are open", params: z.object({}), template: "stat", data: () => ({ label: "Open", value: deals.filter((d) => d.stage === "open").length }) },
-    },
-    pages: {
-      pipeline: { title: "Pipeline", list: "deal", columns: ["name", "stage"], params: z.object({ stage: z.enum(["open", "won"]).optional() }), query: () => ({}), actions: ["add_deal"], badge: "open_deals" },
-      summary: { title: "Summary", dashboard: [{ type: "open_deals", params: {} }] },
-    },
-    nav: [{ section: "Sales", pages: ["pipeline", "summary"] }],
+  const deal = defineEntity({
+    name: "deal",
+    label: "Deal",
+    plural: { en: "Deals", it: "Trattative" },
+    schema: z.object({
+      id: z.string(),
+      name: z.string().meta({ role: "title", label: "Deal", search: true, untrusted: true }),
+      stage: z.enum(["open", "won"]).meta({ role: "status", label: "Stage", labels: { open: "Open", won: "Won" }, tones: { won: "success" } }),
+      value: z.number().meta({ role: "amount", currency: "EUR", label: "Value" }),
+      openedAt: z.iso.datetime().meta({ label: "Opened" }),
+    }),
+    get: (id) => deals.find((d) => d.id === id) ?? null,
+    list: () => ({ rows: deals }),
   })
+  const markWon = defineAction({
+    name: "mark_won",
+    on: deal,
+    title: "Mark as won",
+    input: z.object({ note: z.string().max(200).optional().meta({ label: "Note" }) }),
+    confirm: true,
+    expose: { plain: true },
+    run: (input, _ctx, record) => {
+      const d = deals.find((x) => x.id === record.id)!
+      d.stage = "won"
+      return { message: `${d.name} marked as won.${input.note ? ` (${input.note})` : ""}`, record: d.id }
+    },
+  })
+  const addDeal = defineAction({
+    name: "add_deal",
+    title: "Add deal",
+    input: z.object({ name: z.string().min(1).meta({ label: "Name" }), stage: z.enum(["open", "won"]).meta({ label: "Stage", labels: { open: "Open", won: "Won" } }) }),
+    confirm: false,
+    expose: { plain: true },
+    run: (input) => {
+      deals.push({ id: `d${deals.length + 1}`, name: input.name, stage: input.stage, value: 0, openedAt: "2026-03-15T08:00:00.000Z" })
+      return { message: `${input.name} added.` }
+    },
+  })
+  const openDeals = defineArtifact({ name: "open_deals", title: "Open deals", description: "How many deals are open", params: z.object({}), template: "stat", data: () => ({ label: "Open", value: deals.filter((d) => d.stage === "open").length }) })
+  const pipeline = definePage({ name: "pipeline", title: "Pipeline", list: deal, columns: ["name", "stage"], params: z.object({ stage: z.enum(["open", "won"]).optional() }), query: () => ({}), actions: [addDeal], badge: openDeals })
+  const summary = definePage({ name: "summary", title: "Summary", dashboard: [{ artifact: openDeals, params: {} }] })
+  const app = defineApp({ name: "sales", title: "Sales", version: "1.0.0", locale: "en", entities: [deal], actions: [markWon, addDeal], artifacts: [openDeals], pages: [pipeline, summary], nav: [{ section: "Sales", pages: [pipeline, summary] }] })
+  return serve(app, { auth: { signIn: devSignIn(app, { code: "VIEW1" }) } })
 }
 
 type Mode = "mcp" | "chatgpt" | "openai"
@@ -151,7 +135,6 @@ before(async () => {
 })
 after(async () => {
   await browser?.close()
-  rmSync(keyFile, { force: true })
 })
 
 async function host(options: HostOptions): Promise<{ page: Page; view: FrameLocator; log: () => Promise<Logged[]>; deals: Deal[] }> {

@@ -1,9 +1,10 @@
 # CRM: a Next.js app that is also a Clegra app
 
 This is a small sales team's CRM (companies, contacts, deals, calls). It has its own sign-in (better-auth with
-organizations) and its own database (Drizzle on Postgres, or an embedded PGlite locally). The file
-`clegra/app.ts` turns it into a Clegra app: an MCP server that ChatGPT, Claude, MCP Inspector or Clegra can connect
-to. It uses the same functions the pages use (`lib/crm.ts`). better-auth is also the OAuth server those clients sign
+organizations) and its own database (Drizzle on Postgres, or an embedded PGlite locally). The folder `clegra/`
+turns it into a Clegra app, one file per entity, action, artifact, page and agent (`defineEntity`, `defineAction`,
+…), assembled by `clegra/app.ts` (`defineApp`) and served by `clegra/index.ts` (`serve`): an MCP server that
+ChatGPT, Claude, MCP Inspector or Clegra can connect to. It uses the same functions the pages use (`lib/crm.ts`). better-auth is also the OAuth server those clients sign
 in through. All data is invented. Walkthrough: [docs/examples/crm.md](../../docs/examples/crm.md).
 
 In a workspace host it shows navigation sections («Sales», «Customers»), «New deal» and «New contact» as the deals'

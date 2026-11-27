@@ -1,5 +1,5 @@
 import { toNextHandlers } from "@clegra/sdk/next"
-import type { App } from "@clegra/sdk"
+import type { ServedApp } from "@clegra/sdk"
 import type { NextRequest } from "next/server"
 
 // Test-only probes: what a route handler sees of a (rewritten) request, and an SSE stream through toNextHandlers.
@@ -23,7 +23,7 @@ const streaming = {
     }
     return Response.json({ adapterUrl: request.url, host: request.headers.get("host"), forwardedHost: request.headers.get("x-forwarded-host"), forwardedProto: request.headers.get("x-forwarded-proto") })
   },
-} as unknown as App
+} as unknown as ServedApp
 const adapted = toNextHandlers(streaming, { mount: "/api/probe" })
 
 export async function GET(request: NextRequest) {

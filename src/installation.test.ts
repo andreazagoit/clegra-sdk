@@ -1,22 +1,17 @@
 import assert from "node:assert/strict"
-import { createHash, randomUUID } from "node:crypto"
-import { rmSync } from "node:fs"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
-import { after, beforeEach, describe, test } from "node:test"
+import { createHash } from "node:crypto"
+import { beforeEach, describe, test } from "node:test"
 
 import { z } from "zod"
 
-import { defineApp, manifestSchema, type AuthOptions } from "./index"
+import { defineAction, defineAgent, defineApp, defineArtifact, defineEntity, definePage, manifestSchema, serve, type App } from "./index"
+import { devSignIn } from "./signin"
 import { installationClient, testClient } from "./testing"
 
 /**
  * What an app tells a workspace host beyond its records: its navigation, page actions and badges, app-only items,
  * schedules run as the installation, typed notifications, and the lifecycle tools.
  */
-
-const keyFile = join(tmpdir(), `clegra-installation-key-${randomUUID()}.json`)
-after(() => rmSync(keyFile, { force: true }))
 
 type Task = { id: string; title: string; project: string; done: boolean }
 const tasks = new Map<string, Task[]>()
@@ -32,63 +27,64 @@ beforeEach(() => {
   states.length = 0
 })
 
-function makeApp(options: { notify?: Record<string, unknown> } = {}) {
+const served = (app: App) => serve(app, { auth: { signIn: devSignIn(app, { code: "INST1" }) } })
+
+function makeDefinition(options: { notify?: Record<string, unknown> } = {}) {
+  const task = defineEntity({
+    name: "task",
+    label: "Task",
+    schema: z.object({ id: z.string(), title: z.string().meta({ role: "title", label: "Title", search: true }), project: z.string().meta({ label: "Project", filter: true }), done: z.boolean().meta({ label: "Done" }) }),
+    get: (id, ctx) => tasksOf(ctx.installation).find((t) => t.id === id) ?? null,
+    list: (q, ctx) => ({ rows: tasksOf(ctx.installation).filter((t) => !q.text || t.title.toLowerCase().includes(q.text.toLowerCase())) }),
+  })
+  const audit = defineEntity({
+    name: "audit",
+    label: "Audit entry",
+    visibility: "app",
+    schema: z.object({ id: z.string(), what: z.string().meta({ role: "title", label: "What", search: true }) }),
+    get: (id, ctx) => (audits.get(ctx.installation) ?? []).find((a) => a.id === id) ?? null,
+    list: (_q, ctx) => ({ rows: audits.get(ctx.installation) ?? [{ id: "a1", what: "Write the spec opened" }] }),
+  })
+  const add = defineAction({
+    name: "add",
+    title: "Add task",
+    input: z.object({ title: z.string().meta({ label: "Title" }), project: z.string().optional().meta({ label: "Project" }) }),
+    confirm: false,
+    permission: "tasks.edit",
+    run: (input, ctx) => {
+      tasksOf(ctx.installation).push({ id: `t${tasksOf(ctx.installation).length + 1}`, title: input.title, project: input.project ?? "", done: false })
+      return { message: "Added." }
+    },
+  })
+  const digest = defineAction({
+    name: "digest",
+    title: "Send the digest",
+    input: z.object({}),
+    readOnly: true,
+    run: (_input, ctx) => {
+      ctx.notify((options.notify as never) ?? { type: "digest", title: "Your digest", to: "admins" })
+      return { message: `schedule ${ctx.schedule ?? "none"}, person ${ctx.person?.id ?? "none"}` }
+    },
+  })
+  const touch = defineAction({ name: "touch", title: "Touch", input: z.object({}), readOnly: true, visibility: "app", run: () => ({ message: "touched" }) })
+  const openCount = defineArtifact({ name: "open_count", title: "Open tasks", description: "How many tasks are open", params: z.object({}), template: "stat", data: (_p, ctx) => ({ label: "open", value: tasksOf(ctx.installation).filter((t) => !t.done).length }) })
+  const secret = defineArtifact({ name: "secret", title: "Secret", description: "For the view only", params: z.object({}), template: "stat", visibility: "app", data: () => ({ label: "s", value: 1 }) })
+  const list = definePage({ name: "list", title: "Tasks", list: task, columns: ["title", "project"], actions: [add, digest], badge: openCount })
+  const board = definePage({ name: "board", title: "Board", dashboard: [{ artifact: openCount, params: {} }] })
+  const hidden = definePage({ name: "hidden", title: "Hidden", dashboard: [], permission: "tasks.admin" })
   return defineApp({
     name: "tasks",
     title: "Tasks",
     version: "1.0.0",
-    auth: { dev: { keyFile, code: "INST1" } } as AuthOptions,
     permissions: { "tasks.edit": { label: "Edit tasks" }, "tasks.admin": { label: "Manage tasks" } },
-    entities: {
-      task: {
-        label: "Task",
-        schema: z.object({ id: z.string(), title: z.string().meta({ role: "title", label: "Title", search: true }), project: z.string().meta({ label: "Project", filter: true }), done: z.boolean().meta({ label: "Done" }) }),
-        get: (id, ctx) => tasksOf(ctx.installation).find((t) => t.id === id) ?? null,
-        list: (q, ctx) => ({ rows: tasksOf(ctx.installation).filter((t) => !q.text || t.title.toLowerCase().includes(q.text.toLowerCase())) }),
-      },
-      audit: {
-        label: "Audit entry",
-        visibility: "app",
-        schema: z.object({ id: z.string(), what: z.string().meta({ role: "title", label: "What", search: true }) }),
-        get: (id, ctx) => (audits.get(ctx.installation) ?? []).find((a) => a.id === id) ?? null,
-        list: (_q, ctx) => ({ rows: audits.get(ctx.installation) ?? [{ id: "a1", what: "Write the spec opened" }] }),
-      },
-    },
-    actions: {
-      add: {
-        title: "Add task",
-        input: z.object({ title: z.string().meta({ label: "Title" }), project: z.string().optional().meta({ label: "Project" }) }),
-        confirm: false,
-        permission: "tasks.edit",
-        run: (input, ctx) => {
-          tasksOf(ctx.installation).push({ id: `t${tasksOf(ctx.installation).length + 1}`, title: input.title, project: input.project ?? "", done: false })
-          return { message: "Added." }
-        },
-      },
-      digest: {
-        title: "Send the digest",
-        input: z.object({}),
-        readOnly: true,
-        run: (_input, ctx) => {
-          ctx.notify((options.notify as never) ?? { type: "digest", title: "Your digest", to: "admins" })
-          return { message: `schedule ${ctx.schedule ?? "none"}, person ${ctx.person?.id ?? "none"}` }
-        },
-      },
-      touch: { title: "Touch", input: z.object({}), readOnly: true, visibility: "app", run: () => ({ message: "touched" }) },
-    },
-    artifacts: {
-      open_count: { title: "Open tasks", description: "How many tasks are open", params: z.object({}), template: "stat", data: (_p, ctx) => ({ label: "open", value: tasksOf(ctx.installation).filter((t) => !t.done).length }) },
-      secret: { title: "Secret", description: "For the view only", params: z.object({}), template: "stat", visibility: "app", data: () => ({ label: "s", value: 1 }) },
-    },
-    pages: {
-      list: { title: "Tasks", list: "task", columns: ["title", "project"], actions: ["add", "digest"], badge: "open_count" },
-      board: { title: "Board", dashboard: [{ type: "open_count", params: {} }] },
-      hidden: { title: "Hidden", dashboard: [], permission: "tasks.admin" },
-    },
-    nav: [{ section: { en: "Work", it: "Lavoro" }, pages: ["list", "board"] }, { pages: ["hidden"] }],
-    schedules: { daily_digest: { action: "digest", every: 60 } },
+    entities: [task, audit],
+    actions: [add, digest, touch],
+    artifacts: [openCount, secret],
+    pages: [list, board, hidden],
+    nav: [{ section: { en: "Work", it: "Lavoro" }, pages: [list, board] }, { pages: [hidden] }],
+    schedules: [{ name: "daily_digest", action: digest, every: 60 }],
     notifications: { digest: { label: "Digest", permission: "tasks.edit" }, quiet: { label: "Quiet", default: false } },
-    agents: { helper: { title: "Helper", description: "Helps", instructions: "Help.", uses: ["task", "add"] } },
+    agents: [defineAgent({ name: "helper", title: "Helper", description: "Helps", instructions: "Help.", uses: [task, add] })],
     lifecycle: {
       installation: (state, ctx) => void states.push(`${ctx.installation}:${state}:${ctx.person === null}`),
       export: (ctx) => (tasks.has(ctx.installation) ? { contentType: "application/json", body: JSON.stringify(tasksOf(ctx.installation)) } : null),
@@ -101,9 +97,11 @@ function makeApp(options: { notify?: Record<string, unknown> } = {}) {
   })
 }
 
+const makeApp = (options: { notify?: Record<string, unknown> } = {}) => served(makeDefinition(options))
+
 describe("manifest", () => {
   test("carries the navigation, page actions and badges, visibility, schedules, notification types and lifecycle", () => {
-    const m = makeApp().manifest()
+    const m = makeDefinition().manifest()
     manifestSchema.parse(m)
     assert.deepEqual(m.nav, [{ section: { en: "Work", it: "Lavoro" }, pages: ["list", "board"] }, { pages: ["hidden"] }])
     const list = m.pages.find((p) => p.name === "list")!
@@ -200,15 +198,11 @@ describe("notifications", () => {
   })
 
   test("an app without types sends untyped notifications only; a person is the default recipient", async () => {
-    const make = (type?: string) =>
-      defineApp({
-        name: "plainnotes",
-        title: "N",
-        version: "1",
-        auth: { dev: { keyFile, code: "INST1" } } as AuthOptions,
-        entities: { n: { label: "N", schema: z.object({ id: z.string(), t: z.string().meta({ role: "title" }) }), get: () => null, list: () => ({ rows: [] }) } },
-        actions: { ping: { title: "Ping", input: z.object({}), readOnly: true, run: (_i, ctx) => void ctx.notify({ ...(type ? { type } : {}), title: { en: "Pinged", it: "Ping" }, body: "b" }) } },
-      })
+    const make = (type?: string) => {
+      const n = defineEntity({ name: "n", label: "N", schema: z.object({ id: z.string(), t: z.string().meta({ role: "title" }) }), get: () => null, list: () => ({ rows: [] }) })
+      const ping = defineAction({ name: "ping", title: "Ping", input: z.object({}), readOnly: true, run: (_i, ctx) => void ctx.notify({ ...(type ? { type } : {}), title: { en: "Pinged", it: "Ping" }, body: "b" }) })
+      return served(defineApp({ name: "plainnotes", title: "N", version: "1", entities: [n], actions: [ping] }))
+    }
     const c = await testClient(make(), { person: "test-person", host: "workspace" })
     assert.deepEqual(((await c.call("ping"))._meta as { clegra: { notifications: unknown[] } }).clegra.notifications, [{ title: "Pinged", body: "b", to: ["test-person"] }])
     assert.ok(failed(await (await testClient(make("x"), { host: "workspace" })).call("ping")))
@@ -245,7 +239,7 @@ describe("lifecycle", () => {
     const { result, file } = await inst.exportData()
     const body = JSON.stringify(tasksOf("dev@clegra-dev"))
     assert.deepEqual(result.structuredContent, { name: "tasks-export.json", contentType: "application/json", bytes: Buffer.byteLength(body), sha256: createHash("sha256").update(body).digest("hex") })
-    assert.equal(file!.body.toString("utf8"), body)
+    assert.equal(new TextDecoder().decode(file!.body), body)
     const resource = result.content!.find((c) => c.type === "resource")!.resource!
     assert.equal(resource.uri, "clegra://tasks/export/tasks-export.json")
     assert.equal(resource.mimeType, "application/json")

@@ -1,7 +1,7 @@
 import { calculateJwkThumbprint, decodeProtectedHeader, EmbeddedJWK, jwtVerify, type JWK, type JWTPayload } from "jose"
 
 import { AuthError } from "./auth"
-import { randomToken, sha256 } from "./signin/crypto"
+import { randomToken, sha256 } from "./crypto"
 
 /**
  * DPoP (RFC 9449), the app's side: a token bound to a client's key (`cnf.jkt`) is accepted only with a fresh proof

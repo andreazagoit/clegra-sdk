@@ -1,14 +1,15 @@
 import { randomBytes } from "node:crypto"
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
-import { dirname, join, resolve } from "node:path"
+import { dirname, join, posix, resolve } from "node:path"
 
 import { configWarnings, wrapNextConfig } from "./next-config"
 import { detectProject, importPathFor, InitError, clegraPath, routePath, type Project } from "./project"
-import { envLines, LOCAL_TOKEN_ENV, clegraFile, nextConfigFile, routeFile } from "./templates"
+import { clegraFiles, envLines, LOCAL_TOKEN_ENV, nextConfigFile, routeFile } from "./templates"
 import { initUi } from "./ui"
 
 /**
- * `clegra init`: @clegra/sdk added to an existing Next.js App Router app. It writes `clegra.ts`, the route
+ * `clegra init`: @clegra/sdk added to an existing Next.js App Router app. It writes the `clegra/` folder (one file per
+ * entity, action and page, `app` assembling them, `index` serving them), the route
  * `app/api/clegra/[...path]/route.ts`, wraps next.config with `withClegra`, and puts a local bearer in
  * `.env.local`. With `ui`, also @clegra/ui: its web libraries in package.json, its stylesheet after Tailwind (ui.ts).
  * It never overwrites a file: what exists is left as it is, and what it can't do safely it prints for you to do by
@@ -38,18 +39,21 @@ export function runInit(options: InitOptions): InitResult {
     steps.push({ verb: "create", path, ...(note ? { note } : {}) })
   }
 
-  // 1. clegra.ts (any clegra.* there counts: it is the developer's).
-  const appFile = clegraPath(project)
-  const existingApp = ["ts", "tsx", "js", "mjs"].map((e) => appFile.replace(/\.(ts|js)$/, `.${e}`)).find((p) => existsSync(at(p)))
-  if (existingApp) steps.push({ verb: "skip", path: existingApp, note: "exists, left as it is (the route imports `app` from it)" })
-  else create(appFile, clegraFile({ name: project.appName, title: project.appTitle, ts: project.ts }), `app "${project.appName}": sample tasks, one action, one page; TODOs for your data and sign-in`)
+  // 1. clegra/ (a clegra/ folder or any clegra.* file there counts: it is the developer's).
+  const appDir = clegraPath(project)
+  const existingApp = [appDir, ...["ts", "tsx", "js", "mjs"].map((e) => `${appDir}.${e}`)].find((p) => existsSync(at(p)))
+  if (existingApp) steps.push({ verb: "skip", path: existingApp, note: "exists, left as it is (the route imports `served` from it)" })
+  else {
+    const notes: Record<string, string> = { task: "the entity, on sample data: TODO your data", complete: "an action on a task", tasks: "a list page", app: `app "${project.appName}": defineApp assembles them`, index: "serve(app, { auth }): TODO your sign-in" }
+    for (const f of clegraFiles({ name: project.appName, title: project.appTitle, ts: project.ts })) create(posix.join(appDir, f.file), f.text, notes[f.file.replace(/\.(ts|js)$/, "")])
+  }
 
   // 2. The route.
   const route = routePath(project)
   const routeDir = dirname(route)
   const existingRoute = ["ts", "js", "mjs", "tsx", "jsx"].map((e) => `${routeDir}/route.${e}`).find((p) => existsSync(at(p)))
   if (existingRoute) steps.push({ verb: "skip", path: existingRoute, note: "exists, left as it is" })
-  else create(route, routeFile({ importPath: importPathFor(project) }), `imports { app } from "${importPathFor(project)}"`)
+  else create(route, routeFile({ importPath: importPathFor(project) }), `imports { served } from "${importPathFor(project)}"`)
   for (const shadow of ["mcp", ".well-known"]) {
     if (existsSync(join(root, project.appDir, shadow))) warnings.push(`${project.appDir}/${shadow} exists: withClegra's rewrites run before it (beforeFiles), so it no longer answers ${shadow === "mcp" ? "/mcp" : "the manifest and OAuth paths"}`)
   }
@@ -107,7 +111,7 @@ export function runInit(options: InitOptions): InitResult {
     `npm run dev   (then ${base}/.well-known/clegra.json is the manifest, ${base}/mcp the MCP server)`,
     `npx @clegra/sdk check ${base} --token ${shown}`,
     `MCP Inspector: npx @modelcontextprotocol/inspector, Streamable HTTP, ${base}/mcp, header Authorization: Bearer ${shown}`,
-    `A day to ship: your data in get/list/run, your sign-in in auth.signIn (@clegra/sdk/signin) or auth.resolve, CLEGRA_PUBLIC_URL in production (the TODOs in ${existingApp ?? appFile}; docs: start-next.md and auth.md)`,
+    `A day to ship: your data in get/list/run, your sign-in in auth.signIn (@clegra/sdk/signin) or auth.resolve, CLEGRA_PUBLIC_URL in production (the TODOs in ${existingApp ?? appDir}/; docs: start-next.md and auth.md)`,
   ]
   return { project, steps, warnings, next, token: write ? token : null }
 }

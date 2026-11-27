@@ -1,20 +1,13 @@
 import assert from "node:assert/strict"
-import { randomUUID } from "node:crypto"
-import { rmSync } from "node:fs"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
-import { after, describe, test } from "node:test"
+import { describe, test } from "node:test"
 import { z } from "zod"
 
 import { checkApp, formatReport } from "../spec/src/conformance"
 
-import { AuthError, defineApp, type AuthOptions, type ResolvedCaller } from "./index"
+import { AuthError, defineApp, defineEntity, serve, type AuthOptions, type ResolvedCaller } from "./index"
 import { testClient } from "./testing"
 
 // auth.resolve (spec §7, «The app's own tokens»): the app verifies its own access tokens and says who is calling.
-
-const keyFile = join(tmpdir(), `clegra-resolve-key-${randomUUID()}.json`)
-after(() => rmSync(keyFile, { force: true }))
 
 const RES = "https://notes.test/mcp"
 type Row = { id: string; title: string; secret: string; org: string }
@@ -33,11 +26,19 @@ const tokens: Record<string, { caller: ResolvedCaller; aud: string }> = {
 }
 const seen: { resource: string; url: string }[] = []
 
+const note = defineEntity({
+  name: "note",
+  label: "Note",
+  permission: "notes.view",
+  schema: z.object({ id: z.string(), title: z.string().meta({ role: "title", search: true }), secret: z.string().meta({ permission: "notes.secret", search: true }) }),
+  // The tenant comes from ctx (the verified caller), never from a parameter.
+  get: (id, ctx) => rows.find((r) => r.id === id && r.org === ctx.installation) ?? null,
+  list: (q, ctx) => ({ rows: rows.filter((r) => r.org === ctx.installation && (!q.text || (q.textFields ?? []).some((f) => String(r[f as keyof Row]).toLowerCase().includes(q.text!.toLowerCase())))) }),
+})
+const notes = defineApp({ name: "notes", title: "Notes", version: "1.0.0", permissions: { "notes.view": { label: "See notes", default: true }, "notes.secret": { label: "See secrets" } }, entities: [note] })
+
 function makeApp(auth: Partial<AuthOptions> = {}, path?: string) {
-  return defineApp({
-    name: "notes",
-    title: "Notes",
-    version: "1.0.0",
+  return serve(notes, {
     ...(path ? { path } : {}),
     auth: {
       resource: RES,
@@ -51,17 +52,6 @@ function makeApp(auth: Partial<AuthOptions> = {}, path?: string) {
         return t.caller
       },
       ...auth,
-    },
-    permissions: { "notes.view": { label: "See notes", default: true }, "notes.secret": { label: "See secrets" } },
-    entities: {
-      note: {
-        label: "Note",
-        permission: "notes.view",
-        schema: z.object({ id: z.string(), title: z.string().meta({ role: "title", search: true }), secret: z.string().meta({ permission: "notes.secret", search: true }) }),
-        // The tenant comes from ctx (the verified caller), never from a parameter.
-        get: (id, ctx) => rows.find((r) => r.id === id && r.org === ctx.installation) ?? null,
-        list: (q, ctx) => ({ rows: rows.filter((r) => r.org === ctx.installation && (!q.text || (q.textFields ?? []).some((f) => String(r[f as keyof Row]).toLowerCase().includes(q.text!.toLowerCase())))) }),
-      },
     },
   })
 }
@@ -141,7 +131,7 @@ describe("path prefix and same-site pages", () => {
     assert.match(r.headers.get("www-authenticate") ?? "", /oauth-protected-resource\/api\/map\/mcp/)
   })
 
-  test("a bad path is refused at definition", () => {
+  test("a bad path is refused when served", () => {
     assert.throws(() => makeApp({}, "api/map"), /a URL path/)
   })
 })
@@ -154,4 +144,3 @@ describe("conformance with a resolver", () => {
   })
 })
 
-void keyFile

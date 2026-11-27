@@ -23,7 +23,7 @@ export type Project = {
   ts: boolean
   /** The existing next.config file, relative to root, or null. */
   nextConfig: string | null
-  /** The `paths` alias that points at the folder of clegra.ts (`@/*` → `@/`), or null: then imports are relative. */
+  /** The `paths` alias that points at the folder of clegra/ (`@/*` → `@/`), or null: then imports are relative. */
   alias: string | null
   /** The package name, made a valid Clegra app id. */
   appName: string
@@ -144,20 +144,20 @@ export function detectProject(root: string): Project {
   }
 }
 
-/** Where clegra.ts goes (beside app/: the project root, or src/), relative to root. */
+/** Where the clegra/ folder goes (beside app/: the project root, or src/), relative to root. */
 export function clegraPath(project: Project): string {
-  return posix.join(project.appDir === "src/app" ? "src" : ".", `clegra.${project.ts ? "ts" : "js"}`).replace(/^\.\//, "")
+  return posix.join(project.appDir === "src/app" ? "src" : ".", "clegra").replace(/^\.\//, "")
 }
 
 export function routePath(project: Project): string {
   return `${project.appDir}/api/clegra/[...path]/route.${project.ts ? "ts" : "js"}`
 }
 
-/** How the route imports clegra.ts: through the alias, else a relative path. */
+/** How the route imports the clegra/ folder (its index): through the alias, else a relative path. */
 export function importPathFor(project: Project): string {
   if (project.alias) return `${project.alias}clegra`
   const from = dirname(join(project.root, routePath(project)))
-  const to = join(project.root, clegraPath(project)).replace(/\.(ts|js)$/, "")
+  const to = join(project.root, clegraPath(project))
   const rel = relative(from, to).split(sep).join("/")
   return rel.startsWith(".") ? rel : `./${rel}`
 }

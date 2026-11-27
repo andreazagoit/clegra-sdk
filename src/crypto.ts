@@ -1,12 +1,18 @@
-// Web Crypto only (Node 20+, Deno, Bun, edge runtimes): random tokens, hashes, password hashes.
+// Web Crypto only (Node 20+, Deno, Bun, edge runtimes): random tokens, hashes, base64url, password hashes.
 
 const encoder = new TextEncoder()
+const decoder = new TextDecoder()
+
+/** Standard base64, with padding. */
+export function base64(bytes: Uint8Array): string {
+  let binary = ""
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
+  return btoa(binary)
+}
 
 /** base64url without padding. */
 export function base64url(bytes: Uint8Array): string {
-  let binary = ""
-  for (const b of bytes) binary += String.fromCharCode(b)
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")
+  return base64(bytes).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")
 }
 
 export function fromBase64url(text: string): Uint8Array {
@@ -17,6 +23,11 @@ export function fromBase64url(text: string): Uint8Array {
   return out
 }
 
+/** A UTF-8 string as base64url. */
+export const textToBase64url = (text: string) => base64url(encoder.encode(text))
+/** base64url back to its UTF-8 string. */
+export const base64urlToText = (text: string) => decoder.decode(fromBase64url(text))
+
 /** `bytes` random bytes as base64url (32 by default: 256 bits). */
 export function randomToken(bytes = 32): string {
   return base64url(crypto.getRandomValues(new Uint8Array(bytes)))
@@ -25,6 +36,12 @@ export function randomToken(bytes = 32): string {
 /** SHA-256 of a UTF-8 string, base64url. */
 export async function sha256(text: string): Promise<string> {
   return base64url(new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(text))))
+}
+
+/** SHA-256 of bytes, lowercase hex. */
+export async function sha256Hex(bytes: Uint8Array): Promise<string> {
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes as Uint8Array<ArrayBuffer>))
+  return Array.from(digest, (b) => b.toString(16).padStart(2, "0")).join("")
 }
 
 /** Equal strings, in time that depends only on their length. */

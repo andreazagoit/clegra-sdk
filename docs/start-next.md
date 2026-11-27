@@ -15,15 +15,19 @@
 In an existing Next.js App Router app (`app/` or `src/app/`):
 
 ```sh
-npm i @clegra/sdk zod         # before the first release: npm i ./clegra-0.1.0.tgz zod (the tarball of `npm pack`)
+npm i @clegra/sdk@next zod
 npx @clegra/sdk init          # --dry-run prints what it would do; --ui adds @clegra/ui, Clegra's design system
 ```
 
 ```text
 clegra init: Next.js 16.4.6, App Router in app/, TypeScript, alias @/*, next.config.ts
 
-  create  clegra.ts  (app "acme-tasks": sample tasks, one action, one page; TODOs for your data and sign-in)
-  create  app/api/clegra/[...path]/route.ts  (imports { app } from "@/clegra")
+  create  clegra/task.ts  (the entity: sample tasks; a TODO for your data)
+  create  clegra/complete.ts  (a confirmed record action)
+  create  clegra/tasks.ts  (a list page)
+  create  clegra/app.ts  (defineApp: the three assembled)
+  create  clegra/index.ts  (serve(app, { auth }): a TODO for your sign-in)
+  create  app/api/clegra/[...path]/route.ts  (imports { served } from "@/clegra")
   edit    next.config.ts  (wrapped the exported config with withClegra)
   create  .env.local  (CLEGRA_LOCAL_TOKEN: a random local bearer, refused in production)
 
@@ -36,12 +40,14 @@ Next:
 
 What it writes:
 
-- **`clegra.ts`**: a working `defineApp` with one entity (`task`) on sample data kept in the file, scoped by
-  `ctx.installation`, one confirmed action (`complete`) and one list page. Two `TODO`s mark where your database and
-  your sign-in go.
-- **`app/api/clegra/[...path]/route.ts`**: `export const { GET, POST, DELETE, OPTIONS } = toNextHandlers(app)`.
-- **`next.config`** wrapped in `withClegra(…)`. It adds rewrites for `/mcp`, `/.well-known/clegra.json` and the
-  OAuth metadata paths. init edits the file only when the edit is certain (one
+- **`clegra/`**, one file per thing: the entity `task` (`defineEntity`, on sample data kept in the file, scoped by
+  `ctx.installation`), the confirmed record action `complete` (`defineAction({ on: task, … })`), the list page
+  `tasks` (`definePage({ list: task, … })`), `app.ts` (`defineApp({ entities: [task], actions: [complete], pages:
+  [tasks] })`: pure, nothing served) and `index.ts` (`serve(app, { auth })`: how it runs). Two `TODO`s mark where
+  your database and your sign-in go.
+- **`app/api/clegra/[...path]/route.ts`**: `export const { GET, POST, DELETE, OPTIONS } = toNextHandlers(served)`.
+- **`next.config`** wrapped in `withClegra(…)`. It adds rewrites for `/mcp`, `/.well-known/clegra.json`,
+  `/openapi.json`, `/operations/…`, the sign-in module's `/oauth/…` and the OAuth metadata paths. init edits the file only when the edit is certain (one
   `export default <expression>` line). Otherwise it prints the edit for you to make.
 - **`.env.local`**: `CLEGRA_LOCAL_TOKEN`, a random bearer.
 
@@ -58,18 +64,21 @@ npx @clegra/sdk check http://localhost:3000 --token <CLEGRA_LOCAL_TOKEN>
 
 - **The MCP Inspector**: `npx @modelcontextprotocol/inspector`, transport Streamable HTTP, URL
   `http://localhost:3000/mcp`, header `Authorization: Bearer <CLEGRA_LOCAL_TOKEN>`. You see `task_list`,
-  `task_get`, `task_complete`, `search`, `fetch`, `open_tasks` and `clegra_resolve`.
+  `task_get`, `task_complete`, `search`, `fetch`, `open_tasks` and `clegra_resolve`. The same operations are an
+  OpenAPI 3.1 document at `http://localhost:3000/openapi.json`, callable as `POST /operations/<tool>`
+  ([spec §7](spec.md#the-index-as-openapi)).
 - **`clegra check`** runs every check. All of them pass but one: `auth.mcp — protected-resource metadata names no
-  authorization server`. That is the honest state of a fresh app. MCP clients can't sign anyone in until
-  `authorizationServers` names your sign-in, which is the first job of day one.
+  authorization server`. That is the honest state of a fresh app. MCP clients can't sign anyone in until the app has
+  its sign-in, which is the first job of day one.
 
 **The local bearer, and why it is safe.** The generated `resolve` accepts `CLEGRA_LOCAL_TOKEN` only when
 `NODE_ENV` is not `production`. `next build`, `next start` and every deployment (Vercel previews included) set
 `production`, and then the bearer is refused whatever the environment holds. In production without
 `CLEGRA_PUBLIC_URL`, every request but the manifest gets a `500 misconfigured` that names the missing setting. The token is random
-per project and lives in `.env.local`, which Next's `.gitignore` keeps out of git. The SDK's own dev sign-in
-(`auth.dev`, a sign-in page for test people) does **not** exist under Next: it trusts only loopback callers, and a
-route handler can't know the caller's address, so `toNextHandlers` refuses it. `auth.anonymous` (no token at all) is
+per project and lives in `.env.local`, which Next's `.gitignore` keeps out of git. The SDK's development sign-in
+(`devSignIn` of `@clegra/sdk/signin`: test people, a code printed on the console) also works under Next, for linking
+a real client locally; its development tokens and proofs (what `testClient` uses) never count there, since they trust
+only loopback callers and a route handler can't know the caller's address. `auth.anonymous` (no token at all) is
 not used either: it is a local demo's, refused in production. Operations anyone may call without signing in are
 declared `public: true` with `auth.public` (spec §7, «Public operations»).
 
@@ -80,7 +89,7 @@ filters, links, switches and focus ring in it, and keeps its own chrome blue. Pi
 hex: the palette is tuned for light and dark and for contrast):
 
 ```ts
-export const app = defineApp({ name: "acme-tasks", title: "Tasks", version: "1.0.0", accent: "teal", … })
+export const app = defineApp({ name: "acme-tasks", title: "Tasks", version: "1.0.0", accent: "teal", … })   // clegra/app.ts
 ```
 
 ![The palette: blue, indigo, purple, pink, red, orange, yellow, green, teal, gray, in light and dark](accents.svg)
@@ -103,18 +112,21 @@ and in `clegra check` (`manifest.schema`). Without `accent` the manifest has non
 
 ## A day to ship
 
-Work through the TODOs in `clegra.ts`:
+Work through the TODOs in `clegra/`:
 
 1. **Your data in `get`, `list` and `run`.** Call the functions your pages already use, with `ctx.installation` as
    the tenant. [Your data layer](#your-data-layer) below shows a `list` over SQL.
-2. **Your sign-in in `auth.resolve` and `auth.authorizationServers`.** Your auth library is the OAuth authorization
-   server. `resolve` verifies its access tokens and names the caller. Recipes for better-auth, Clerk, Auth0 and
-   WorkOS are in [auth.md](auth.md). Keep the `localCaller` line if you like; it never answers in production.
+2. **Your sign-in, in `clegra/index.ts`.** Either the SDK's sign-in module over your login:
+   `auth: { signIn: createSignIn(app, { issuer, resource, login, permissionsOf, store, keys }) }` (or over its
+   `passwordLogin` when you have no login), which gives every MCP client a delegation your app issues; or, when your
+   auth library already is an OAuth authorization server (better-auth, Clerk, Auth0, WorkOS), `auth.resolve` and
+   `auth.authorizationServers`: `resolve` verifies its access tokens and names the caller. Both in
+   [auth.md](auth.md). Keep the `localCaller` line if you like; it never answers in production.
 3. **The public address.** Set `CLEGRA_PUBLIC_URL=https://app.example.com` (an origin only) in each environment.
    `auth.resource` is then `https://app.example.com/mcp`, the only audience tokens are accepted for. Without it,
    production answers `500 misconfigured` (the manifest excepted). A client can send `x-forwarded-host`, so never rely on it. On Vercel,
    previews have other hosts: give each environment its own value.
-4. **A shared store.** On serverless or with several instances, use
+4. **A shared store.** On serverless or with several instances, serve with
    `store: new SqlStore((text, params) => pool.query(text, params))`. It keeps write results (idempotency) and
    one-time token ids in your Postgres (and the runs of `later` actions, below). `SqlStore.schema()` gives its
    tables (`clegra_store`, `clegra_store_later`) for a migration, `CREATE … IF NOT EXISTS`: run it as a migration,
@@ -128,10 +140,10 @@ Work through the TODOs in `clegra.ts`:
    sign-in. Lists, records and dashboards show as MCP Apps views. Clients identify themselves with a Client ID
    Metadata Document, so your authorization server must support CIMD (see [auth.md](auth.md)).
 7. **Your own site in Clegra.** `site: { start: "/" }` and `clientOrigins` (Clegra's client origins) in
-   `defineApp` show your real pages in Clegra's clients, in a frame (spec §5.1). The person signs in there with your
+   `serve` show your real pages in Clegra's clients, in a frame (spec §5.1). The person signs in there with your
    own sign-in, so its session cookie must be `Secure; SameSite=None; Partitioned` over https
    ([auth.md](auth.md), «Your own site in a client's frame»). Two more pieces:
-   - `proxy.ts`: `export const proxy = siteProxy(app)` over every page (framable by those client origins only);
+   - `proxy.ts`: `export const proxy = siteProxy(served)` over every page (framable by those client origins only);
    - in the root layout `<ClegraSite />` (the bridge: the client's theme and language, where the person is).
 
 What needs https: every remote MCP client (Claude, ChatGPT), and any authorization server they reach. What doesn't:

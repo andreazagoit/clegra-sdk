@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- On `@clegra/sdk` 0.3: one file per thing under `src/clegra/` (each entity, action, artifact, page and agent a
+  `define*` handle, `src/clegra/app.ts` the pure `defineApp`, exported as `shipmentsApp`), served by `serveShipments`
+  (`src/serve.ts`, `serve(app, …)`). `defineShipmentsApp` and `src/app.ts` are gone.
+- The fixture's `createShipmentsApp({ courier?, installation?, issuer? })` returns the served app, signed in by the
+  development sign-in (`devSignIn`): tokens and proofs from `served.dev.token()` and `served.dev.confirmation()` in
+  place of `app.devToken()` and `app.devConfirmation()`. Its tenants stay `<installation>@clegra-dev`.
 - Depends on `@clegra/sdk` (the package's scoped name); imports `@clegra/sdk`, `@clegra/sdk/node`,
   `@clegra/sdk/testing`.
 

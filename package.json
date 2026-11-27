@@ -1,12 +1,12 @@
 {
   "name": "@clegra/sdk",
-  "version": "0.2.0-next.0",
+  "version": "0.3.0-next.0",
   "clegra": {
     "kind": "public",
     "owner": "sdk"
   },
   "type": "module",
-  "description": "Clegra apps: one typed object — defineApp({ entities, actions, pages, artifacts, agents, … }) — becomes a JSON manifest for workspace hosts and a plain, conformant MCP server (tools, annotations, MCP Apps views, OAuth) for ChatGPT, Claude and any MCP client. Next.js and Node adapters, test client, conformance checks, CLI.",
+  "description": "Clegra apps: entities, actions, pages and artifacts defined one per file (defineEntity, defineAction, …) and assembled with defineApp, served on Web APIs with serve(app, …): a JSON manifest and OpenAPI index for workspace hosts and a plain, conformant MCP server (tools, annotations, MCP Apps views, OAuth) for ChatGPT, Claude and any MCP client. The app's own sign-in module, Node, Express and Next.js adapters, test client, conformance checks, CLI.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -39,6 +39,7 @@
     ".": "./src/index.ts",
     "./next": "./src/next/index.ts",
     "./node": "./src/node.ts",
+    "./express": "./src/express.ts",
     "./signin": "./src/signin/index.ts",
     "./testing": "./src/testing.ts",
     "./spec": "./spec/src/conformance.ts",

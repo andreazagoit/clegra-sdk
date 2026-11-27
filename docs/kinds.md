@@ -25,6 +25,8 @@ you control, reverse-DNS, lowercase: `com.acme.shipment`. Define it in the manif
 properties and keys:
 
 ```ts
+export const shipment = defineEntity({ name: "shipment", label: "Shipment", kind: "com.acme.shipment", schema: shipmentSchema, get, list })
+
 defineApp({
   name: "logistics",
   kinds: {
@@ -33,9 +35,7 @@ defineApp({
       properties: { tracking: { type: "string", key: true }, deliveredAt: { type: "date" } },
     },
   },
-  entities: {
-    shipment: { kind: "com.acme.shipment", schema: shipmentSchema, get, list },
-  },
+  entities: [shipment],
 })
 ```
 

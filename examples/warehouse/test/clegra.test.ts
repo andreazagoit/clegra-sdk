@@ -9,6 +9,7 @@ import { after, before, describe, test } from "node:test"
 import { decodeJwt, decodeProtectedHeader, generateKeyPair, SignJWT } from "jose"
 import { SqlStore } from "@clegra/sdk"
 import { toNextHandlers } from "@clegra/sdk/next"
+import { DEV_ISSUER, devSignIn } from "@clegra/sdk/signin"
 import { checkApp, formatReport } from "@clegra/sdk/spec"
 import { installationClient, testClient } from "@clegra/sdk/testing"
 
@@ -23,7 +24,8 @@ const { seed } = await import("../lib/seed")
 const { createAuth, getAuth } = await import("../lib/auth")
 const { clegraAuth, clientOriginsFrom } = await import("../lib/clegra-auth")
 const { ALL_PERMISSIONS } = await import("../lib/permissions")
-const { createWarehouseApp } = await import("../lib/clegra")
+const { serveWarehouse } = await import("../clegra/serve")
+const { warehouse } = await import("../clegra/app")
 const { oauthAccessToken } = await import("../scripts/oauth-flow")
 const { restartable, restartAuthorization, staleOAuthQuery } = await import("../lib/oauth-query")
 
@@ -35,7 +37,7 @@ type Client = Awaited<ReturnType<typeof testClient>>
 type Rows = { rows: Record<string, unknown>[]; next?: string; total?: number }
 
 const auth = await getAuth()
-const app = createWarehouseApp({ auth: clegraAuth(async () => auth) })
+const app = serveWarehouse({ auth: clegraAuth(async () => auth) })
 const route = toNextHandlers(app, { publicUrl: SITE })
 /** The site as an HTTP client reaches it: the clegra route (what Next does with withClegra's rewrites). */
 const site = (r: Request) => route[r.method as "GET"](r)
@@ -271,17 +273,17 @@ describe("the site in a workspace client's frame (CLEGRA_CLIENT_ORIGINS)", () =>
   })
 
   test("with client origins the warehouse's pages are its site, framable by those origins only; the person signs in there with the warehouse's own sign-in", () => {
-    const framed = createWarehouseApp({ auth: clegraAuth(async () => auth), clientOrigins: [CLIENT] })
+    const framed = serveWarehouse({ auth: clegraAuth(async () => auth), clientOrigins: [CLIENT] })
     assert.deepEqual(framed.manifest().site, { start: "/" })
     assert.equal(framed.site!.headers()["content-security-policy"], `frame-ancestors 'self' ${CLIENT}`)
   })
 })
 
-// The installation-level caller (a workspace host with no person: schedules) is the SDK's dev authority's, for
-// development and tests (spec §7, «Development»): its tenants are `<installation>@clegra-dev`, each seeded here with
-// its own copy of the demo company.
-const DEV = "clegra-dev"
-const devApp = createWarehouseApp({ auth: { ...clegraAuth(async () => auth), dev: { keyFile: false, code: "TEST" } } })
+// The installation-level caller (a workspace host with no person: schedules) is the development sign-in's
+// (`devSignIn`), for development and tests (spec §7, «Development»): its tenants are `<installation>@clegra-dev`, each
+// seeded here with its own copy of the demo company.
+const DEV = DEV_ISSUER
+const devApp = serveWarehouse({ auth: { ...clegraAuth(async () => auth), signIn: devSignIn(warehouse, { issuer: SITE, code: "TEST" }) } })
 
 describe("the installation itself: the low-stock schedule", () => {
   before(async () => {

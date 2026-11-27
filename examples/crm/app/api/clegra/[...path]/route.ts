@@ -3,10 +3,10 @@
 import { toNextHandlers, type NextHandlers } from "@clegra/sdk/next"
 
 import { publicOrigin } from "@/lib/site"
-import { crmApp } from "@/clegra"
+import { crm } from "@/clegra"
 
 let handlers: NextHandlers | undefined
-const route = () => (handlers ??= toNextHandlers(crmApp(), { publicUrl: publicOrigin() }))
+const route = () => (handlers ??= toNextHandlers(crm(), { publicUrl: publicOrigin() }))
 
 export const GET = (request: Request) => route().GET(request)
 export const POST = (request: Request) => route().POST(request)

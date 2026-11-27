@@ -2,7 +2,8 @@ import assert from "node:assert/strict"
 import { afterEach, describe, test } from "node:test"
 import { z } from "zod"
 
-import { defineApp, MANIFEST_PATH, SITE_BRIDGE_PATH, VIEWS_PATH, type App } from "../index"
+import { defineApp, defineEntity, MANIFEST_PATH, serve, SITE_BRIDGE_PATH, VIEWS_PATH, type ServedApp } from "../index"
+import { devSignIn } from "../signin"
 import type { NextConfig } from "next"
 
 import { clegraRewrites, toNextHandlers, withClegra } from "./index"
@@ -17,7 +18,7 @@ function recorder(respond?: (request: Request) => Response | Promise<Response>) 
       seen.push({ url: request.url, headers: request.headers, method: request.method, body: request.body ? await request.clone().text() : null, remoteAddress: info.remoteAddress })
       return respond ? respond(request) : Response.json({ ok: true })
     },
-  } as unknown as App
+  } as unknown as ServedApp
   return { app, seen }
 }
 
@@ -139,28 +140,23 @@ describe("toNextHandlers: the public address", () => {
     assert.equal((await reader.read()).done, true)
   })
 
-  test("auth.dev is refused (a route handler can't know the peer address); an app with its own `path` too", () => {
-    const dev = defineApp({ name: "dev-app", title: "Dev", version: "1.0.0", auth: { dev: { keyFile: false } }, entities: {} })
-    assert.throws(() => toNextHandlers(dev), /auth\.dev can't run inside Next/)
-    const pathed = defineApp({ name: "pathed", title: "Pathed", version: "1.0.0", path: "/api/clegra", entities: {} })
-    assert.throws(() => toNextHandlers(pathed), /leave defineApp's `path` unset/)
+  test("the development sign-in: its login works, its development tokens never count (no peer address); an app with its own `path` is refused", async () => {
+    const empty = defineApp({ name: "dev-app", title: "Dev", version: "1.0.0", entities: [] })
+    const served = serve(empty, { auth: { signIn: devSignIn(empty) } })
+    const handlers = toNextHandlers(served, { publicUrl: "http://localhost:3000" })
+    assert.equal((await handlers.GET(new Request("http://localhost:3000/oauth/dev-login"))).status, 200)
+    const token = await served.dev!.token()
+    const call = await handlers.POST(new Request("http://localhost:3000/mcp", { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }) }))
+    assert.equal(call.status, 401)
+    const pathed = serve(empty, { path: "/api/clegra" })
+    assert.throws(() => toNextHandlers(pathed), /leave serve's `path` unset/)
   })
 })
 
 describe("toNextHandlers with a real app", () => {
-  const app = defineApp({
-    name: "real",
-    title: "Real",
-    version: "1.0.0",
+  const note = defineEntity({ name: "note", label: "Note", schema: z.object({ id: z.string(), title: z.string().meta({ role: "title" }) }), get: () => null, list: () => ({ rows: [] }) })
+  const app = serve(defineApp({ name: "real", title: "Real", version: "1.0.0", entities: [note] }), {
     auth: { resource: "https://crm.example.test/mcp", authorizationServers: ["https://crm.example.test/api/auth"], resolve: () => null },
-    entities: {
-      note: {
-        label: "Note",
-        schema: z.object({ id: z.string(), title: z.string().meta({ role: "title" }) }),
-        get: () => null,
-        list: () => ({ rows: [] }),
-      },
-    },
   })
   const handlers = toNextHandlers(app, { publicUrl: "https://crm.example.test" })
 
@@ -187,6 +183,8 @@ describe("withClegra: rewrites and config", () => {
     assert.deepEqual(ours, [
       { source: "/mcp", destination: "/api/clegra/mcp" },
       { source: MANIFEST_PATH, destination: `/api/clegra${MANIFEST_PATH}` },
+      { source: "/openapi.json", destination: "/api/clegra/openapi.json" },
+      { source: "/operations/:path*", destination: "/api/clegra/operations/:path*" },
       { source: `${VIEWS_PATH}/:path*`, destination: `/api/clegra${VIEWS_PATH}/:path*` },
       { source: SITE_BRIDGE_PATH, destination: `/api/clegra${SITE_BRIDGE_PATH}` },
       { source: "/oauth/:path*", destination: "/api/clegra/oauth/:path*" },

@@ -3,34 +3,28 @@ import { describe, test } from "node:test"
 
 import { z } from "zod"
 
-import { defineApp } from "./index"
+import { defineAction, defineApp, defineEntity, serve, type Action, type AuthOptions } from "./index"
 import { testClient } from "./testing"
 
 // PUBLIC OPERATIONS (spec §7 «Public operations»; owner, 2026-11-25: signing in is not mandatory for an app): with
 // `auth.public` a call without a token reaches only the actions declared `public`, in production too; a public write
 // is always confirmed (the host asks the person, destructiveHint), and the public caller sees no record.
-const weather = (extra: Record<string, unknown> = {}) =>
-  defineApp({
-    name: "weather",
-    title: "Weather",
-    version: "1.0.0",
-    locale: "en",
-    auth: { public: { installation: "public" } },
-    entities: {
-      station: {
-        label: "Station",
-        schema: z.object({ id: z.string(), name: z.string().meta({ role: "title", label: "Name" }) }),
-        get: () => ({ id: "s1", name: "Verona" }),
-        list: () => ({ rows: [{ id: "s1", name: "Verona" }] }),
-      },
-    },
-    actions: {
-      forecast: { title: "Forecast", input: z.object({ city: z.string() }), readOnly: true, public: true, run: ({ city }: { city: string }) => ({ message: `Sunny in ${city}` }) },
-      subscribe: { title: "Subscribe to alerts", input: z.object({ email: z.string() }), public: true, run: ({ email }: { email: string }) => ({ message: `Subscribed ${email}` }) },
-      purge: { title: "Purge stations", input: z.object({}), confirm: "always", run: () => ({ message: "purged" }) },
-    },
-    ...extra,
-  } as never)
+const station = defineEntity({
+  name: "station",
+  label: "Station",
+  schema: z.object({ id: z.string(), name: z.string().meta({ role: "title", label: "Name" }) }),
+  get: () => ({ id: "s1", name: "Verona" }),
+  list: () => ({ rows: [{ id: "s1", name: "Verona" }] }),
+})
+const forecast = defineAction({ name: "forecast", title: "Forecast", input: z.object({ city: z.string() }), readOnly: true, public: true, run: ({ city }) => ({ message: `Sunny in ${city}` }) })
+const subscribe = defineAction({ name: "subscribe", title: "Subscribe to alerts", input: z.object({ email: z.string() }), public: true, run: ({ email }) => ({ message: `Subscribed ${email}` }) })
+const purge = defineAction({ name: "purge", title: "Purge stations", input: z.object({}), confirm: "always", run: () => ({ message: "purged" }) })
+
+const weather = (extra: { actions?: Action[]; permissions?: Record<string, { label: string }>; auth?: AuthOptions } = {}) =>
+  serve(
+    defineApp({ name: "weather", title: "Weather", version: "1.0.0", locale: "en", entities: [station], actions: extra.actions ?? [forecast, subscribe, purge], ...(extra.permissions ? { permissions: extra.permissions } : {}) }),
+    { auth: extra.auth ?? { public: { installation: "public" } } },
+  )
 
 const asProduction = <T>(fn: () => T): T => {
   const env = process.env as Record<string, string | undefined>
@@ -70,12 +64,12 @@ describe("public operations", () => {
   })
 
   test("refused when it would not be safe: a record action, a permission, a write not always confirmed, hidden from clients", () => {
-    const action = (a: Record<string, unknown>) => () => weather({ actions: { x: { title: "X", input: z.object({}), public: true, run: () => ({ message: "x" }), ...a } } })
+    const action = (a: Record<string, unknown>) => () => weather({ actions: [defineAction({ name: "x", title: "X", input: z.object({}), public: true, run: () => ({ message: "x" }), ...a } as never)] })
     assert.throws(action({ confirm: "never" }), /public write is always confirmed/)
     assert.throws(action({ confirm: "optional" }), /public write is always confirmed/)
-    assert.throws(action({ on: "station", readOnly: true }), /public action is global/)
+    assert.throws(action({ on: station, readOnly: true }), /public action is global/)
     assert.throws(action({ readOnly: true, expose: { plain: false } }), /for every client/)
-    assert.throws(() => weather({ permissions: { "x.use": { label: "Use" } }, actions: { x: { title: "X", input: z.object({}), readOnly: true, public: true, permission: "x.use", run: () => ({ message: "x" }) } } }), /needs no permission/)
+    assert.throws(() => weather({ permissions: { "x.use": { label: "Use" } }, actions: [defineAction({ name: "x", title: "X", input: z.object({}), readOnly: true, public: true, permission: "x.use", run: () => ({ message: "x" }) })] }), /needs no permission/)
     assert.throws(() => weather({ auth: { public: { installation: "public" }, anonymous: { installation: "demo", permissions: [] } } }), /one or the other/)
   })
 })

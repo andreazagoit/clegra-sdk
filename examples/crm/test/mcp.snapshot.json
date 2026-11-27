@@ -1472,7 +1472,10 @@
       "url": "/mcp"
     },
     "auth": {
-      "authorizationServers": []
+      "resource": "http://127.0.0.1:3920/mcp",
+      "authorizationServers": [
+        "http://127.0.0.1:3920"
+      ]
     },
     "view": "ui://crm/view",
     "resolveTool": "clegra_resolve",

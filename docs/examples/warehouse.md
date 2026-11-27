@@ -13,8 +13,8 @@ What it shows:
 
 - **Plain SQL, no ORM.** The app has one `sql(text, params)` and one `transaction(fn)` over `pg` or PGlite
   (`lib/db.ts`), and its functions (`listProducts`, `registerMovement`, `confirmOrder`, … in `lib/warehouse.ts`)
-  always take the tenant first. The app definition (`lib/clegra.ts`) calls those same functions with
-  `ctx.installation`. Filters, sort, search and the cursor arrive already checked, and the list functions turn them
+  always take the tenant first. The app definition (`clegra/`: one file per entity, action, artifact, page and
+  agent, assembled in `clegra/app.ts`) calls those same functions with `ctx.installation`. Filters, sort, search and the cursor arrive already checked, and the list functions turn them
   into SQL.
 - **A field permission.** `product.purchaseCost` carries `permission: "products.cost"`, which admins have and members
   don't. The SDK keeps it out of members' rows and records, and refuses it in their filters, sorts and search. The
@@ -27,19 +27,18 @@ What it shows:
   exactly in SQL; the demo GTINs are in the restricted-circulation range 20–29, so no real product has them).
   `order` is kind `order` (number, date, customer and total as `orderNumber`, `orderDate`, `customer`,
   `totalPrice`). Stock movements have no kind: they are the warehouse's own.
-- **Its own site in Clegra.** With Clegra's core configured, `site` in `lib/clegra.ts` makes the app's real pages
-  (dashboard, stock board, products, movements, orders) its site in a Clegra client, framed at the app's origin and
-  signed in with a one-minute site ticket (spec §5.1). `siteProxy` in `proxy.ts` says who may frame each page (the
-  session's client, else no one); the root layout loads the bridge (`<ClegraSite />`) and takes the caller's theme
-  and language; `lib/session.ts` takes `getClegraCaller` as a viewer of the company's installation, with the
-  caller's permissions.
+- **Definition apart from runtime.** `clegra/app.ts` is the pure `defineApp`; `clegra/serve.ts` serves it
+  (`serve(warehouse, { auth, store, people, site, clientOrigins })`) with the app's Postgres as the write store, and
+  `lib/app.ts` makes it once for the MCP route and `proxy.ts`.
+- **Its own site in Clegra.** With `CLEGRA_CLIENT_ORIGINS` set, `site` in `clegra/serve.ts` makes the app's real
+  pages (dashboard, stock board, products, movements, orders) its site in a Clegra client, framed at the app's origin
+  by those origins only (spec §5.1); the person signs in there with the warehouse's own sign-in. `siteProxy` in
+  `proxy.ts` sets who may frame each page; the root layout loads the bridge (`<ClegraSite />`).
 - **Its own `resolve`.** better-auth is the authorization server. The app verifies better-auth's access tokens
   itself and reads the person's role live (`lib/clegra-auth.ts`), following the recipe in [auth.md](../auth.md).
-- **Clegra companies too.** With `CLEGRA_ISSUER` (and the other `CLEGRA_*` variables, `clegraFromEnv`) it also accepts
-  the tokens of Clegra's core, verified by the SDK (spec §7, «Clegra tokens»). Such a tenant is `<company>@<issuer>`: a
-  `tenant` row of kind `workspace` beside the organizations', which gets its own copy of the demo data on its first
-  call. A Clegra person is not a better-auth user, so who registered a movement is a person id of the tenant (their
-  pairwise id), named in `person`; what they may do is the app's own roles.
+- **The installation's schedule in tests.** The low-stock schedule runs as the installation; its tests use the
+  development sign-in (`devSignIn` beside the app's own `resolve`), whose tenants are `<installation>@clegra-dev`, each
+  seeded with its own copy of the demo company.
 
 The tests run the Clegra app over its real HTTP path on an in-memory PGlite. They cover tenant isolation, the
 purchase-cost permission, list filters, sort, search and cursor, and the actions and artifacts.

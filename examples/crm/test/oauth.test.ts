@@ -22,13 +22,13 @@ import { auth } from "../lib/auth"
 import { db } from "../lib/db"
 import { oauthQueryOf } from "../lib/oauth-pages"
 import { answerConsent, signIn } from "../lib/sign-in"
-import { createCrmApp } from "../clegra/app"
 import { crmAuth } from "../clegra/auth"
+import { serveCrm } from "../clegra/index"
 import { oauthAccessToken } from "../scripts/oauth-flow"
 
 const RESOURCE = `${SITE}/mcp`
 const ISSUER = `${SITE}/api/auth`
-const crm = createCrmApp({ auth: crmAuth() })
+const crm = serveCrm({ auth: crmAuth() })
 const route = toNextHandlers(crm, { publicUrl: SITE })
 // The site as an HTTP client reaches it: the clegra route (what Next does with withClegra's rewrites).
 const site = (r: Request) => route[r.method as "GET"](r)

@@ -5,7 +5,8 @@
 A small sales team's CRM — **companies**, **contacts**, **deals**, **calls** — built the way a developer
 already builds a web app: Next.js (App Router), its own sign-in (better-auth: email + password,
 organizations as tenants), its own database (Drizzle on Postgres; an embedded PGlite locally). The Clegra
-app is added on top in one file, `clegra/app.ts`, over the functions the pages already use.
+app is added on top in `clegra/`, one file per entity, action, artifact, page and agent, over the functions the pages
+already use, assembled in `clegra/app.ts` and served by `clegra/index.ts`.
 
 **The pitch:** the page's «Mark as won» button and the MCP tool `deal_mark_won` call the same
 `markWon(orgId, dealId)` in `lib/crm.ts`. Nothing is written twice; the SDK adds the tenant from the
@@ -20,11 +21,13 @@ verified caller, the permissions, the confirmations and the MCP surface.
 | `lib/crm.ts` | The app's functions: `listDeals(orgId, query)` (filters, search, sort, paging in SQL), `markWon`, `setStage`, `logCall`, `createDeal`, pipeline totals, workspace provisioning |
 | `lib/auth-options.ts`, `lib/auth.ts` | better-auth: email + password, organizations, and the OAuth server for MCP clients (`jwt` + `mcp` + `cimd`) |
 | `lib/site.ts` | The one public address, `CLEGRA_PUBLIC_URL`: the issuer `<origin>/api/auth` and the MCP resource `<origin>/mcp` |
-| `lib/session.ts`, `lib/permissions.ts` | Who looks: the signed-in member of the active organization, or a Clegra client's person (`getClegraCaller`: the installation as tenant, the caller's permissions); role → permissions |
+| `lib/session.ts`, `lib/permissions.ts` | Who looks: the signed-in member of the active organization (also inside a Clegra client's frame: the CRM's own sign-in); role → permissions |
 | `app/(crm)/…`, `app/layout.tsx`, `proxy.ts` | Pages (pipeline, board, deals, companies, contacts) and server actions: also the CRM's site in a Clegra client (spec §5.1). The root layout loads the bridge (`<ClegraSite />`) and takes the caller's theme and language; `proxy.ts` (`siteProxy`) says who may frame each page |
 | `app/sign-in`, `app/oauth/consent` | better-auth's login and consent pages; they also continue an OAuth authorization |
-| `clegra/app.ts`, `clegra/index.ts` | The app definition, `createCrmApp({ auth, store })`, and the app as served |
-| `clegra/auth.ts` | The app's own `resolve` for better-auth access tokens, the issuer metadata, Clegra's core (`CLEGRA_*`, `clegraFromEnv`) |
+| `clegra/entities/`, `clegra/actions/`, `clegra/artifacts/`, `clegra/components/`, `clegra/pages/`, `clegra/agents/` | One `define*` per file (`defineEntity`, `defineAction`, …): each names the others by their imported handles (`on: deal`, `list: deal`, `badge: openDeals`); `clegra/lib.ts` the shared `tenant()` and `refused()` |
+| `clegra/app.ts` | The app definition: `defineApp({ entities: [company, contact, deal], actions: […], pages: […], nav, permissions, settings })`, pure |
+| `clegra/index.ts` | The app as it runs: `serveCrm({ auth, clientOrigins, store })` = `serve(crmApp, { auth, store, people, site, clientOrigins })`, and `crm()`, made on first use from the environment |
+| `clegra/auth.ts` | The app's own `resolve` for better-auth access tokens and the issuer metadata (`crmAuth()`), the client origins (`CLEGRA_CLIENT_ORIGINS`) |
 | `app/api/clegra/[...path]/route.ts`, `next.config.ts` | `toNextHandlers` and `withClegra`: MCP at `/mcp`, metadata under `/.well-known/` |
 | `test/` | The lib on PGlite, the MCP surface (`mcp.snapshot.json`), real OAuth tokens (`oauth.test.ts`) |
 
@@ -37,47 +40,47 @@ verified caller, the permissions, the confirmations and the MCP surface.
 | `entities` | `company` (kind `organization`: VAT number as `vatID`, a key filter compared upper-cased without spaces; website as `url`; `erpCustomer`, a `ref.kind("organization")` URI to the same company in another app), `contact` (kind `person`: email as `email`, a key filter compared lower-cased; `ref("company")` as `worksFor`; last call, last note — **untrusted**), `deal` (no kind: the CRM's own; stage as `status`, value as `amount` behind `deals.values`, owner as `person`) |
 | `actions` | `mark_won` (confirm always, notifies), `set_stage` (`"optional"`), `log_call`, `link_erp_customer` (takes a record URI of kind `organization`, stores it, never calls the other app), `create_deal`. All `expose: { plain: true }` |
 | `pages` | `deals`, `companies`, `contacts`, `deal` (record), `pipeline` (dashboard), `forecast` (custom MCP Apps view) |
-| `site` | With Clegra's core only (`auth.clegra`): the CRM's own pages are its site in a Clegra client, tickets and sessions signed with keys derived from `BETTER_AUTH_SECRET` |
+| `site` | With `CLEGRA_CLIENT_ORIGINS` (a `serve` option): the CRM's own pages are its site in a Clegra client, framed by those origins only, the person signed in with the CRM's own sign-in |
 | `artifacts` | `pipeline_total` (stat), `deals_by_stage` (chart), `closing_soon` (list) |
 | `agents` | `sales_assistant` |
 
 ## Handlers are thin
 
 ```ts
-deal: {
-  schema: dealSchema,
+// clegra/entities/deal.ts
+export const deal = defineEntity({
+  name: "deal",
+  schema: z.object({ … }),
   permission: "deals.view",
   list: async (q, ctx) => listDeals(await tenant(ctx), q),
   …
-},
-mark_won: {
-  on: "deal", confirm: true, permission: "deals.edit", expose: { plain: true },
-  run: async (input, ctx, deal) => {
-    await markWon(await tenant(ctx), deal.id, input).catch((e) => refused(e, ctx, { en: `${deal.name} is already closed.`, it: `${deal.name} è già chiusa.` }))
+})
+
+// clegra/actions/mark-won.ts
+export const markWon = defineAction({
+  name: "mark_won",
+  on: deal, confirm: true, permission: "deals.edit",
+  run: async (input, ctx, record) => {
+    await closeWon(await tenant(ctx), record.id, input).catch((e) => refused(e, ctx, { en: `${record.name} is already closed.`, it: `${record.name} è già chiusa.` }))
     …
   },
-},
+})
 ```
+
+`record` is typed from the deal's schema, because the action names the entity by its handle.
 
 `q` arrives already checked against the fields' meaning and the caller's field permissions; `listDeals`
 turns it into one `WHERE org_id = $1 AND …` query (search only in `q.textFields`), sorted, with an
 offset cursor and a total. Ben (a member: no `deals.values`) never receives `value`, in the pages or
 over MCP.
 
-## Two kinds of caller, one tenant column
+## One kind of caller, one tenant column
 
-- **The app's own users** (the app's own `auth.resolve` for better-auth's tokens, see below): the installation is the
-  organization id, the person the user id. Names come from the organization's members.
-- **A Clegra company** (Clegra's core, `CLEGRA_ISSUER`): the installation is `<company>@<issuer>`, never an
-  organization. On its first call it gets its own copy of the demo data (`provisionWorkspace`: one transaction,
-  idempotent). Its people are named from their tokens and remembered in `people` once they own a deal; what they may
-  do is the CRM's own roles (a company administrator everything, a member the defaults until assigned more; the
-  `clegra_store_roles` table, migration `0006_clegra_store_roles.sql`). «People» shows them to the CRM's
-  administrators: the `member` entity (app-only, `people.manage`, which only an administrator has) over `app.roles`,
-  with `grant_permission` and `revoke_permission` to give or take one permission (a company administrator keeps
-  everything), and the site's `/people` page; the site's navigation shows a person only the pages they may open.
-
-Both are just values of `org_id`; `tenants` records which kind each one is.
+Every caller is one of the CRM's own users (its `auth.resolve` for better-auth's tokens, see below): the installation
+is the organization id, the person the user id, names come from the organization's members (`serve`'s `people`).
+Clegra, ChatGPT and Claude act with a token the CRM issued. The tests serve the same definition with the SDK's
+development sign-in (`devSignIn` of `@clegra/sdk/signin`): its tenants are `<installation>@clegra-dev`, each seeded
+with its own copy of the demo data. `org_id` is the tenant; `tenants` records which kind each one is.
 
 ## Run it
 
@@ -129,8 +132,7 @@ these hold:
 
 Then the membership and role are read live, so a role change or a removed member takes effect on the next call. It
 returns `{ installation: orgId, person, permissions: permissionsForRole(role) }`. `crmAuth()` puts it next to
-`serve` (better-auth's RFC 8414 / OIDC metadata at the root), `authorizationServers`, `resource` and, with
-`CLEGRA_ISSUER`, `clegra` (Clegra's core).
+`serve` (better-auth's RFC 8414 / OIDC metadata at the root), `authorizationServers` and `resource`.
 
 ```sh
 T=$(CLEGRA_OAUTH_EMAIL=alice@orbit.example CLEGRA_OAUTH_PASSWORD=… npm run --silent token -- http://localhost:3920)

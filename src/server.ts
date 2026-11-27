@@ -1,6 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks"
-import { createHash, randomUUID } from "node:crypto"
-
 import { createMcpHandler, inputRequired, inputResponse, McpServer, type CallToolResult, type Icon, type ServerContext } from "@modelcontextprotocol/server"
 import { entityKindProblems, keyOf, kindNameProblem, kindDefinitionProblems, kindOfRecord, kindSentence, kindsOf, normaliseKey, type KindDef, type KindField, type Normalisation } from "../spec/src/kinds"
 import { DELETE_TOOL, type AppAccent, EXPORT_TOOL, INSTALLATION_TOOL, INSTALLATION_TOOLS, LATER_TOOL, META_KEY, OAUTH_SCOPE, PROTOCOL_ID, RESOLVE_TOOL, SITE_BRIDGE_PATH, URI_SCHEME, uriPrefix, VIEW_TOOL, VIEWS_PATH } from "../spec/src/protocol"
@@ -8,12 +5,15 @@ import { viewPath, viewPolicy, ViewError, ViewTickets, withHost, type ViewDocume
 import { LIMITS, manifestRuleProblems } from "../spec/src/rules"
 import { z } from "zod"
 
-import { argsHash, AuthError, canonicalJson, DEV_ISSUER, DevAuthority, INSTALLATION, isLoopback, laterDeadline, signConfirmation, tenantOf, TokenVerifier, type AuthOptions, type Caller, type Person, type RequestTrust } from "./auth"
+import { argsHash, AuthError, canonicalJson, INSTALLATION, isLoopback, laterDeadline, tenantOf, type AuthOptions, type Caller } from "./auth"
+import { DEV_ISSUER, type DevTools } from "./signin/dev"
 import { DpopError } from "./dpop"
 import { siteBridgeScript, siteFraming, siteStart, type SiteOptions } from "./site"
 import { MANIFEST_PATH, manifestUri, SPEC_VERSION, type Manifest, type ManifestField } from "./manifest"
 import { isLabel, labelMap, localize, type Label } from "./labels"
 import { fieldsOf, jsonSchemaOf, kindRef, localRef, plainSchema, type FieldInfo } from "./meaning"
+import { base64, base64urlToText, sha256Hex, textToBase64url } from "./crypto"
+import { isProduction } from "./env"
 import { MemoryStore, type IdempotencyStore, type LaterOutcome, type LaterRun } from "./store"
 import type {
   ActionConfig,
@@ -24,6 +24,7 @@ import type {
   Context,
   EntityConfig,
   EntityHandle,
+  EntityRef,
   Filter,
   ArtifactConfig,
   ArtifactInstance,
@@ -46,6 +47,7 @@ import type {
   WidgetSize,
 } from "./types"
 import { MCP_APP_MIME_TYPE, viewHtml } from "./view"
+import { ERROR_STATUS, OPENAPI_PATH, OPERATIONS_PATH, openApiDocument, type ListedTool, type OpenApiDocument } from "./openapi"
 import { A2UI_MIME_TYPE, appCatalog, appCatalogId, COMPONENT_NAME, componentSurface, recordSurface, RESERVED_COMPONENTS, surfaceResourceUri, templateSurface, type ComponentEntry } from "./a2ui"
 
 /**
@@ -62,6 +64,9 @@ import { A2UI_MIME_TYPE, appCatalog, appCatalogId, COMPONENT_NAME, componentSurf
  * here, on every surface (tools, search, fetch, the resolver, dashboards),
  * before any handler.
  */
+
+/** Whether a request's development tokens count: the app has a development sign-in, and the caller is on a loopback address. */
+export type RequestTrust = { dev: boolean }
 
 /** What a request brings beside its caller: whether dev tokens count (a loopback caller), and each call's arguments as received. */
 export type RequestInfo = {
@@ -213,8 +218,8 @@ function kindField(f: FieldInfo): KindField {
   return { name: f.name, type: f.type, required: f.required, ...(f.enum ? { enum: f.enum } : {}), ...(f.permission ? { permission: f.permission } : {}), ...(f.as !== undefined ? { as: f.as } : {}), ...(f.filter ? { filter: true } : {}), ...(f.currency ? { currency: f.currency } : {}), ...(itemType ? { itemType } : {}) }
 }
 
-const b64url = (s: string) => Buffer.from(s, "utf8").toString("base64url")
-const unb64url = (s: string) => Buffer.from(s, "base64url").toString("utf8")
+const b64url = textToBase64url
+const unb64url = base64urlToText
 
 const sortedJson = canonicalJson
 
@@ -267,15 +272,13 @@ const text = (t: string): CallToolResult["content"] => [{ type: "text", text: t 
 
 /** Per locale: each label as this call showed it → the same label in that locale. */
 type L10n = Map<string, Record<string, string>>
-const shownLabels = new AsyncLocalStorage<L10n>()
 
 /**
- * A label in `locale`; inside a tool call, its other locales are noted too, so the call's view can draw it
- * in the reader's language (MCP Apps `hostContext.locale`), whatever language the token named.
+ * A label in `locale`; inside a tool call (`notes`: the call's), its other locales are noted too, so the call's view
+ * can draw it in the reader's language (MCP Apps `hostContext.locale`), whatever language the token named.
  */
-function say(label: Label | undefined, locale: string | undefined, fallback: string): string {
+function say(label: Label | undefined, locale: string | undefined, fallback: string, notes?: L10n): string {
   const shown = localize(label, locale, fallback)
-  const notes = shownLabels.getStore()
   if (notes && label && typeof label === "object" && shown) {
     for (const [l, value] of Object.entries(label)) {
       // Every locale, the shown one too (as itself): a reader in the shown language must not fall back to another.
@@ -327,8 +330,6 @@ export class AppServer {
   readonly name: string
   readonly options: ServerOptions
   readonly locale: string
-  readonly #verifier: TokenVerifier
-  readonly #dev: DevAuthority | null
   readonly #store: IdempotencyStore
   readonly #entities = new Map<string, EntityRecord>()
   readonly #actions = new Map<string, ActionRecord>()
@@ -344,7 +345,6 @@ export class AppServer {
   #lifecycle: LifecycleConfig = {}
   #kinds: Record<string, KindConfig> = {}
   #manifest: Manifest | null = null
-  #devReady: Promise<void> | null = null
   readonly #path: string
   readonly #site: { start: string } | null
   readonly #clientOrigins: string[]
@@ -367,17 +367,22 @@ export class AppServer {
     this.options = options
     this.locale = options.locale ?? "en"
     const auth = options.auth ?? {}
-    if (auth.dev && process.env.NODE_ENV === "production") throw new Error("auth.dev is for development: it is refused when NODE_ENV is production")
-    if (auth.anonymous && process.env.NODE_ENV === "production") throw new Error("auth.anonymous is for local demos: it is refused when NODE_ENV is production (public operations: auth.public)")
+    if (auth.anonymous && isProduction()) throw new Error("auth.anonymous is for local demos: it is refused when NODE_ENV is production (public operations: auth.public)")
     if (auth.anonymous && auth.public) throw new Error("auth.anonymous and auth.public: one or the other (a call without a token is either a local demo's caller or the public caller)")
     if (auth.public && (typeof auth.public.installation !== "string" || !INSTALLATION.test(auth.public.installation))) throw new Error("auth.public.installation must match [A-Za-z0-9._:-]{1,128}")
     const path = (options.path ?? "").replace(/\/+$/, "")
     if (path && !/^(\/[A-Za-z0-9._~-]+)+$/.test(path)) throw new Error(`path "${options.path}": a URL path like /api/clegra`)
     this.#path = path
     this.#store = options.store ?? new MemoryStore()
-    this.#verifier = new TokenVerifier(auth, (key, ttlMs) => this.#store.once(key, ttlMs))
-    this.#dev = auth.dev ? new DevAuthority(auth.dev === true ? {} : auth.dev, { name: this.name, title: localize(options.title, this.locale, this.locale), allPermissions: () => [...this.#permissions.keys()] }) : null
-    if (this.#dev) this.#verifier.useDev(this.#dev)
+    if (auth.resource) {
+      let url: URL
+      try {
+        url = new URL(auth.resource)
+      } catch {
+        throw new Error(`auth.resource: "${auth.resource}" is not a URL`)
+      }
+      if (!/^https?:$/.test(url.protocol) || url.hash || url.search) throw new Error(`auth.resource: "${auth.resource}" must be an http(s) URL without query or fragment`)
+    }
     this.#clientOrigins = (options.clientOrigins ?? []).map((o) => {
       // A web origin, or a desktop client's own scheme (`app://client`): scheme, host and port, nothing more.
       const value = o.replace(/\/$/, "").toLowerCase()
@@ -597,7 +602,7 @@ export class AppServer {
   // ------------------------------------------------------------ URIs
 
   /** `clegra://<app>/<type>/<key>` (spec §4, §7). */
-  uri(type: string | EntityHandle, key: string): string {
+  uri(type: string | EntityRef, key: string): string {
     return `${uriPrefix(this.name)}/${typeof type === "string" ? type : type.name}/${encodeURIComponent(key)}`
   }
 
@@ -736,7 +741,7 @@ export class AppServer {
         const count = await this.#store.hit(`rate:${name}:${caller.installation}${who}`, limit.seconds * 1000)
         if (count > limit.max) throw new AppError("rate_limited", `Too many requests: at most ${limit.max} every ${limit.seconds} seconds. Try again later.`, { retryAfterSeconds: limit.seconds })
       },
-      t: (label) => say(label, locale, this.locale),
+      t: (label) => say(label, locale, this.locale, this.#shown.get(caller)),
       notify: (n) => {
         this.#checkNotification(n, caller)
         notes.push(n)
@@ -754,7 +759,7 @@ export class AppServer {
   readonly #changes = new WeakMap<Notification[], Set<string>>()
 
   /** One thing a call changed, as `_meta.clegra.changed` says it: an artifact URI of this app, or a type of it. */
-  #changeOf(what: string | EntityHandle): string {
+  #changeOf(what: string | EntityRef): string {
     const name = typeof what === "string" ? what : what.name
     if (name.startsWith(`${URI_SCHEME}://`)) {
       const parsed = this.parseUri(name)
@@ -766,8 +771,11 @@ export class AppServer {
   }
 
   #t(caller: Caller | null, label: Label | undefined): string {
-    return say(label, caller?.locale ?? this.locale, this.locale)
+    return say(label, caller?.locale ?? this.locale, this.locale, caller ? this.#shown.get(caller) : undefined)
   }
+
+  /** The labels each request's calls showed (`_meta.clegra.l10n`), by the request's caller: one per request. */
+  readonly #shown = new WeakMap<Caller, L10n>()
 
   #visibleFields(entity: EntityRecord, caller: Caller): FieldInfo[] {
     return entity.fields.filter((f) => !f.permission || caller.permissions.has(f.permission))
@@ -1047,7 +1055,7 @@ export class AppServer {
 
   /** Whether this app names people: it declares `people`, or its dev sign-in knows its test people. */
   #namesPeople(): boolean {
-    return Boolean(this.options.people || this.#dev)
+    return Boolean(this.options.people || this.dev)
   }
 
   /**
@@ -1062,7 +1070,7 @@ export class AppServer {
     const ids = [...new Set(rows.flatMap((r) => fields.map((f) => r[f.name])).filter((v): v is string => typeof v === "string" && v !== ""))].slice(0, 200)
     const names: Record<string, string> = {}
     if (caller.person?.name) names[caller.person.id] = caller.person.name
-    for (const p of this.#dev?.people ?? []) if (p.name) names[p.id] ??= p.name
+    for (const p of this.dev?.people ?? []) if (p.name) names[p.id] ??= p.name
     const unknown = ids.filter((id) => !names[id])
     if (unknown.length && this.options.people) {
       try {
@@ -1316,7 +1324,7 @@ export class AppServer {
       }
       if (a.write && a.confirm === "always" && caller.host === "workspace") {
         const proof = hostMeta(meta).confirmation
-        const checked = typeof proof === "string" ? await this.#verifier.checkConfirmation(proof, { issuer: caller.issuer, subject: caller.subject, installation: caller.installationId, tool: a.tool, args: received, call: ctx.call, ...(until !== undefined ? { until } : {}) }, request.trust) : { ok: false as const, why: "no proof" }
+        const checked = typeof proof === "string" ? await this.#checkConfirmation(proof, { subject: caller.subject, installation: caller.installationId, tool: a.tool, args: received, call: ctx.call, ...(until !== undefined ? { until } : {}) }) : { ok: false as const, why: "no proof" }
         if (checked.ok) proven = { proof: proof as string, iat: checked.iat }
         if (!checked.ok) return confirmRequired(checked.why)
       }
@@ -1333,11 +1341,11 @@ export class AppServer {
       if (a.later && until !== undefined) {
         const at = received[a.later.at] as string
         const run: LaterRun = {
-          id: randomUUID(),
+          id: crypto.randomUUID(),
           tenant: caller.installation,
           tool: a.tool,
           args: received,
-          argsHash: argsHash(received),
+          argsHash: await argsHash(received),
           at,
           until,
           author: caller.person ? { id: caller.person.id, name: caller.person.name } : null,
@@ -1395,7 +1403,7 @@ export class AppServer {
    * One pass over a tenant's due later runs: each is claimed (once: a claimed run is never given again), checked
    * against what the person confirmed, and run as its author. `meta`: the request's (`_meta.clegra.settings`).
    */
-  async #runDue(tenant: string, meta: Record<string, unknown> | undefined, trust: RequestTrust, locale: string | undefined): Promise<LaterReport> {
+  async #runDue(tenant: string, meta: Record<string, unknown> | undefined, locale: string | undefined): Promise<LaterReport> {
     const report: LaterReport = { runs: [], notifications: [] }
     const store = this.#store.later
     if (!store) return report
@@ -1404,7 +1412,7 @@ export class AppServer {
       if (!run) continue // another pass took it
       let done: { outcome: LaterOutcome; notes: SentNotification[] }
       try {
-        done = await this.#runOne(run, meta, trust)
+        done = await this.#runOne(run, meta)
       } catch (error) {
         console.error(`[${PROTOCOL_ID}] ${LATER_TOOL} ${run.tool} ${run.id}`, error)
         done = { outcome: { status: "failed", message: "The action failed." }, notes: [] }
@@ -1418,18 +1426,18 @@ export class AppServer {
   }
 
   /** One claimed later run: refused unless it is exactly what was confirmed (arguments, time, proof as of its confirmation), expired after its deadline, else run. */
-  async #runOne(run: LaterRun, meta: Record<string, unknown> | undefined, trust: RequestTrust): Promise<{ outcome: LaterOutcome; notes: SentNotification[] }> {
+  async #runOne(run: LaterRun, meta: Record<string, unknown> | undefined): Promise<{ outcome: LaterOutcome; notes: SentNotification[] }> {
     const refused = (message: string) => ({ outcome: { status: "refused" as const, message }, notes: [] })
     const failed = (message: string, notes: SentNotification[] = []) => ({ outcome: { status: "failed" as const, message }, notes })
     const a = this.#actions.get(run.tool)
     if (!a?.later) return refused(`${run.tool} is not an action that runs later`)
-    if (argsHash(run.args) !== run.argsHash) return refused("its arguments are not the ones confirmed")
+    if ((await argsHash(run.args)) !== run.argsHash) return refused("its arguments are not the ones confirmed")
     const at = run.args[a.later.at]
     if (typeof at !== "string" || at !== run.at) return refused("its time is not the one confirmed")
     if (!(Date.parse(at) <= Date.now())) return refused("it is not due yet")
     if (run.proof) {
       // The host's proof, verified as of when the person confirmed it: its signature, and that it covers exactly these arguments, this call and this deadline.
-      const checked = await this.#verifier.checkConfirmation(run.proof, { issuer: run.issuer, subject: run.subject, installation: run.installation, tool: run.tool, args: run.args, call: run.call, until: run.until }, trust, new Date(run.confirmedAt * 1000))
+      const checked = await this.#checkConfirmation(run.proof, { subject: run.subject, installation: run.installation, tool: run.tool, args: run.args, call: run.call, until: run.until }, new Date(run.confirmedAt * 1000))
       if (!checked.ok) return refused(checked.why)
       if (checked.iat !== run.confirmedAt) return refused("the proof is not the one kept")
     }
@@ -1473,7 +1481,7 @@ export class AppServer {
    */
   async runLater(tenant: string, options: { settings?: Record<string, unknown>; locale?: string } = {}): Promise<LaterReport> {
     if (!this.#store.later) throw new Error("runLater: the store has no later part")
-    return this.#runDue(tenant, options.settings ? { [META_KEY]: { settings: options.settings } } : undefined, { dev: Boolean(this.#dev), requestResource: null }, options.locale)
+    return this.#runDue(tenant, options.settings ? { [META_KEY]: { settings: options.settings } } : undefined, options.locale)
   }
 
   // ------------------------------------------------------------ the MCP server
@@ -1612,7 +1620,7 @@ export class AppServer {
   }
 
   /** A fresh McpServer for one request, for this caller (null: manifest and views only). `request`: what `fetch` knows of the HTTP request. */
-  createMcpServer(caller: Caller | null, era: "legacy" | "modern" = "legacy", request: RequestInfo = { trust: { dev: Boolean(this.#dev), requestResource: null }, received: new Map() }): McpServer {
+  createMcpServer(caller: Caller | null, era: "legacy" | "modern" = "legacy", request: RequestInfo = { trust: { dev: Boolean(this.dev) }, received: new Map() }): McpServer {
     void era
     const o = this.options
     // Tool names, titles and descriptions are in the app's own locale: stable for every caller (spec §6). Data labels follow the caller.
@@ -1644,12 +1652,13 @@ export class AppServer {
     const plainCaller = caller.host === "plain"
     const reg = s.registerTool.bind(s) as unknown as (name: string, config: Record<string, unknown>, cb: (args: Record<string, unknown>, ctx: ServerContext) => Promise<CallToolResult>) => void
     const guard = (name: string, fn: (args: Record<string, unknown>, ctx: ServerContext) => Promise<CallToolResult>) => async (args: Record<string, unknown>, ctx: ServerContext) => {
-      const notes: L10n = new Map()
+      let notes = this.#shown.get(caller)
+      if (!notes) this.#shown.set(caller, (notes = new Map()))
       // A schedule's run is the installation's, of that schedule's own tool: anything else naming a schedule is refused.
       const scheduleWhy = this.#scheduleProblem(name, caller, ctx.mcpReq._meta as Record<string, unknown> | undefined)
       if (scheduleWhy) return failure("permission_denied", `Not a run of this schedule: ${scheduleWhy}.`)
       try {
-        return withL10n(await shownLabels.run(notes, () => fn(args ?? {}, ctx)), notes)
+        return withL10n(await fn(args ?? {}, ctx), notes)
       } catch (error) {
         if (error instanceof AppError) return failure(error.code, error.message, error.details)
         console.error(`[${PROTOCOL_ID}] ${name}`, error)
@@ -2011,7 +2020,7 @@ export class AppServer {
           _meta: APP_ONLY_META,
         },
         guard(LATER_TOOL, async (_args, mctx) => {
-          const report = await this.#runDue(caller.installation, meta(mctx), request.trust, caller.locale)
+          const report = await this.#runDue(caller.installation, meta(mctx), caller.locale)
           const count = (status: string) => report.runs.filter((r) => r.status === status).length
           return {
             content: text(`${report.runs.length} due: ${count("done")} done, ${count("failed")} failed, ${count("expired")} expired, ${count("refused")} refused.`),
@@ -2056,7 +2065,7 @@ export class AppServer {
           run(mctx, async (ctx) => {
             const file = await handler(ctx)
             if (!file) return { content: text("The app keeps nothing for this installation."), structuredContent: { empty: true } }
-            return this.#exportResult(file)
+            return await this.#exportResult(file)
           }),
         ),
       )
@@ -2086,18 +2095,18 @@ export class AppServer {
   }
 
   /** An export as the host takes it: the file's facts, and the file itself as one embedded resource (base64). */
-  #exportResult(file: { name?: string; contentType: string; body: string | Uint8Array }): CallToolResult {
+  async #exportResult(file: { name?: string; contentType: string; body: string | Uint8Array }): Promise<CallToolResult> {
     const EXT: Record<string, string> = { "application/json": ".json", "text/csv": ".csv", "application/zip": ".zip", "text/plain": ".txt", "application/x-ndjson": ".ndjson" }
     if (typeof file.contentType !== "string" || !/^[\w.+-]+\/[\w.+-]+(\s*;.*)?$/.test(file.contentType)) throw new Error(`lifecycle.export: contentType "${String(file.contentType)}" is not a media type`)
     const name = file.name ?? `${this.name}-export${EXT[file.contentType.split(";")[0]!.trim()] ?? ""}`
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(name)) throw new Error(`lifecycle.export: name "${name}": letters, digits, . _ -, at most 128`)
-    const bytes = typeof file.body === "string" ? Buffer.from(file.body, "utf8") : Buffer.from(file.body.buffer, file.body.byteOffset, file.body.byteLength)
+    const bytes = typeof file.body === "string" ? new TextEncoder().encode(file.body) : file.body
     if (bytes.byteLength > EXPORT_MAX_BYTES) throw new Error(`lifecycle.export: ${bytes.byteLength} bytes; an export is at most ${EXPORT_MAX_BYTES} bytes`)
-    const sha256 = createHash("sha256").update(bytes).digest("hex")
+    const sha256 = await sha256Hex(bytes)
     return {
       content: [
         { type: "text", text: `Export ${name}: ${bytes.byteLength} bytes.` },
-        { type: "resource", resource: { uri: `${uriPrefix(this.name)}/export/${encodeURIComponent(name)}`, mimeType: file.contentType, blob: bytes.toString("base64") } },
+        { type: "resource", resource: { uri: `${uriPrefix(this.name)}/export/${encodeURIComponent(name)}`, mimeType: file.contentType, blob: base64(bytes) } },
       ],
       structuredContent: { name, contentType: file.contentType, bytes: bytes.byteLength, sha256 },
     }
@@ -2308,34 +2317,17 @@ export class AppServer {
     return this.#manifest!
   }
 
-  // ------------------------------------------------------------ dev helpers
+  // ------------------------------------------------------------ development
 
-  async #devStarted(): Promise<DevAuthority> {
-    if (!this.#dev) throw new Error("auth.dev is off")
-    this.#devReady ??= this.#dev.start()
-    await this.#devReady
-    return this.#dev
+  /** The development side of the app's sign-in (`devSignIn`), or null: its tokens stand in for a workspace host. */
+  get dev(): DevTools | null {
+    return this.options.auth?.signIn?.dev ?? null
   }
 
-  /**
-   * A dev access token (tests, local hosts). `host: "workspace"` makes the SDK ask for confirmation proofs.
-   * `person: null` with `host: "workspace"`: the installation-level caller (schedules, later runs, lifecycle tools).
-   */
-  async devToken(input: { person?: string | Person | null; permissions?: string[] | "all"; host?: "workspace" | "plain"; installation?: string; locale?: string } = {}): Promise<string> {
-    const dev = await this.#devStarted()
-    return dev.token({ ...input, audience: DEV_ISSUER })
-  }
-
-  /**
-   * A dev confirmation proof for one call (what a workspace host signs after «Confirm»). For an action with `later`
-   * it carries the run's deadline (`until`, from the arguments' `at` and the action's window) unless `until` is given.
-   */
-  async devConfirmation(input: { tool: string; args: Record<string, unknown>; call: string; person?: string; installation?: string; until?: number }): Promise<string> {
-    const dev = await this.#devStarted()
-    const sub = input.person ?? dev.people[0]!.id
-    const later = this.#actions.get(input.tool)?.later
-    const until = input.until ?? (later && typeof input.args[later.at] === "string" ? laterDeadline(input.args[later.at] as string, later.window) : undefined)
-    return signConfirmation(dev.key, { iss: DEV_ISSUER, aud: DEV_ISSUER, sub, installation: input.installation ?? dev.installation, tool: input.tool, args: input.args, call: input.call, ...(until !== undefined && Number.isFinite(until) ? { until } : {}) })
+  /** A workspace host's confirmation proof: only a development one exists (`devSignIn`); without it none holds. */
+  #checkConfirmation(proof: string, expected: Parameters<DevTools["checkConfirmation"]>[1], at?: Date): Promise<{ ok: true; iat: number } | { ok: false; why: string }> {
+    if (!this.dev) return Promise.resolve({ ok: false, why: "no workspace host's proof is accepted here" })
+    return this.dev.checkConfirmation(proof, expected, at)
   }
 
   // ------------------------------------------------------------ HTTP
@@ -2347,7 +2339,7 @@ export class AppServer {
     return `${proto}://${host}`
   }
 
-  async #caller(request: Request, resource: string, trust: RequestTrust, cors: Record<string, string>): Promise<Caller | Response> {
+  async #caller(request: Request, resource: string, trust: RequestTrust, cors: Record<string, string>, htu?: string): Promise<Caller | Response> {
     const auth = this.options.auth ?? {}
     const authorization = request.headers.get("authorization") ?? ""
     const bearer = /^Bearer\s+(.+)$/i.exec(authorization)?.[1]?.trim()
@@ -2364,7 +2356,7 @@ export class AppServer {
     if (auth.signIn && (bearer || dpopToken)) {
       // The app's own sign-in module (`@clegra/sdk/signin`): its access tokens (Bearer, or DPoP-bound) and personal keys.
       try {
-        const resolved = await auth.signIn.resolve((dpopToken ?? bearer)!, request, { resource, scheme: dpopToken ? "DPoP" : "Bearer" })
+        const resolved = await auth.signIn.resolve((dpopToken ?? bearer)!, request, { resource, scheme: dpopToken ? "DPoP" : "Bearer", ...(htu ? { htu } : {}) })
         if (resolved) return this.#resolved(resolved)
       } catch (error) {
         if (!(error instanceof AuthError)) console.error(`[${PROTOCOL_ID}] auth`, error)
@@ -2389,11 +2381,16 @@ export class AppServer {
       }
       return challenge("sign in first", { credentials: false })
     }
-    if (trust.dev) await this.#devStarted()
     try {
-      // A workspace host's token (or a dev token) is the SDK's to verify; any other is the app's own.
-      if (auth.resolve && !this.#verifier.knows(bearer)) return this.#resolved(await auth.resolve(bearer, request, { resource }))
-      return await this.#verifier.verify(bearer, trust)
+      // A development token (`devSignIn`) is the SDK's to verify, from a loopback caller only; any other is the app's own.
+      const dev = this.dev
+      if (dev?.issues(bearer)) {
+        if (!trust.dev) throw new AuthError("development tokens answer callers on a loopback address only")
+        const c = await dev.verify(bearer, resource)
+        return { installation: tenantOf(c.installation, DEV_ISSUER), installationId: c.installation, person: c.person, permissions: new Set(c.permissions), ...(c.locale ? { locale: c.locale } : {}), host: c.host, issuer: DEV_ISSUER, subject: c.subject }
+      }
+      if (auth.resolve) return this.#resolved(await auth.resolve(bearer, request, { resource }))
+      throw new AuthError(auth.signIn ? "not a token of this app's sign-in" : "this app signs nobody in with a token (auth.signIn or auth.resolve)")
     } catch (error) {
       if (!(error instanceof AuthError)) console.error(`[${PROTOCOL_ID}] auth`, error)
       return challenge(error instanceof AuthError ? error.message : "invalid token")
@@ -2425,15 +2422,14 @@ export class AppServer {
    */
   async start(): Promise<{ devCode: string | null }> {
     this.manifest()
-    if (this.#dev) await this.#devStarted()
     const auth = this.options.auth ?? {}
-    if (!this.#dev && !auth.signIn && !auth.resolve && !auth.anonymous && !auth.public) console.warn(`[${PROTOCOL_ID}] nobody can sign in: give auth.signIn (the app's own sign-in, @clegra/sdk/signin), auth.resolve (tokens of the app's own authorization server) or auth.public, or turn on auth.dev while developing`)
-    return { devCode: this.#dev?.code ?? null }
+    if (!auth.signIn && !auth.resolve && !auth.anonymous && !auth.public) console.warn(`[${PROTOCOL_ID}] nobody can sign in: give auth.signIn (the app's own sign-in, @clegra/sdk/signin), auth.resolve (tokens of the app's own authorization server) or auth.public, or turn on auth.dev while developing`)
+    return { devCode: this.dev?.code ?? null }
   }
 
   /** What is wrong with this configuration for production, said on every request instead of guessed around (no fallback). */
   #productionProblem(): string | null {
-    if (process.env.NODE_ENV !== "production") return null
+    if (!isProduction()) return null
     const auth = this.options.auth ?? {}
     if (auth.resolve && !auth.resource) return "auth.resource is required in production: this server's public MCP address (https://…/mcp), the only audience its tokens are accepted for"
     return null
@@ -2459,25 +2455,23 @@ export class AppServer {
     if (path === MANIFEST_PATH) return json(this.manifest(), 200, { "cache-control": "public, max-age=30" })
     const problem = this.#productionProblem()
     if (problem) return json({ error: "misconfigured", error_description: problem }, 500)
-    const devHere = Boolean(this.#dev) && isLoopback(info.remoteAddress)
-    // In dev the server is whatever address the caller reached it by (a tunnel); otherwise only its configured one.
-    const requestResource = `${origin}${base}/mcp`
-    const resource = devHere ? requestResource : (auth.resource ?? auth.signIn?.resource ?? requestResource)
-    const trust: RequestTrust = { dev: devHere, requestResource: devHere ? requestResource : null }
+    // The server's address is its configured one (the sign-in's, `auth.resource`); only without either, the request's.
+    const resource = auth.resource ?? auth.signIn?.resource ?? `${origin}${base}/mcp`
+    const trust: RequestTrust = { dev: Boolean(this.dev) && isLoopback(info.remoteAddress) }
     // Preflight: the headers the browser asks for are allowed as asked (MCP 2026-07-28 clients send mcp-method, mcp-name, Mcp-Param-*; no cookies are ever used).
     if (request.method === "OPTIONS") {
       const asked = request.headers.get("access-control-request-headers")
       return new Response(null, { status: 204, headers: { ...CORS, ...(asked && /^[\w\-, ]{1,2000}$/.test(asked) ? { "access-control-allow-headers": asked } : {}), "access-control-max-age": "600", vary: "access-control-request-headers" } })
     }
-    const notHere = () => new Response(`${localize(this.options.title, this.locale, this.locale)}: MCP at ${base}/mcp, manifest at ${MANIFEST_PATH}`, { status: 404, headers: { "content-type": "text/plain; charset=utf-8" } })
+    const notHere = () => new Response(`${localize(this.options.title, this.locale, this.locale)}: MCP at ${base}/mcp, manifest at ${MANIFEST_PATH}`, { status: 404, headers: { "content-type": "text/plain; charset=utf-8", "x-clegra-route": "none" } })
     if (path === null) return notHere()
     if (path === "/" && request.method === "GET" && (request.headers.get("accept") ?? "").includes("application/json")) return json({ name: this.name, manifest: MANIFEST_PATH, mcp: `${base}/mcp` })
     if (path === "/health") return json({ ok: true, name: this.name, version: this.options.version })
     if (path.startsWith(`${VIEWS_PATH}/`) && this.#viewTickets) return this.#serveView(request, path)
     if (path === SITE_BRIDGE_PATH && this.#site) return new Response(siteBridgeScript(this.#clientOrigins), { headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "public, max-age=300", "x-content-type-options": "nosniff", "access-control-allow-origin": "*" } })
     if (path === "/.well-known/oauth-protected-resource" || path === `/.well-known/oauth-protected-resource${base}/mcp`) {
-      // Where a client signs a person in: the app's own authorization server (with dev sign-in on, this server). Never Clegra's core: its tokens come from Clegra, not by OAuth (M3).
-      const servers = auth.signIn ? auth.signIn.authorizationServers : (auth.authorizationServers ?? (devHere ? [`${origin}${base}`] : []))
+      // Where a client signs a person in: the app's own authorization server, never anyone else's.
+      const servers = auth.signIn ? auth.signIn.authorizationServers : (auth.authorizationServers ?? [])
       return json({ resource, authorization_servers: servers, bearer_methods_supported: ["header"], scopes_supported: [OAUTH_SCOPE], resource_name: localize(this.options.title, this.locale, this.locale) })
     }
     if (auth.signIn) {
@@ -2488,18 +2482,18 @@ export class AppServer {
       const answered = await auth.serve(request)
       if (answered) return answered
     }
-    if (devHere) {
-      const dev = await this.#devStarted()
-      // The dev authority's paths are the app's own (under `path`), its metadata also at the RFC 8414 address for an issuer with a path.
-      const devPath = base && path.startsWith("/.well-known/") && path.endsWith(base) ? path.slice(0, -base.length) : path
-      const local = devPath === url.pathname ? request : new Request(new URL(devPath + url.search, url.origin), request)
-      const answered = await dev.handle(local, `${origin}${base}`, resource)
-      if (answered) return answered
-    }
+    if (path === OPENAPI_PATH && (request.method === "GET" || request.method === "HEAD")) return json(await this.openapi(this.#appOrigin(origin)), 200, { "cache-control": "public, max-age=30" })
+    if (path.startsWith(`${OPERATIONS_PATH}/`)) return this.#operation(request, path.slice(OPERATIONS_PATH.length + 1), resource, trust, origin)
     if (path !== "/mcp") return notHere()
     const caller = await this.#caller(request, resource, trust, cors)
     if (caller instanceof Response) return caller
-    if (!this.options.store && !this.#warnedStore && process.env.NODE_ENV === "production") {
+    return this.#callMcp(request, caller, trust, origin)
+  }
+
+  /** One MCP request of a verified caller, through the app's MCP server. */
+  async #callMcp(request: Request, caller: Caller, trust: RequestTrust, origin: string): Promise<Response> {
+    const cors = CORS
+    if (!this.options.store && !this.#warnedStore && isProduction()) {
       this.#warnedStore = true
       console.warn(`[${PROTOCOL_ID}] store: idempotency and one-time tokens are kept in memory; on serverless or several instances give a shared store (SqlStore)`)
     }
@@ -2518,6 +2512,73 @@ export class AppServer {
     const headers = new Headers(response.headers)
     for (const [k, v] of Object.entries(cors)) headers.set(k, v)
     return new Response(response.body, { status: response.status, headers })
+  }
+
+  // ------------------------------------------------------------ the index as OpenAPI (spec §7)
+
+  #listed: Promise<ListedTool[]> | null = null
+
+  /**
+   * The index as an OpenAPI 3.1 document (`GET <path>/openapi.json`): every tool a plain client may call, as
+   * `POST <path>/operations/<tool>`, with its input, effect and sign-in; the pages as `x-clegra-pages`. `origin`: the
+   * app's public origin (default its configured address).
+   */
+  async openapi(origin?: string): Promise<OpenApiDocument> {
+    const auth = this.options.auth ?? {}
+    const at = origin ?? this.#appOrigin("http://localhost")
+    // What a caller who may do everything a plain client may is listed: the operations, never the protocol's own tools.
+    this.#listed ??= (async () => {
+      const everyone: Caller = { installation: "index@openapi", installationId: "index", person: { id: "index", name: "" }, permissions: new Set(this.#allPermissions()), host: "plain", issuer: "openapi", subject: "index" }
+      const rpc = new Request(`${at}${this.#path}/mcp`, { method: "POST", headers: MCP_HEADERS, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }) })
+      const answer = await rpcResult(await this.#callMcp(rpc, everyone, { dev: false }, at))
+      const tools = ((answer.result as { tools?: ListedTool[] } | undefined)?.tools ?? []) as ListedTool[]
+      return tools.filter((t) => !t.name.startsWith(`${PROTOCOL_ID}_`))
+    })()
+    const signIn = auth.signIn
+    const m = this.manifest()
+    return openApiDocument({
+      manifest: m,
+      tools: await this.#listed,
+      origin: at,
+      base: this.#path,
+      locale: this.locale,
+      oauth: signIn ? { authorizationUrl: `${signIn.issuer}/oauth/authorize`, tokenUrl: `${signIn.issuer}/oauth/token`, scopes: m.permissions.map((p) => ({ id: p.id, label: p.label[this.locale] ?? Object.values(p.label)[0] ?? p.id })) } : null,
+      signsIn: Boolean(auth.resolve),
+    })
+  }
+
+  /** `POST <path>/operations/<tool>`: one tool called over plain HTTP, its JSON body the arguments, its answer the structured result. */
+  async #operation(request: Request, tool: string, resource: string, trust: RequestTrust, origin: string): Promise<Response> {
+    const answer = (body: unknown, status: number, headers: Record<string, string> = {}) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", "cache-control": "no-store", ...CORS, ...headers } })
+    const error = (code: string, message: string, status = ERROR_STATUS[code] ?? 400) => answer({ error: { code, message } }, status)
+    if (request.method !== "POST") return answer({ error: { code: "invalid_input", message: "an operation is called with POST" } }, 405, { allow: "POST, OPTIONS" })
+    if (!/^[A-Za-z0-9_.-]{1,64}$/.test(tool) || tool.startsWith(`${PROTOCOL_ID}_`)) return error("not_found", `no operation ${tool}`)
+    const url = new URL(request.url)
+    const caller = await this.#caller(request, resource, trust, CORS, `${origin}${url.pathname}`)
+    if (caller instanceof Response) return caller
+    let args: unknown
+    try {
+      args = JSON.parse((await request.text()) || "{}")
+    } catch {
+      return error("invalid_input", "the body is not JSON")
+    }
+    if (!args || typeof args !== "object" || Array.isArray(args)) return error("invalid_input", "the body is a JSON object: the operation's arguments")
+    const call = request.headers.get("idempotency-key")
+    if (call !== null && !/^[\x21-\x7e]{1,128}$/.test(call)) return error("invalid_input", "Idempotency-Key: 1 to 128 visible ASCII characters")
+    const rpc = new Request(`${origin}${this.#path}/mcp`, {
+      method: "POST",
+      headers: MCP_HEADERS,
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: tool, arguments: args, ...(call ? { _meta: { [META_KEY]: { call } } } : {}) } }),
+    })
+    const r = await rpcResult(await this.#callMcp(rpc, caller, trust, origin))
+    if (r.error) return /not found|unknown tool/i.test(r.error.message) ? error("not_found", `no operation ${tool}`) : error("invalid_input", r.error.message)
+    const result = (r.result ?? {}) as CallToolResult
+    const text = (result.content ?? []).flatMap((c) => (c.type === "text" ? [c.text] : [])).join("\n")
+    if (result.isError) {
+      const e = (result.structuredContent as { error?: { code?: string } } | undefined)?.error
+      return e?.code ? answer(result.structuredContent, ERROR_STATUS[e.code] ?? 400) : error("internal", text || "the call failed")
+    }
+    return answer(result.structuredContent ?? { message: text }, 200)
   }
 
   /**
@@ -2551,10 +2612,22 @@ export class AppServer {
     })
   }
 
-  /** Whether dev sign-in is on (it then answers loopback callers only). */
+  /** Whether the app's sign-in is a development one (`devSignIn`: its development tokens answer loopback callers only). */
   get devMode(): boolean {
-    return Boolean(this.#dev)
+    return Boolean(this.dev)
   }
+}
+
+/** The headers of an MCP request the SDK makes to itself (an operation, the index). */
+const MCP_HEADERS = { "content-type": "application/json", accept: "application/json, text/event-stream", "mcp-protocol-version": "2025-06-18" }
+
+/** A JSON-RPC answer, from JSON or the last event of an SSE stream. */
+async function rpcResult(response: Response): Promise<{ result?: unknown; error?: { code: number; message: string } }> {
+  const raw = await response.text()
+  if (response.status !== 200) return { error: { code: response.status, message: raw.slice(0, 500) || `status ${response.status}` } }
+  const body = (response.headers.get("content-type") ?? "").includes("text/event-stream") ? (raw.split("\n").filter((l) => l.startsWith("data:")).map((l) => l.slice(5).trim()).filter(Boolean).pop() ?? "{}") : raw
+  const json = JSON.parse(body) as { result?: unknown; error?: { code: number; message: string } }
+  return { ...(json.result !== undefined ? { result: json.result } : {}), ...(json.error ? { error: json.error } : {}) }
 }
 
 const CORS: Record<string, string> = {

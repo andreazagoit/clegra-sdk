@@ -13,8 +13,8 @@
 //    `npx @clegra/sdk init`; `next dev` + `npx @clegra/sdk check --token <the local bearer>`, then `next build` +
 //    `next start` + `npx @clegra/sdk check` without a token (the local bearer is refused in production). A fresh app
 //    fails exactly one check, `auth.mcp` (no authorization server yet: the quickstart).
-// 4. A plain Node ESM script importing @clegra/sdk, /node, /testing, /spec, /spec/protocol, /spec/kinds, /next (and the JSON exports), running an
-//    app through testClient.
+// 4. A plain Node ESM script importing @clegra/sdk, /node, /express, /signin, /testing, /spec, /spec/protocol,
+//    /spec/kinds, /next (and the JSON exports), running an app served with the development sign-in through testClient.
 // 5. tsc on TypeScript files importing every entry, with `moduleResolution` bundler and node16.
 // 6. BOTH packages: a fresh Next.js app with Tailwind 4, the @clegra/sdk tarball and the @clegra/ui one (--ui, default
 //    the one tarball in vendor/: `npm pack --pack-destination <this repo>/vendor` in the clegra-ui repository, or
@@ -163,10 +163,11 @@ const reactInTree = Object.keys(lock.packages ?? {}).filter((p) => /node_modules
 expect(reactInTree.length === 0, `Node-only install: react, react-dom, react-native are nowhere in the lockfile's tree${reactInTree.length ? `: ${reactInTree.join(", ")}` : ""}`)
 writeFileSync(
   join(nodeOnly, "server.mjs"),
-  `import { defineApp, MemoryStore } from "@clegra/sdk"
+  `import { defineApp, defineEntity, MemoryStore, serve } from "@clegra/sdk"
 import { listen } from "@clegra/sdk/node"
 import { z } from "zod"
-const app = defineApp({ name: "probe", title: "Probe", version: "1.0.0", auth: { resolve: async () => null }, entities: { note: { label: "Note", schema: z.object({ id: z.string(), title: z.string().meta({ role: "title" }) }), get: () => null, list: () => ({ rows: [] }) } } })
+const note = defineEntity({ name: "note", label: "Note", schema: z.object({ id: z.string(), title: z.string().meta({ role: "title" }) }), get: () => null, list: () => ({ rows: [] }) })
+const app = serve(defineApp({ name: "probe", title: "Probe", version: "1.0.0", entities: [note] }), { auth: { resolve: async () => null } })
 console.log(JSON.stringify({ name: app.manifest().name, listen: typeof listen, store: typeof MemoryStore }))
 `,
 )
@@ -202,9 +203,9 @@ expect(existsSync(join(installed, "dist/spec/src/cli.js")) && !existsSync(join(i
 expect(!existsSync(join(app, "node_modules", "@clegra", "ui")) && !existsSync(join(app, "node_modules", "@base-ui")), "the app has no @clegra/ui and no UI library (the SDK needs none)")
 
 const init = run(npx, ["@clegra/sdk", "init"], { cwd: app })
-expect(init.status === 0 && /create\s+clegra\.ts/.test(init.stdout) && /edit\s+next\.config\.ts/.test(init.stdout) && !/edit\s+package\.json/.test(init.stdout), `npx @clegra/sdk init (the CLI from the tarball): clegra.ts, the route, next.config, .env.local; package.json untouched${init.status !== 0 ? `:\n${init.stdout}${init.stderr}` : ""}`)
+expect(init.status === 0 && /create\s+clegra\/app\.ts/.test(init.stdout) && /create\s+clegra\/index\.ts/.test(init.stdout) && /edit\s+next\.config\.ts/.test(init.stdout) && !/edit\s+package\.json/.test(init.stdout), `npx @clegra/sdk init (the CLI from the tarball): clegra/, the route, next.config, .env.local; package.json untouched${init.status !== 0 ? `:\n${init.stdout}${init.stderr}` : ""}`)
 const routeText = readFileSync(join(app, "app/api/clegra/[...path]/route.ts"), "utf8")
-expect(/from "@clegra\/sdk\/next"/.test(routeText) && /from "@clegra\/sdk"/.test(readFileSync(join(app, "clegra.ts"), "utf8")) && /from "@clegra\/sdk\/next"/.test(readFileSync(join(app, "next.config.ts"), "utf8")), "init's files import @clegra/sdk and @clegra/sdk/next")
+expect(/from "@clegra\/sdk\/next"/.test(routeText) && /from "@clegra\/sdk"/.test(readFileSync(join(app, "clegra/index.ts"), "utf8")) && /from "@clegra\/sdk\/next"/.test(readFileSync(join(app, "next.config.ts"), "utf8")), "init's files import @clegra/sdk and @clegra/sdk/next")
 const tokenOf = (dir) => /^CLEGRA_LOCAL_TOKEN=(.+)$/m.exec(readFileSync(join(dir, ".env.local"), "utf8"))?.[1]?.trim()
 const token = tokenOf(app)
 expect(Boolean(token), ".env.local has the local bearer")
@@ -295,8 +296,10 @@ const probe = join(app, "check")
 mkdirSync(probe, { recursive: true })
 writeFileSync(
   join(probe, "esm.mjs"),
-  `import { defineApp, MemoryStore, SPEC_VERSION, KINDS } from "@clegra/sdk"
+  `import { defineApp, defineEntity, MemoryStore, serve, SPEC_VERSION, KINDS } from "@clegra/sdk"
 import { listen } from "@clegra/sdk/node"
+import { clegraMiddleware } from "@clegra/sdk/express"
+import { devSignIn } from "@clegra/sdk/signin"
 import { testClient } from "@clegra/sdk/testing"
 import { checkApp, formatReport } from "@clegra/sdk/spec"
 import { MANIFEST_PATH, URI_SCHEME } from "@clegra/sdk/spec/protocol"
@@ -307,14 +310,13 @@ import { z } from "zod"
 const require = createRequire(import.meta.url)
 const schema = require("@clegra/sdk/clegra.schema.json")
 const kinds = require("@clegra/sdk/kinds.json")
-const app = defineApp({
-  name: "probe", title: "Probe", version: "1.0.0",
-  auth: { dev: { keyFile: new URL("./dev-key.json", import.meta.url).pathname } },
-  entities: { note: { label: "Note", schema: z.object({ id: z.string(), title: z.string().meta({ role: "title" }) }), get: () => ({ id: "n1", title: "Hello" }), list: () => ({ rows: [{ id: "n1", title: "Hello" }] }) } },
-})
+const note = defineEntity({ name: "note", label: "Note", schema: z.object({ id: z.string(), title: z.string().meta({ role: "title" }) }), get: () => ({ id: "n1", title: "Hello" }), list: () => ({ rows: [{ id: "n1", title: "Hello" }] }) })
+const definition = defineApp({ name: "probe", title: "Probe", version: "1.0.0", entities: [note] })
+const app = serve(definition, { auth: { signIn: devSignIn(definition) } })
+const openapi = await (await app.fetch(new Request("http://localhost:3000/openapi.json"))).json()
 const client = await testClient(app)
 const tools = await client.listTools()
-const out = { spec: SPEC_VERSION, kinds: Object.keys(KINDS).length > 0, store: typeof MemoryStore, listen: typeof listen, checkApp: typeof checkApp, formatReport: typeof formatReport, next: typeof withClegra + typeof toNextHandlers, schema: typeof schema.$schema, kindsJson: typeof kinds, host: MANIFEST_PATH === "/.well-known/clegra.json" && URI_SCHEME === "clegra" && SPEC_KINDS === KINDS && typeof normaliseKey === "function", tools: tools.map((t) => t.name).sort() }
+const out = { spec: SPEC_VERSION, kinds: Object.keys(KINDS).length > 0, store: typeof MemoryStore, listen: typeof listen, express: typeof clegraMiddleware, openapi: openapi.openapi, checkApp: typeof checkApp, formatReport: typeof formatReport, next: typeof withClegra + typeof toNextHandlers, schema: typeof schema.$schema, kindsJson: typeof kinds, host: MANIFEST_PATH === "/.well-known/clegra.json" && URI_SCHEME === "clegra" && SPEC_KINDS === KINDS && typeof normaliseKey === "function", tools: tools.map((t) => t.name).sort() }
 console.log(JSON.stringify(out))
 `,
 )
@@ -323,22 +325,26 @@ let esmOut = null
 try {
   esmOut = JSON.parse(esm.stdout.trim().split("\n").pop())
 } catch {}
-expect(esm.status === 0 && esmOut?.tools?.includes("note_list") && esmOut.checkApp === "function" && esmOut.listen === "function" && esmOut.schema === "string" && esmOut.host === true, `plain Node ESM imports every entry and runs an app${esm.status !== 0 || !esmOut ? `:\n${esm.stdout}${esm.stderr}` : ""}`)
+expect(esm.status === 0 && esmOut?.tools?.includes("note_list") && esmOut.checkApp === "function" && esmOut.listen === "function" && esmOut.express === "function" && esmOut.openapi === "3.1.1" && esmOut.schema === "string" && esmOut.host === true, `plain Node ESM imports every entry and runs an app${esm.status !== 0 || !esmOut ? `:\n${esm.stdout}${esm.stderr}` : ""}`)
 
 // ------------------------------------------------------------ 5. TypeScript consumers
 // next.ts: every entry, as an app's code imports them (skipLibCheck on, as in every Next app: Next's own .d.ts
 // files need the DOM and react-dom types). core.ts: the entries that don't import next, with skipLibCheck OFF and
 // no DOM lib, so @clegra/sdk's own .d.ts files are type-checked too.
-const core = `import { defineApp, type App, type ResolvedCaller, type Manifest } from "@clegra/sdk"
+const core = `import { defineApp, serve, type App, type ResolvedCaller, type Manifest, type ServedApp } from "@clegra/sdk"
 import { listen } from "@clegra/sdk/node"
+import { clegraMiddleware } from "@clegra/sdk/express"
+import { devSignIn, type SignIn } from "@clegra/sdk/signin"
 import { testClient } from "@clegra/sdk/testing"
 import { checkApp, type Report } from "@clegra/sdk/spec"
 import { MANIFEST_PATH } from "@clegra/sdk/spec/protocol"
 import { keyOf, type Normalisation } from "@clegra/sdk/spec/kinds"
 import { z } from "zod"
-export const app: App = defineApp({ name: "probe", title: "Probe", version: "1.0.0", auth: { resolve: async (): Promise<ResolvedCaller | null> => null }, entities: {} })
+export const definition: App = defineApp({ name: "probe", title: "Probe", version: "1.0.0", entities: [] })
+export const app: ServedApp = serve(definition, { auth: { resolve: async (): Promise<ResolvedCaller | null> => null } })
 export const manifest: Manifest = app.manifest()
-export const fns = [listen, testClient, checkApp, keyOf] as const
+export const dev: SignIn = devSignIn(definition)
+export const fns = [listen, clegraMiddleware, testClient, checkApp, keyOf] as const
 export const host: { path: string; how: Normalisation } = { path: MANIFEST_PATH, how: "exact" }
 export type CheckReport = Report
 export const s = z.string()
@@ -408,7 +414,7 @@ export default function Home() {
 )
 ok("fresh Next.js app (Tailwind 4) installed with both tarballs")
 const initUi = run(npx, ["@clegra/sdk", "init", "--ui"], { cwd: both })
-expect(initUi.status === 0 && /create\s+clegra\.ts/.test(initUi.stdout) && /edit\s+package\.json/.test(initUi.stdout) && /edit\s+app\/globals\.css/.test(initUi.stdout), `npx @clegra/sdk init --ui: clegra.ts, the route, next.config, .env.local, the web libraries in package.json, the stylesheet${initUi.status !== 0 ? `:\n${initUi.stdout}${initUi.stderr}` : ""}`)
+expect(initUi.status === 0 && /create\s+clegra\/app\.ts/.test(initUi.stdout) && /edit\s+package\.json/.test(initUi.stdout) && /edit\s+app\/globals\.css/.test(initUi.stdout), `npx @clegra/sdk init --ui: clegra/, the route, next.config, .env.local, the web libraries in package.json, the stylesheet${initUi.status !== 0 ? `:\n${initUi.stdout}${initUi.stderr}` : ""}`)
 const bothPkg = JSON.parse(readFileSync(join(both, "package.json"), "utf8"))
 expect(bothPkg.dependencies["@clegra/ui"].startsWith("file:") && Object.keys(UI_WEB_LIBRARIES).every((n) => bothPkg.dependencies[n] === UI_WEB_LIBRARIES[n]), "init --ui kept the installed @clegra/ui and added its web libraries at its ranges")
 expect(readFileSync(join(both, "app", "globals.css"), "utf8") === '@import "tailwindcss";\n@import "@clegra/ui/styles.css";\n', 'init --ui: app/globals.css imports "@clegra/ui/styles.css" after Tailwind')

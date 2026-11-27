@@ -9,7 +9,7 @@ package answers the `401`, serves the protected-resource metadata (RFC 9728) and
 code does one thing: it says whether a token is good and who it belongs to.
 
 ```ts
-defineApp({
+serve(app, {
   auth: {
     resource: `${process.env.CLEGRA_PUBLIC_URL}/mcp`,            // the only audience accepted; required in production
     authorizationServers: ["https://app.example.com/api/auth"],    // the issuer, named in the protected-resource metadata
@@ -89,7 +89,7 @@ import { APIError } from "better-auth/api"
 import { jwt, organization } from "better-auth/plugins"
 
 const site = process.env.CLEGRA_PUBLIC_URL!       // https://app.example.com
-export const resource = `${site}/mcp`               // mcp({ resource }) and defineApp's auth.resource: the same string
+export const resource = `${site}/mcp`               // mcp({ resource }) and serve's auth.resource: the same string
 export const issuer = `${site}/api/auth`            // better-auth at /api/auth
 
 export const auth = betterAuth({
@@ -357,7 +357,7 @@ metadata announces CIMD once it is on, and which SDK call returns the person's n
 import { createSignIn, passwordLogin, SqlSignInStore } from "@clegra/sdk/signin"
 
 const store = new SqlSignInStore(query)   // SqlSignInStore.schema() in a migration
-export const signIn = createSignIn(definition, {
+export const signIn = createSignIn(app, {         // app: what defineApp returned (its title and permissions)
   issuer: "https://app.example.com",
   resource: "https://app.example.com/mcp",
   // Your login: who is signed in on this request (your session), and where your sign-in page is.
@@ -368,7 +368,7 @@ export const signIn = createSignIn(definition, {
   keys: [JSON.parse(process.env.SIGNIN_KEY!)],   // newSignInKey() makes one
   clientOrigins: ["https://app.clegra.com"],      // who may frame your site and get web_message answers
 })
-// then: serve the app with auth: { signIn }
+export const served = serve(app, { auth: { signIn } })
 ```
 
 - No login at all? `passwordLogin({ store, origin, title })` is one: accounts with an email and a password
@@ -384,11 +384,24 @@ export const signIn = createSignIn(definition, {
 A workspace client (Clegra) shows your site in a frame on its own site (spec §5.1). It never signs anyone in for you:
 the person signs in with your sign-in, inside the frame. For that your session cookie must be
 `Secure; HttpOnly; SameSite=None; Partitioned` over https (the sign-in module's `frameCookie` writes it; with
-better-auth: `advanced.defaultCookieAttributes`), and your pages must be framable by the client only (`siteProxy(app)`
-in `proxy.ts`, with `clientOrigins` and `site: { start }` in the app). `<ClegraSite />` in the root layout takes the
+better-auth: `advanced.defaultCookieAttributes`), and your pages must be framable by the client only (`siteProxy(served)`
+in `proxy.ts`, with `clientOrigins` and `site: { start }` in `serve`). `<ClegraSite />` in the root layout takes the
 client's theme and language and tells it where the person is.
 
 ## Locally, before any of this
+
+`devSignIn(app, { issuer?, people?, installation?, code? })` is the sign-in module over test people: a dev login at
+`/oauth/dev-login` that lists them and asks for the code printed when the app starts, then the module's real consent
+and tokens, so a real MCP client links exactly as in production. Beside it, `served.dev` signs development tokens and
+a development workspace host's confirmation proofs for tests (`testClient`, `installationClient`). It is refused when
+`NODE_ENV` is `production`, its development tokens count only from callers on a loopback address, and its keys live
+in memory.
+
+```ts
+export const served = serve(app, { auth: { signIn: devSignIn(app, { issuer: "http://127.0.0.1:3920", people: [{ id: "ada", name: "Ada", permissions: "all" }] }) } })
+```
+
+In a Next.js app with its own authorization server:
 
 `npx @clegra/sdk init` writes a `resolve` that also accepts one bearer from `.env.local` (`CLEGRA_LOCAL_TOKEN`). It is
 refused whenever `NODE_ENV` is `production`, which `next build`, `next start` and every deployment set. Use it to see

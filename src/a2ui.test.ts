@@ -1,15 +1,13 @@
 import assert from "node:assert/strict"
-import { randomUUID } from "node:crypto"
-import { readFileSync, rmSync } from "node:fs"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
-import { after, describe, test } from "node:test"
+import { readFileSync } from "node:fs"
+import { describe, test } from "node:test"
 
 import Ajv2020 from "ajv/dist/2020"
 import { z } from "zod"
 
 import { appCatalog, BASIC_CATALOG_ID, CLEGRA_A2UI_CATALOG, CLEGRA_CATALOG_ID, componentSurface, STYLE_EXTENSION, templateSurface, type A2uiComponent, type A2uiSurface } from "./a2ui"
-import { defineApp, manifestSchema, type AuthOptions } from "./index"
+import { defineAction, defineApp, defineArtifact, defineComponent, defineEntity, manifestSchema, serve, type App } from "./index"
+import { devSignIn } from "./signin"
 import { testClient } from "./testing"
 
 /**
@@ -145,31 +143,23 @@ describe("template surfaces", () => {
   })
 })
 
+const served = (app: App) => serve(app, { auth: { signIn: devSignIn(app, { code: "TEST1" }) } })
+
 describe("the app's own components", () => {
-  const keyFile = join(tmpdir(), `clegra-a2ui-key-${randomUUID()}.json`)
-  after(() => rmSync(keyFile, { force: true }))
-  const app = defineApp({
-    name: "crm",
-    title: "CRM",
-    version: "1.0.0",
-    auth: { dev: { keyFile, code: "TEST1" } } as AuthOptions,
-    entities: {},
-    actions: { create_deal: { title: "New deal", input: z.object({ name: z.string() }), run: () => ({ message: "ok" }) } },
-    components: {
-      StageFunnel: {
-        title: "Stage funnel",
-        description: "Deals narrowing stage by stage",
-        props: z.object({ stages: z.array(z.object({ label: z.string(), count: z.number() })), currency: z.string().optional() }),
-        view: { html: "<!doctype html><title>funnel</title>" },
-        actions: ["create_deal"],
-      },
-    },
-    artifacts: {
-      funnel: { title: "Funnel", description: "The funnel", params: z.object({}), component: "StageFunnel", actions: ["create_deal"], data: () => ({ stages: [{ label: "Lead", count: 4 }] }) },
-      broken: { title: "Broken", description: "Bad props", params: z.object({}), component: "StageFunnel", data: () => ({ stages: "no" }) },
-      total: { title: "Total", description: "A figure", params: z.object({}), template: "stat", data: () => ({ label: "Open", value: 2 }) },
-    },
+  const createDeal = defineAction({ name: "create_deal", title: "New deal", input: z.object({ name: z.string() }), run: () => ({ message: "ok" }) })
+  const stageFunnel = defineComponent({
+    name: "StageFunnel",
+    title: "Stage funnel",
+    description: "Deals narrowing stage by stage",
+    props: z.object({ stages: z.array(z.object({ label: z.string(), count: z.number() })), currency: z.string().optional() }),
+    view: { html: "<!doctype html><title>funnel</title>" },
+    actions: [createDeal],
   })
+  const funnel = defineArtifact({ name: "funnel", title: "Funnel", description: "The funnel", params: z.object({}), component: stageFunnel, actions: [createDeal], data: () => ({ stages: [{ label: "Lead", count: 4 }] }) })
+  const broken = defineArtifact({ name: "broken", title: "Broken", description: "Bad props", params: z.object({}), component: stageFunnel, data: () => ({ stages: "no" }) as never })
+  const total = defineArtifact({ name: "total", title: "Total", description: "A figure", params: z.object({}), template: "stat", data: () => ({ label: "Open", value: 2 }) })
+  const definition = defineApp({ name: "crm", title: "CRM", version: "1.0.0", entities: [], actions: [createDeal], components: [stageFunnel], artifacts: [funnel, broken, total] })
+  const app = served(definition)
 
   test("manifest: components, each artifact naming its component; valid against the manifest schema", () => {
     const m = app.manifest()
@@ -201,21 +191,22 @@ describe("the app's own components", () => {
 
   test("resolve carries the surface; props that fail the schema are an error, never half drawn", async () => {
     const c = await testClient(app, { permissions: "all" })
-    const total = await c.call("show_total", {})
-    const uri = (total.structuredContent as { uri: string }).uri
+    const shown = await c.call("show_total", {})
+    const uri = (shown.structuredContent as { uri: string }).uri
     const resolved = await c.call("clegra_resolve", { uris: [uri], want: "artifact" })
     const [one] = (resolved.structuredContent as { results: { a2ui?: A2uiSurface }[] }).results
     assertValid(one!.a2ui!)
-    const broken = await c.call("show_broken", {})
-    assert.equal(broken.isError, true)
+    const failed = await c.call("show_broken", {})
+    assert.equal(failed.isError, true)
   })
 
-  test("definition errors: reserved names, unknown components", () => {
-    const base = { name: "xx", title: "X", version: "1", auth: { dev: { keyFile, code: "TEST1" } } as AuthOptions, entities: {} }
+  test("definition errors: reserved names, components that aren't the app's", () => {
+    const base = { name: "xx", title: "X", version: "1", entities: [] }
     const view = { html: "<p>" }
-    assert.throws(() => defineApp({ ...base, components: { Card: { title: "c", props: z.object({}), view } } }), /Basic Catalog or Clegra/)
-    assert.throws(() => defineApp({ ...base, components: { lower: { title: "c", props: z.object({}), view } } }), /capital letter/)
-    assert.throws(() => defineApp({ ...base, artifacts: { a: { title: "a", description: "a", params: z.object({}), component: "Nope", data: () => ({}) } } }), /not a component/)
+    assert.throws(() => defineApp({ ...base, components: [defineComponent({ name: "Card", title: "c", props: z.object({}), view })] }), /Basic Catalog or Clegra/)
+    assert.throws(() => defineApp({ ...base, components: [defineComponent({ name: "lower", title: "c", props: z.object({}), view })] }), /capital letter/)
+    const stray = defineComponent({ name: "Nope", title: "c", props: z.object({}), view })
+    assert.throws(() => defineApp({ ...base, artifacts: [defineArtifact({ name: "a", title: "a", description: "a", params: z.object({}), component: stray, data: () => ({}) })] }), /component "Nope" is not one of defineApp's components/)
   })
 
   test("componentSurface binds each prop by JSON Pointer", () => {
@@ -225,64 +216,62 @@ describe("the app's own components", () => {
 })
 
 describe("records, creatable types, widgets and what changed", () => {
-  const keyFile = join(tmpdir(), `clegra-a2ui-key-${randomUUID()}.json`)
-  after(() => rmSync(keyFile, { force: true }))
   type Deal = { id: string; name: string; stage: "lead" | "proposal" | "won"; value: number; due: string; owner: string; note?: string }
   const deals = new Map<string, Deal>([["d1", { id: "d1", name: "Acme renewal", stage: "proposal", value: 12000, due: "2026-12-01", owner: "o1", note: "call back" }]])
+  const owner = defineEntity({
+    name: "owner",
+    label: "Owner",
+    schema: z.object({ id: z.string(), name: z.string().meta({ role: "title" }) }),
+    get: (id) => (id === "o1" ? { id, name: "Ada" } : null),
+    list: () => ({ rows: [{ id: "o1", name: "Ada" }] }),
+  })
+  const deal = defineEntity({
+    name: "deal",
+    label: { en: "Deal", it: "Trattativa" },
+    schema: z.object({
+      id: z.string(),
+      name: z.string().meta({ role: "title" }),
+      stage: z.enum(["lead", "proposal", "won"]).meta({ role: "status", labels: { proposal: { en: "Proposal", it: "Proposta" } }, tones: { proposal: "info" } }),
+      value: z.number().meta({ label: { en: "Value", it: "Valore" }, currency: "EUR", filter: true }),
+      due: z.iso.date().meta({ label: { en: "Due", it: "Scadenza" } }),
+      owner: z.string().meta({ label: { en: "Owner", it: "Responsabile" }, ref: "owner" }),
+      note: z.string().optional(),
+    }),
+    record: { fields: ["value", "due", "owner"] },
+    get: (id) => deals.get(id) ?? null,
+    list: () => ({ rows: [...deals.values()] }),
+  })
+  const win = defineAction({ name: "win", on: deal, featured: true, title: "Mark won", input: z.object({}), confirm: false, expose: { plain: true }, run: (_i, _ctx, d) => ({ message: `${d.name} won` }) })
+  const lose = defineAction({ name: "lose", on: deal, featured: true, title: "Mark lost", input: z.object({}), confirm: false, permission: "deals.edit", run: () => ({ message: "lost" }) })
+  const newDeal = defineAction({
+    name: "new_deal",
+    creates: { of: deal, title: { en: "Deal draft", it: "Bozza di trattativa" } },
+    title: "New deal",
+    input: z.object({ name: z.string().default("Untitled") }),
+    confirm: false,
+    expose: { plain: true },
+    run: ({ name }, ctx) => {
+      const id = `d${deals.size + 1}`
+      deals.set(id, { id, name, stage: "lead", value: 0, due: "2026-12-31", owner: "o1", note: "" })
+      ctx.changed("pipeline")
+      return { record: ctx.uri(deal, id) }
+    },
+  })
+  const pipeline = defineArtifact({ name: "pipeline", title: "Pipeline", description: "Open deals", params: z.object({}), template: "stat", widget: { sizes: ["small", "medium"] }, data: () => ({ label: "Open", value: deals.size }) })
+  const top = defineArtifact({ name: "top", title: "Top deals", description: "The biggest", params: z.object({ limit: z.number() }), template: "list", data: ({ limit }) => ({ items: [...deals.values()].slice(0, limit.toFixed().length).map((d) => ({ title: d.name })) }) })
   const make = () =>
-    defineApp({
-      name: "crm",
-      title: "CRM",
-      version: "1.0.0",
-      locale: "en",
-      auth: { dev: { keyFile, code: "TEST1" } } as AuthOptions,
-      permissions: { "deals.edit": { label: "Edit deals" } },
-      entities: {
-        owner: {
-          label: "Owner",
-          schema: z.object({ id: z.string(), name: z.string().meta({ role: "title" }) }),
-          get: (id) => (id === "o1" ? { id, name: "Ada" } : null),
-          list: () => ({ rows: [{ id: "o1", name: "Ada" }] }),
-        },
-        deal: {
-          label: { en: "Deal", it: "Trattativa" },
-          schema: z.object({
-            id: z.string(),
-            name: z.string().meta({ role: "title" }),
-            stage: z.enum(["lead", "proposal", "won"]).meta({ role: "status", labels: { proposal: { en: "Proposal", it: "Proposta" } }, tones: { proposal: "info" } }),
-            value: z.number().meta({ label: { en: "Value", it: "Valore" }, currency: "EUR", filter: true }),
-            due: z.iso.date().meta({ label: { en: "Due", it: "Scadenza" } }),
-            owner: z.string().meta({ label: { en: "Owner", it: "Responsabile" }, ref: "owner" }),
-            note: z.string().optional(),
-          }),
-          record: { fields: ["value", "due", "owner"], actions: ["win", "lose"] },
-          create: { action: "new_deal", title: { en: "Deal draft", it: "Bozza di trattativa" } },
-          get: (id) => deals.get(id) ?? null,
-          list: () => ({ rows: [...deals.values()] }),
-        },
-      },
-      actions: {
-        win: { on: "deal", title: "Mark won", input: z.object({}), confirm: false, expose: { plain: true }, run: (_i, _ctx, d) => ({ message: `${d.name} won` }) },
-        lose: { on: "deal", title: "Mark lost", input: z.object({}), confirm: false, permission: "deals.edit", run: () => ({ message: "lost" }) },
-        new_deal: {
-          title: "New deal",
-          input: z.object({ name: z.string().default("Untitled") }),
-          confirm: false,
-          expose: { plain: true },
-          run: ({ name }, ctx) => {
-            const id = `d${deals.size + 1}`
-            deals.set(id, { id, name, stage: "lead", value: 0, due: "2026-12-31", owner: "o1", note: "" })
-            ctx.changed("pipeline")
-            return { record: ctx.uri("deal", id) }
-          },
-        },
-      },
-      artifacts: {
-        pipeline: { title: "Pipeline", description: "Open deals", params: z.object({}), template: "stat", data: () => ({ label: "Open", value: deals.size }) },
-        top: { title: "Top deals", description: "The biggest", params: z.object({ limit: z.number() }), template: "list", data: ({ limit }) => ({ items: [...deals.values()].slice(0, limit.toFixed().length).map((d) => ({ title: d.name })) }) },
-      },
-      widgets: { pipeline: { sizes: ["small", "medium"] } },
-    })
+    served(
+      defineApp({
+        name: "crm",
+        title: "CRM",
+        version: "1.0.0",
+        locale: "en",
+        permissions: { "deals.edit": { label: "Edit deals" } },
+        entities: [owner, deal],
+        actions: [win, lose, newDeal],
+        artifacts: [pipeline, top],
+      }),
+    )
 
   test("manifest: the record template, the creatable type and the widgets; valid against the manifest schema", () => {
     const m = make().manifest()
@@ -322,29 +311,25 @@ describe("records, creatable types, widgets and what changed", () => {
     assert.deepEqual((made._meta?.clegra as { changed?: string[] }).changed, [uri, "pipeline"])
   })
 
-  test("definition errors: a record field or action that isn't the entity's, a create that needs input or confirmation, a widget with params", () => {
-    const base = { name: "xx", title: "X", version: "1", auth: { dev: { keyFile, code: "TEST1" } } as AuthOptions }
-    const thing = (extra: Record<string, unknown>) => ({ thing: { label: "Thing", schema: z.object({ id: z.string(), name: z.string().meta({ role: "title" }) }), get: () => null, list: () => ({ rows: [] }), ...extra } })
-    const make = { title: "Make", input: z.object({ name: z.string() }), run: () => ({}) }
-    assert.throws(() => defineApp({ ...base, entities: thing({ record: { fields: ["nope"] } }) as never }), /"nope" is not a field of thing/)
-    assert.throws(() => defineApp({ ...base, entities: thing({ record: { fields: ["name"], actions: ["make"] } }) as never, actions: { make } }), /not an action on one thing/)
-    assert.throws(() => defineApp({ ...base, entities: thing({ create: { action: "make" } }) as never, actions: { make } }), /required inputs \(name\)/)
-    assert.throws(() => defineApp({ ...base, entities: thing({ create: { action: "make" } }) as never, actions: { make: { ...make, input: z.object({}) } } }), /confirm "always"/)
-    const top = { title: "Top", description: "Top", params: z.object({ limit: z.number() }), template: "stat" as const, data: () => null }
-    assert.throws(() => defineApp({ ...base, entities: {}, artifacts: { top }, widgets: { top: {} } }), /required params \(limit\)/)
-    assert.throws(() => defineApp({ ...base, entities: {}, artifacts: { top: { ...top, params: z.object({}) } }, widgets: { top: { sizes: ["small"], size: "large" } } }), /not one of its sizes/)
-    assert.throws(() => defineApp({ ...base, entities: {}, widgets: { gone: {} } as never }), /not an artifact type/)
+  test("definition errors: a record field that isn't the entity's, a featured global action, a create that needs input or confirmation, a widget with params", () => {
+    const base = { name: "xx", title: "X", version: "1" }
+    const thing = (extra: Record<string, unknown> = {}) => defineEntity({ name: "thing", label: "Thing", schema: z.object({ id: z.string(), name: z.string().meta({ role: "title" }) }), get: () => null, list: () => ({ rows: [] }), ...extra })
+    const makeOf = (extra: Record<string, unknown>) => defineAction({ name: "make", title: "Make", input: z.object({ name: z.string() }), run: () => ({}), ...extra } as never)
+    assert.throws(() => defineApp({ ...base, entities: [thing({ record: { fields: ["nope"] } })] }), /"nope" is not a field of thing/)
+    const t1 = thing({ record: { fields: ["name"] } })
+    assert.throws(() => defineApp({ ...base, entities: [t1], actions: [makeOf({ featured: true })] }), /only a record action \(on\) is featured/)
+    const t2 = thing()
+    assert.throws(() => defineApp({ ...base, entities: [t2], actions: [makeOf({ creates: t2 })] }), /required inputs \(name\)/)
+    const t3 = thing()
+    assert.throws(() => defineApp({ ...base, entities: [t3], actions: [makeOf({ creates: t3, input: z.object({}) })] }), /confirm "always"/)
+    const params = z.object({ limit: z.number() })
+    assert.throws(() => defineApp({ ...base, entities: [], artifacts: [defineArtifact({ name: "top", title: "Top", description: "Top", params, template: "stat", widget: true, data: () => null })] }), /required params \(limit\)/)
+    assert.throws(() => defineApp({ ...base, entities: [], artifacts: [defineArtifact({ name: "top", title: "Top", description: "Top", params: z.object({}), template: "stat", widget: { sizes: ["small"], size: "large" }, data: () => null })] }), /not one of its sizes/)
   })
 
   test("ctx.changed names only this app's artifacts", async () => {
-    const app = defineApp({
-      name: "yy",
-      title: "Y",
-      version: "1",
-      auth: { dev: { keyFile, code: "TEST1" } } as AuthOptions,
-      entities: {},
-      actions: { poke: { title: "Poke", input: z.object({}), confirm: false, expose: { plain: true }, run: (_i, ctx) => ctx.changed("clegra://other/x/1") } },
-    })
+    const poke = defineAction({ name: "poke", title: "Poke", input: z.object({}), confirm: false, expose: { plain: true }, run: (_i, ctx) => ctx.changed("clegra://other/x/1") })
+    const app = served(defineApp({ name: "yy", title: "Y", version: "1", entities: [], actions: [poke] }))
     const c = await testClient(app, { permissions: "all" })
     const r = await c.call("poke", {})
     assert.equal(r.isError, true)

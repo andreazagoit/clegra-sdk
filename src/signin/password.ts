@@ -5,9 +5,9 @@
  * pages read the same session (`login.session(request)`).
  */
 import { frameCookie, frameCookieName, readCookie } from "./cookies"
-import { hashPassword, PASSWORD_ITERATIONS, randomToken, sha256, verifyPassword } from "./crypto"
+import { hashPassword, PASSWORD_ITERATIONS, randomToken, sha256, verifyPassword } from "../crypto"
 import { escapeHtml, hidden, page, pageLocale, textsOf } from "./pages"
-import type { Login, SignInAccount } from "./index"
+import type { Login, SignInAccount } from "./module"
 import type { SignInStore } from "./store"
 
 export type PasswordAccount = SignInAccount & { email: string; permissions: readonly string[] | "all"; disabled?: boolean }

@@ -3,7 +3,8 @@ import { describe, test } from "node:test"
 
 import { z } from "zod"
 
-import { defineApp, MemoryStore } from "./index"
+import { defineApp, defineEntity, definePage, MemoryStore, serve } from "./index"
+import { devSignIn } from "./signin"
 import { testClient } from "./testing"
 import type { ViewTicket } from "./views"
 
@@ -15,17 +16,13 @@ const APP = "https://pipeline.test"
 const CLIENT = "https://app.clegra.test"
 const OTHER = "https://other-app.test"
 
+const deal = defineEntity({ name: "deal", label: "Deal", schema: z.object({ id: z.string(), name: z.string().meta({ role: "title" }) }), get: () => null, list: () => ({ rows: [] }) })
+const board = definePage({ name: "board", title: "Board", dashboard: [] })
+const notes = definePage({ name: "notes", title: "Notes", view: { html: "<!doctype html><html><head><title>n</title></head><body>n</body></html>", csp: { connectDomains: ["https://api.pipeline.test"] } } })
+const pipeline = defineApp({ name: "pipeline", title: "Pipeline", version: "1.0.0", entities: [deal], pages: [board, notes] })
+
 function makeApp(store = new MemoryStore()) {
-  return defineApp({
-    name: "pipeline",
-    title: "Pipeline",
-    version: "1.0.0",
-    store,
-    auth: { resource: RES, dev: { keyFile: false } },
-    clientOrigins: [CLIENT, "app://client"],
-    entities: { deal: { label: "Deal", schema: z.object({ id: z.string(), name: z.string().meta({ role: "title" }) }), get: () => null, list: () => ({ rows: [] }) } },
-    pages: { board: { title: "Board", dashboard: [] }, notes: { title: "Notes", view: { html: "<!doctype html><html><head><title>n</title></head><body>n</body></html>", csp: { connectDomains: ["https://api.pipeline.test"] } } } },
-  })
+  return serve(pipeline, { store, auth: { signIn: devSignIn(pipeline, { issuer: APP, resource: RES }) }, clientOrigins: [CLIENT, "app://client"] })
 }
 
 const VIEW = "ui://pipeline/view"

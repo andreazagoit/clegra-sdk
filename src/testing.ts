@@ -1,16 +1,15 @@
-import { createHash, randomUUID } from "node:crypto"
-
 import { calculateJwkThumbprint, exportJWK, generateKeyPair, SignJWT, type CryptoKey, type JWK } from "jose"
 
 import { LATER_TOOL, META_KEY } from "../spec/src/protocol"
-import type { Person } from "./auth"
-import type { App } from "./define"
+import { laterDeadline, type Person } from "./auth"
+import { fromBase64url, sha256 } from "./crypto"
+import type { ServedApp } from "./define"
+import type { DevTools } from "./signin/dev"
 
 /**
- * A test client (spec-level, over the real HTTP path): JSON-RPC to
- * `app.fetch` with a dev token, as a plain host or a workspace host (whose
- * tokens are for one request: a new one is signed for each). Needs
- * `auth: { dev: true }` on the app (or `token`).
+ * A test client (spec-level, over the real HTTP path): JSON-RPC to `served.fetch` with a development token, as a
+ * plain host or a development workspace host (whose tokens are for one request: a new one is signed for each). Needs
+ * the development sign-in (`serve(app, { auth: { signIn: devSignIn(app) } })`), or `token`.
  */
 export type ToolCallResult = {
   isError?: boolean
@@ -40,12 +39,19 @@ export type TestClientOptions = {
 }
 
 /** An export as the test reads it back: the file's facts and its bytes (from the embedded resource). */
-export type ExportedFile = { name: string; contentType: string; bytes: number; sha256: string; body: Buffer }
+export type ExportedFile = { name: string; contentType: string; bytes: number; sha256: string; body: Uint8Array }
 
-export async function testClient(app: App, options: TestClientOptions = {}) {
+/** The served app's development sign-in, or why a test can't use it. */
+function devOf(app: ServedApp): DevTools {
+  if (!app.dev) throw new Error(`testClient: ${app.name} has no development sign-in: serve it with auth: { signIn: devSignIn(app) } (@clegra/sdk/signin), or give a token`)
+  return app.dev
+}
+
+export async function testClient(app: ServedApp, options: TestClientOptions = {}) {
   const { token: given, remoteAddress = "127.0.0.1", dpop, origin, ...who } = options
-  const plain = given === undefined && who.host !== "workspace" ? await app.devToken(who) : null
-  const bearer = async () => (typeof given === "function" ? given() : given !== undefined ? given : (plain ?? app.devToken(who)))
+  const devToken = () => devOf(app).token(who)
+  const plain = given === undefined && who.host !== "workspace" ? await devToken() : null
+  const bearer = async () => (typeof given === "function" ? given() : given !== undefined ? given : (plain ?? devToken()))
   let id = 0
 
   let nonce: string | undefined
@@ -92,8 +98,13 @@ export async function testClient(app: App, options: TestClientOptions = {}) {
      * A write as a workspace host does it after the person's «Confirm»: a call id and a proof. For an action with
      * `later` the proof carries the run's deadline (`until`), as a host signs it; `until` overrides it.
      */
-    async confirmed(name: string, args: Record<string, unknown>, call: string = randomUUID(), proof: { until?: number } = {}): Promise<ToolCallResult> {
-      const signed = await app.devConfirmation({ tool: name, args, call, ...(options.person ? { person: typeof options.person === "string" ? options.person : options.person.id } : {}), ...(options.installation ? { installation: options.installation } : {}), ...proof })
+    async confirmed(name: string, args: Record<string, unknown>, call: string = crypto.randomUUID(), proof: { until?: number } = {}): Promise<ToolCallResult> {
+      // The run's deadline for an action with `later`, as a host computes it from the arguments' `at` and the window.
+      const later = app.manifest().actions.find((a) => a.tool.name === name)?.later
+      const at = later ? args[later.at] : undefined
+      const until = proof.until ?? (later && typeof at === "string" ? laterDeadline(at, later.window) : undefined)
+      const person = options.person ? { person: typeof options.person === "string" ? options.person : options.person.id } : {}
+      const signed = await devOf(app).confirmation({ tool: name, args, call, ...person, ...(options.installation ? { installation: options.installation } : {}), ...(until !== undefined && Number.isFinite(until) ? { until } : {}) })
       return client.call(name, args, { [META_KEY]: { call, confirmation: signed } })
     },
     async readResource(uri: string): Promise<{ uri: string; mimeType?: string; text?: string; _meta?: Record<string, unknown> }[]> {
@@ -116,7 +127,7 @@ export async function testClient(app: App, options: TestClientOptions = {}) {
       const s = result.structuredContent as { name?: string; contentType?: string; bytes?: number; sha256?: string; empty?: boolean } | undefined
       const blob = result.content?.find((c) => c.type === "resource")?.resource?.blob
       if (result.isError || !s || s.empty || typeof blob !== "string") return { result, file: null }
-      return { result, file: { name: String(s.name), contentType: String(s.contentType), bytes: Number(s.bytes), sha256: String(s.sha256), body: Buffer.from(blob, "base64") } }
+      return { result, file: { name: String(s.name), contentType: String(s.contentType), bytes: Number(s.bytes), sha256: String(s.sha256), body: fromBase64url(blob.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")) } }
     },
   }
   return client
@@ -127,11 +138,11 @@ export async function testClient(app: App, options: TestClientOptions = {}) {
  * later runs (`runLater`) and the lifecycle tools. `permissions`: what its token lists (default none; a host lists
  * exactly the permission the called action declares).
  */
-export function installationClient(app: App, options: Omit<TestClientOptions, "person" | "host"> = {}) {
+export function installationClient(app: ServedApp, options: Omit<TestClientOptions, "person" | "host"> = {}) {
   return testClient(app, { ...options, host: "workspace", person: null })
 }
 
-// ------------------------------------------------------------ Clegra's core, for tests
+// ------------------------------------------------------------ DPoP keys, for tests
 
 /** A device's (or a server's) key pair: what a Clegra client signs DPoP proofs and confirmation proofs with. */
 export type DeviceKey = {
@@ -143,8 +154,6 @@ export type DeviceKey = {
   proof(input: { htm: string; htu: string; token: string; nonce?: string; iat?: number; jti?: string }): Promise<string>
 }
 
-const sha256 = (value: string) => createHash("sha256").update(value).digest("base64url")
-
 /** A new device key (Ed25519). */
 export async function deviceKey(): Promise<DeviceKey> {
   const { privateKey, publicKey } = await generateKeyPair("EdDSA", { crv: "Ed25519", extractable: true })
@@ -155,11 +164,11 @@ export async function deviceKey(): Promise<DeviceKey> {
     jkt,
     publicJwk,
     privateKey,
-    proof: (i) =>
-      new SignJWT({ htm: i.htm, htu: i.htu, ath: sha256(i.token), ...(i.nonce ? { nonce: i.nonce } : {}) })
+    proof: async (i) =>
+      new SignJWT({ htm: i.htm, htu: i.htu, ath: await sha256(i.token), ...(i.nonce ? { nonce: i.nonce } : {}) })
         .setProtectedHeader({ alg: "EdDSA", typ: "dpop+jwt", jwk: publicJwk })
         .setIssuedAt(i.iat ?? now())
-        .setJti(i.jti ?? randomUUID())
+        .setJti(i.jti ?? crypto.randomUUID())
         .sign(privateKey),
   }
 }

@@ -1,13 +1,10 @@
 import assert from "node:assert/strict"
-import { randomUUID } from "node:crypto"
-import { rmSync } from "node:fs"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
-import { after, describe, test } from "node:test"
+import { describe, test } from "node:test"
 
 import { z } from "zod"
 
-import { defineApp, ref, type AuthOptions } from "./index"
+import { defineAction, defineApp, defineArtifact, defineEntity, definePage, ref, serve } from "./index"
+import { devSignIn } from "./signin"
 import { testClient } from "./testing"
 import { viewHtml } from "./view"
 
@@ -16,9 +13,6 @@ import { viewHtml } from "./view"
  * how a referenced record reaches a model and a form, and what an invalid
  * input says.
  */
-
-const keyFile = join(tmpdir(), `clegra-test-key-${randomUUID()}.json`)
-after(() => rmSync(keyFile, { force: true }))
 
 type Task = { id: string; title: string; project: string; cost: number; due: string }
 const projects = [
@@ -30,59 +24,62 @@ const tasks: Task[] = [
   { id: "t2", title: "Review", project: "p1", cost: 10, due: "2026-11-20" },
 ]
 
+const project = defineEntity({
+  name: "project",
+  label: "Project",
+  // A project's name is typed in by outsiders.
+  schema: z.object({ id: z.string(), name: z.string().meta({ role: "title", label: { en: "Name", it: "Nome" }, search: true, untrusted: true }) }),
+  get: (id) => projects.find((p) => p.id === id) ?? null,
+  list: (q) => ({ rows: projects.filter((p) => !q.text || p.name.toLowerCase().includes(q.text.toLowerCase())) }),
+})
+const task = defineEntity({
+  name: "task",
+  label: "Task",
+  schema: z.object({
+    id: z.string(),
+    title: z.string().meta({ role: "title", label: "Title", sort: true }),
+    project: ref("project").meta({ label: "Project" }),
+    cost: z.number().meta({ role: "amount", currency: "EUR", label: "Cost", sort: true, permission: "tasks.costs" }),
+    due: z.string().meta({ role: "date", label: "Due", sort: true }),
+  }),
+  get: (id) => tasks.find((t) => t.id === id) ?? null,
+  list: (q) => {
+    const rows = [...tasks]
+    if (q.sort) rows.sort((a, b) => (String(a[q.sort!.field as keyof Task]) < String(b[q.sort!.field as keyof Task]) ? -1 : 1) * (q.sort!.dir === "desc" ? -1 : 1))
+    return { rows }
+  },
+})
+const create = defineAction({
+  name: "create",
+  title: { en: "New task", it: "Nuova attività" },
+  input: z.object({
+    title: z.string().min(2).meta({ label: { en: "Title", it: "Titolo" } }),
+    project: ref("project").meta({ label: { en: "Project", it: "Progetto" } }),
+    cost: z.number().min(0).optional().meta({ label: { en: "Cost", it: "Costo" }, currency: "EUR" }),
+    due: z.iso.date().meta({ label: { en: "Due", it: "Scadenza" } }),
+    kind: z.enum(["bug", "idea"]).optional().meta({ label: "Kind", labels: { bug: { en: "Bug", it: "Difetto" }, idea: "Idea" } }),
+  }),
+  expose: { plain: true },
+  run: (input) => ({ message: `Created ${input.title}` }),
+})
+const board = defineArtifact({ name: "board", title: "Board", description: "The board", params: z.object({}), template: "stat", actions: [create], data: () => ({ label: "tasks", value: tasks.length }) })
+const tasksPage = definePage({ name: "tasks", list: task, title: "Tasks", columns: ["title", "project", "cost", "due"] })
+const urgent = definePage({ name: "urgent", list: task, title: "Urgent", columns: ["title", "due"], params: z.object({ days: z.number().optional() }), query: () => ({ sort: { field: "due", dir: "asc" as const } }) })
+
+const definition = defineApp({
+  name: "tasks",
+  title: "Tasks",
+  version: "1.0.0",
+  locale: "en",
+  permissions: { "tasks.costs": { label: "See costs" } },
+  entities: [project, task],
+  actions: [create],
+  artifacts: [board],
+  pages: [tasksPage, urgent],
+})
+
 function makeApp() {
-  return defineApp({
-    name: "tasks",
-    title: "Tasks",
-    version: "1.0.0",
-    locale: "en",
-    auth: { dev: { keyFile, code: "TEST1" } } as AuthOptions,
-    permissions: { "tasks.costs": { label: "See costs" } },
-    entities: {
-      project: {
-        label: "Project",
-        // A project's name is typed in by outsiders.
-        schema: z.object({ id: z.string(), name: z.string().meta({ role: "title", label: { en: "Name", it: "Nome" }, search: true, untrusted: true }) }),
-        get: (id) => projects.find((p) => p.id === id) ?? null,
-        list: (q) => ({ rows: projects.filter((p) => !q.text || p.name.toLowerCase().includes(q.text.toLowerCase())) }),
-      },
-      task: {
-        label: "Task",
-        schema: z.object({
-          id: z.string(),
-          title: z.string().meta({ role: "title", label: "Title", sort: true }),
-          project: ref("project").meta({ label: "Project" }),
-          cost: z.number().meta({ role: "amount", currency: "EUR", label: "Cost", sort: true, permission: "tasks.costs" }),
-          due: z.string().meta({ role: "date", label: "Due", sort: true }),
-        }),
-        get: (id) => tasks.find((t) => t.id === id) ?? null,
-        list: (q) => {
-          const rows = [...tasks]
-          if (q.sort) rows.sort((a, b) => (String(a[q.sort!.field as keyof Task]) < String(b[q.sort!.field as keyof Task]) ? -1 : 1) * (q.sort!.dir === "desc" ? -1 : 1))
-          return { rows }
-        },
-      },
-    },
-    actions: {
-      create: {
-        title: { en: "New task", it: "Nuova attività" },
-        input: z.object({
-          title: z.string().min(2).meta({ label: { en: "Title", it: "Titolo" } }),
-          project: ref("project").meta({ label: { en: "Project", it: "Progetto" } }),
-          cost: z.number().min(0).optional().meta({ label: { en: "Cost", it: "Costo" }, currency: "EUR" }),
-          due: z.iso.date().meta({ label: { en: "Due", it: "Scadenza" } }),
-          kind: z.enum(["bug", "idea"]).optional().meta({ label: "Kind", labels: { bug: { en: "Bug", it: "Difetto" }, idea: "Idea" } }),
-        }),
-        expose: { plain: true },
-        run: (input) => ({ message: `Created ${input.title}` }),
-      },
-    },
-    artifacts: { board: { title: "Board", description: "The board", params: z.object({}), template: "stat", actions: ["create"], data: () => ({ label: "tasks", value: tasks.length }) } },
-    pages: {
-      tasks: { list: "task", title: "Tasks", columns: ["title", "project", "cost", "due"] },
-      urgent: { list: "task", title: "Urgent", columns: ["title", "due"], params: z.object({ days: z.number().optional() }), query: () => ({ sort: { field: "due", dir: "asc" as const } }) },
-    },
-  })
+  return serve(definition, { auth: { signIn: devSignIn(definition, { code: "TEST1" }) } })
 }
 
 type ListView = { columns: { name: string; sort?: boolean }[]; sort?: { field: string; dir: string } }

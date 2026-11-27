@@ -1,16 +1,13 @@
 import assert from "node:assert/strict"
-import { createHash, randomUUID } from "node:crypto"
-import { readFileSync, rmSync } from "node:fs"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
-import { after, beforeEach, describe, test } from "node:test"
+import { readFileSync } from "node:fs"
+import { beforeEach, describe, test } from "node:test"
 
-import { SignJWT } from "jose"
 import { z } from "zod"
 
 import type { McpServer } from "@modelcontextprotocol/server"
 
-import { AppError, defineApp, manifestJsonSchema, manifestSchema, ref, type AuthOptions } from "./index"
+import { AppError, defineAction, defineAgent, defineApp, defineArtifact, defineEntity, definePage, manifestJsonSchema, manifestSchema, ref, serve, type App, type AuthOptions, type ServeOptions } from "./index"
+import { devSignIn, pkceChallenge } from "./signin"
 import { checkApp, formatReport } from "../spec/src/conformance"
 
 import { listen } from "./node"
@@ -21,11 +18,8 @@ import { viewHtml } from "./view"
 const local = { remoteAddress: "127.0.0.1" }
 /** The tenant of the dev authority's default installation. */
 const DEV = "dev@clegra-dev"
-/** A host's public address of the notes app, and tokens signed for it. */
-const RES = "https://notes.test/mcp"
-
-const keyFile = join(tmpdir(), `clegra-test-key-${randomUUID()}.json`)
-after(() => rmSync(keyFile, { force: true }))
+/** Where the tests reach the notes app: its development sign-in's issuer. */
+const ORIGIN = "http://127.0.0.1:3920"
 
 type Note = { id: string; title: string; body?: string; status: "open" | "done"; amount: number; owner: string; folder: string }
 const notes = new Map<string, Map<string, Note>>()
@@ -41,94 +35,101 @@ const notesOf = (installation: string) => {
   return m
 }
 
-const base = { name: "notes", title: { en: "Notes", it: "Note" }, version: "1.0.0", locale: "en", auth: { dev: { keyFile, code: "TEST1" } } as AuthOptions }
+const base = { name: "notes", title: { en: "Notes", it: "Note" }, version: "1.0.0", locale: "en" }
 
-function makeApp(extra: { auth?: AuthOptions; mcp?: (server: McpServer) => void } = {}) {
+/** The app served with the development sign-in (unless `auth` says otherwise). */
+const served = (app: App, extra: ServeOptions = {}) => serve(app, { ...extra, auth: extra.auth ?? { signIn: devSignIn(app, { issuer: ORIGIN, code: "TEST1" }) } })
+
+function makeDefinition() {
+  const folder = defineEntity({
+    name: "folder",
+    label: "Folder",
+    schema: z.object({ id: z.string(), name: z.string().meta({ role: "title", label: "Name" }) }),
+    get: (id) => (id === "f1" ? { id: "f1", name: "Inbox" } : null),
+    list: () => ({ rows: [{ id: "f1", name: "Inbox" }] }),
+  })
+  const note = defineEntity({
+    name: "note",
+    label: { en: "Note", it: "Nota" },
+    plural: { en: "Notes", it: "Note" },
+    schema: z.object({
+      id: z.string(),
+      title: z.string().meta({ role: "title", label: { en: "Title", it: "Titolo" }, search: true }),
+      body: z.string().optional().meta({ label: "Body", untrusted: true }),
+      status: z.enum(["open", "done"]).meta({ role: "status", label: "Status", filter: true, labels: { open: { en: "Open", it: "Aperta" }, done: "Done" } }),
+      amount: z.number().meta({ role: "amount", currency: "EUR", label: "Amount", sort: true, filter: true, permission: "notes.money" }),
+      owner: z.string().meta({ role: "person", label: "Owner" }),
+      folder: ref("folder").meta({ label: "Folder" }),
+    }),
+    get: (id, ctx) => notesOf(ctx.installation).get(id) ?? null,
+    list: (q, ctx) => {
+      let rows = [...notesOf(ctx.installation).values()]
+      if (typeof q.filters.status === "string") rows = rows.filter((r) => r.status === q.filters.status)
+      if (q.text) rows = rows.filter((r) => r.title.toLowerCase().includes(q.text!.toLowerCase()))
+      return { rows, total: rows.length }
+    },
+  })
+  const close = defineAction({
+    name: "close",
+    on: note,
+    title: { en: "Close", it: "Chiudi" },
+    input: z.object({ reason: z.string().optional() }),
+    permission: "notes.edit",
+    expose: { plain: true },
+    run: (input, ctx, record) => {
+      if (record.status === "done") throw new AppError("conflict", "already done")
+      notesOf(ctx.installation).set(record.id, { ...record, status: "done" })
+      ctx.notify({ title: `${ctx.settings.prefix}${record.id} closed` })
+      return { message: `Closed ${record.title}${input.reason ? `: ${input.reason}` : ""}`, record: record.id }
+    },
+  })
+  const ping = defineAction({ name: "ping", title: "Ping", input: z.object({}), readOnly: true, run: () => ({ message: "pong" }) })
+  const add = defineAction({
+    name: "add",
+    title: "Add",
+    input: z.object({ title: z.string() }),
+    confirm: false,
+    run: (input, ctx) => {
+      const id = `n${notesOf(ctx.installation).size + 1}`
+      notesOf(ctx.installation).set(id, { id, title: input.title, status: "open", amount: 0, owner: ctx.person?.id ?? "", folder: "f1" })
+      return { record: id }
+    },
+  })
+  const openCount = defineArtifact({ name: "open_count", title: "Open notes", description: "How many notes are open", params: z.object({ min: z.number().default(0) }), template: "stat", actions: [add], data: (_p, ctx) => ({ label: "open", value: [...notesOf(ctx.installation).values()].filter((n) => n.status === "open").length }) })
   return defineApp({
     ...base,
-    ...extra,
     permissions: { "notes.edit": { label: "Edit notes", default: true }, "notes.money": { label: "See amounts" } },
     settings: { prefix: { label: "Prefix", type: "text", default: "#" } },
-    entities: {
-      folder: {
-        label: "Folder",
-        schema: z.object({ id: z.string(), name: z.string().meta({ role: "title", label: "Name" }) }),
-        get: (id) => (id === "f1" ? { id: "f1", name: "Inbox" } : null),
-        list: () => ({ rows: [{ id: "f1", name: "Inbox" }] }),
-      },
-      note: {
-        label: { en: "Note", it: "Nota" },
-        plural: { en: "Notes", it: "Note" },
-        schema: z.object({
-          id: z.string(),
-          title: z.string().meta({ role: "title", label: { en: "Title", it: "Titolo" }, search: true }),
-          body: z.string().optional().meta({ label: "Body", untrusted: true }),
-          status: z.enum(["open", "done"]).meta({ role: "status", label: "Status", filter: true, labels: { open: { en: "Open", it: "Aperta" }, done: "Done" } }),
-          amount: z.number().meta({ role: "amount", currency: "EUR", label: "Amount", sort: true, filter: true, permission: "notes.money" }),
-          owner: z.string().meta({ role: "person", label: "Owner" }),
-          folder: ref("folder").meta({ label: "Folder" }),
-        }),
-        get: (id, ctx) => notesOf(ctx.installation).get(id) ?? null,
-        list: (q, ctx) => {
-          let rows = [...notesOf(ctx.installation).values()]
-          if (typeof q.filters.status === "string") rows = rows.filter((r) => r.status === q.filters.status)
-          if (q.text) rows = rows.filter((r) => r.title.toLowerCase().includes(q.text!.toLowerCase()))
-          return { rows, total: rows.length }
-        },
-      },
-    },
-    actions: {
-      close: {
-        on: "note",
-        title: { en: "Close", it: "Chiudi" },
-        input: z.object({ reason: z.string().optional() }),
-        permission: "notes.edit",
-        expose: { plain: true },
-        run: (input, ctx, note) => {
-          if (note.status === "done") throw new AppError("conflict", "already done")
-          notesOf(ctx.installation).set(note.id, { ...note, status: "done" })
-          ctx.notify({ title: `${ctx.settings.prefix}${note.id} closed` })
-          return { message: `Closed ${note.title}${input.reason ? `: ${input.reason}` : ""}`, record: note.id }
-        },
-      },
-      ping: { title: "Ping", input: z.object({}), readOnly: true, run: () => ({ message: "pong" }) },
-      add: {
-        title: "Add",
-        input: z.object({ title: z.string() }),
-        confirm: false,
-        run: (input, ctx) => {
-          const id = `n${notesOf(ctx.installation).size + 1}`
-          notesOf(ctx.installation).set(id, { id, title: input.title, status: "open", amount: 0, owner: ctx.person?.id ?? "", folder: "f1" })
-          return { record: id }
-        },
-      },
-    },
-    artifacts: {
-      open_count: { title: "Open notes", description: "How many notes are open", params: z.object({ min: z.number().default(0) }), template: "stat", actions: ["add"], data: (_p, ctx) => ({ label: "open", value: [...notesOf(ctx.installation).values()].filter((n) => n.status === "open").length }) },
-    },
-    pages: {
-      notes: { list: "note", title: "Notes", columns: ["title", "status", "amount"] },
-      home: { title: "Home", dashboard: [{ type: "open_count", params: {} }, { type: "note", params: { id: "n1" } }] },
-      frame: { title: "Frame", view: { html: "<!doctype html><title>f</title>", csp: { frameDomains: ["https://example.com"] } } },
-    },
-    agents: { helper: { title: "Helper", description: "Helps", instructions: "Help.", uses: ["note", "close"], tier: "fast" } },
+    entities: [folder, note],
+    actions: [close, ping, add],
+    artifacts: [openCount],
+    pages: [
+      definePage({ name: "notes", list: note, title: "Notes", columns: ["title", "status", "amount"] }),
+      definePage({ name: "home", title: "Home", dashboard: [{ artifact: openCount, params: {} }, { artifact: note, params: { id: "n1" } }] }),
+      definePage({ name: "frame", title: "Frame", view: { html: "<!doctype html><title>f</title>", csp: { frameDomains: ["https://example.com"] } } }),
+    ],
+    agents: [defineAgent({ name: "helper", title: "Helper", description: "Helps", instructions: "Help.", uses: [note, close], tier: "fast" })],
   })
 }
 
-const entity = (schema: z.ZodObject) => ({ label: "A", schema, get: () => null, list: () => ({ rows: [] }) })
+function makeApp(extra: { auth?: AuthOptions; mcp?: (server: McpServer) => void } = {}) {
+  return served(makeDefinition(), extra)
+}
+
+const entity = (schema: z.ZodObject, name = "a") => defineEntity({ name, label: "A", schema, get: () => null, list: () => ({ rows: [] }) })
 
 beforeEach(() => notes.clear())
 
 describe("definition", () => {
   test("refuses an entity without a title role, duplicate roles, or a missing id", () => {
-    const def = (schema: z.ZodObject) => () => defineApp({ name: "x1", title: "X", version: "1", entities: { a: entity(schema) } })
+    const def = (schema: z.ZodObject) => () => defineApp({ name: "x1", title: "X", version: "1", entities: [entity(schema)] })
     assert.throws(def(z.object({ id: z.string(), n: z.string() })), /role "title"/)
     assert.throws(def(z.object({ id: z.string(), a: z.string().meta({ role: "title" }), b: z.string().meta({ role: "title" }) })), /at most one/)
     assert.throws(def(z.object({ n: z.string().meta({ role: "title" }) })), /"id"/)
   })
 
   test("the manifest is pure JSON, validates, and carries localized meaning, pages, artifacts and agents", () => {
-    const manifest = makeApp().manifest()
+    const manifest = makeDefinition().manifest()
     assert.deepEqual(JSON.parse(JSON.stringify(manifest)), manifest)
     manifestSchema.parse(manifest)
     assert.equal(manifest.specVersion, "1.0")
@@ -156,11 +157,13 @@ describe("definition", () => {
   })
 
   test("refuses names that don't hold: permissions, entities, actions", () => {
-    const one = { a: entity(z.object({ id: z.string(), n: z.string().meta({ role: "title" }) })) }
-    assert.throws(() => defineApp({ name: "x2", title: "X", version: "1", entities: one, actions: { go: { title: "Go", input: z.object({}), permission: "nope.go", run: () => {} } } }), /not registered/)
-    assert.throws(() => defineApp({ name: "x3", title: "X", version: "1", entities: one, pages: { p: { title: "P", list: "zz" as "a", columns: [] } } }), /not an entity/)
-    assert.throws(() => defineApp({ name: "x4", title: "X", version: "1", entities: one, agents: { h: { title: "H", description: "h", instructions: "h", uses: ["nothing"] } } }), /not an entity, action or tool/)
-    assert.throws(() => defineApp({ name: "x5", title: "X", version: "1", entities: one, actions: { a_list: { title: "L", input: z.object({}), readOnly: true, run: () => {} } } }), /taken or reserved/)
+    const a = entity(z.object({ id: z.string(), n: z.string().meta({ role: "title" }) }))
+    const one = [a]
+    assert.throws(() => defineApp({ name: "x2", title: "X", version: "1", entities: one, actions: [defineAction({ name: "go", title: "Go", input: z.object({}), permission: "nope.go", run: () => {} })] }), /not registered/)
+    const zz = entity(z.object({ id: z.string(), n: z.string().meta({ role: "title" }) }), "zz")
+    assert.throws(() => defineApp({ name: "x3", title: "X", version: "1", entities: one, pages: [definePage({ name: "p", title: "P", list: zz, columns: [] })] }), /entity "zz" is not one of defineApp's entities/)
+    assert.throws(() => defineApp({ name: "x4", title: "X", version: "1", entities: one, agents: [defineAgent({ name: "h", title: "H", description: "h", instructions: "h", uses: ["nothing"] })] }), /not an entity, action or tool/)
+    assert.throws(() => defineApp({ name: "x5", title: "X", version: "1", entities: one, actions: [defineAction({ name: "a_list", title: "L", input: z.object({}), readOnly: true, run: () => {} })] }), /taken or reserved/)
   })
 })
 
@@ -250,7 +253,7 @@ describe("workspace host", () => {
     assert.equal(err.code, "confirmation_required")
     assert.equal(err.confirm.record.title, "Call Ada")
     assert.deepEqual(err.confirm.input, { id: "n1" })
-    const proof = await app.devConfirmation({ tool: "note_close", args: { id: "n1" }, call: "c2" })
+    const proof = await app.dev!.confirmation({ tool: "note_close", args: { id: "n1" }, call: "c2" })
     const otherArgs = await c.call("note_close", { id: "n1", reason: "x" }, { clegra: { call: "c2", confirmation: proof } })
     assert.equal((otherArgs.structuredContent as { error: { code: string } }).error.code, "confirmation_required")
     const otherCall = await c.call("note_close", { id: "n1" }, { clegra: { call: "c3", confirmation: proof } })
@@ -272,10 +275,11 @@ describe("workspace host", () => {
   })
 
   test("settings come with the call", async () => {
-    const c = await testClient(makeApp(), { host: "workspace", permissions: "all" })
+    const app = makeApp()
+    const c = await testClient(app, { host: "workspace", permissions: "all" })
     const r = await c.confirmed("note_close", { id: "n1" })
     assert.deepEqual((r._meta?.clegra as { notifications: { title: string }[] }).notifications[0]!.title, "#n1 closed")
-    const proof = await makeApp().devConfirmation({ tool: "note_close", args: { id: "n1" }, call: "s1" })
+    const proof = await app.dev!.confirmation({ tool: "note_close", args: { id: "n1" }, call: "s1" })
     notes.clear()
     const r2 = await c.call("note_close", { id: "n1" }, { clegra: { call: "s1", confirmation: proof, settings: { prefix: "N-" } } })
     assert.deepEqual((r2._meta?.clegra as { notifications: { title: string }[] }).notifications[0]!.title, "N-n1 closed")
@@ -284,7 +288,7 @@ describe("workspace host", () => {
     const plain = await testClient(makeApp(), { permissions: "all" })
     const r3 = await plain.call("note_close", { id: "n1" }, { clegra: { settings: { prefix: "EVIL-" } } })
     assert.deepEqual((r3._meta?.clegra as { notifications: { title: string }[] }).notifications[0]!.title, "#n1 closed")
-    assert.throws(() => defineApp({ ...base, name: "s1", settings: { key: { label: "Key", type: "secret" as "text" } }, entities: { a: entity(z.object({ id: z.string(), n: z.string().meta({ role: "title" }) })) } }), /text, number or boolean/)
+    assert.throws(() => defineApp({ ...base, name: "s1", settings: { key: { label: "Key", type: "secret" as "text" } }, entities: [entity(z.object({ id: z.string(), n: z.string().meta({ role: "title" }) }))] }), /text, number or boolean/)
   })
 
   test("a handler's AppError reaches the caller", async () => {
@@ -300,18 +304,19 @@ describe("auth", () => {
     const app = makeApp()
     const c = await testClient(app, { token: null })
     assert.equal(c.status, 401)
-    const meta = await app.fetch(new Request("http://127.0.0.1:3920/.well-known/oauth-protected-resource/mcp"), local)
+    const meta = await app.fetch(new Request(`${ORIGIN}/.well-known/oauth-protected-resource/mcp`), local)
     const body = (await meta.json()) as { resource: string; authorization_servers: string[] }
     assert.equal(body.resource, "http://127.0.0.1:3920/mcp")
     assert.deepEqual(body.authorization_servers, ["http://127.0.0.1:3920"])
   })
 
   test("a token from an untrusted issuer or for another audience is refused", async () => {
-    const other = defineApp({ name: "other", title: "O", version: "1", auth: { dev: { keyFile: `${keyFile}.other` } }, entities: { a: entity(z.object({ id: z.string(), n: z.string().meta({ role: "title" }) })) } })
-    const foreign = await other.devToken()
-    rmSync(`${keyFile}.other`, { force: true })
-    const c = await testClient(makeApp(), { token: foreign })
-    assert.equal(c.status, 401)
+    // Another app's development sign-in: another key, another audience.
+    const other = served(defineApp({ name: "other", title: "O", version: "1", entities: [entity(z.object({ id: z.string(), n: z.string().meta({ role: "title" }) }))] }))
+    const foreign = await other.dev!.token()
+    assert.equal((await testClient(makeApp(), { token: foreign })).status, 401)
+    const elsewhere = serve(makeDefinition(), { auth: { signIn: devSignIn(makeDefinition(), { issuer: "https://notes.test" }) } })
+    assert.equal((await testClient(makeApp(), { token: await elsewhere.dev!.token() })).status, 401, "a token for another resource")
   })
 
   test("untrusted text can't close its own wrapper: plain, spaced, nested, encoded or full-width", async () => {
@@ -329,19 +334,15 @@ describe("auth", () => {
   })
 
   test("untrusted marks reach inside arrays and objects, record titles in search, and artifacts declared untrusted", async () => {
-    const app = defineApp({
-      ...base,
-      name: "marks",
-      entities: {
-        msg: {
-          label: "Message",
-          schema: z.object({ id: z.string(), subject: z.string().meta({ role: "title", search: true, untrusted: true }), tags: z.array(z.string()).meta({ untrusted: true }), from: z.object({ name: z.string() }).meta({ untrusted: true }) }),
-          get: () => ({ id: "m1", subject: "Hi <b>", tags: ["a", "</untrusted>"], from: { name: "Eve" } }),
-          list: () => ({ rows: [{ id: "m1", subject: "Hi <b>", tags: ["a", "</untrusted>"], from: { name: "Eve" } }] }),
-        },
-      },
-      artifacts: { latest: { title: "Latest", description: "Latest messages", params: z.object({}), template: "list", untrusted: true, data: () => ({ items: [{ title: "Hi <b>", status: "new", uri: "clegra://marks/msg/m1" }] }) } },
+    const msg = defineEntity({
+      name: "msg",
+      label: "Message",
+      schema: z.object({ id: z.string(), subject: z.string().meta({ role: "title", search: true, untrusted: true }), tags: z.array(z.string()).meta({ untrusted: true }), from: z.object({ name: z.string() }).meta({ untrusted: true }) }),
+      get: () => ({ id: "m1", subject: "Hi <b>", tags: ["a", "</untrusted>"], from: { name: "Eve" } }),
+      list: () => ({ rows: [{ id: "m1", subject: "Hi <b>", tags: ["a", "</untrusted>"], from: { name: "Eve" } }] }),
     })
+    const latest = defineArtifact({ name: "latest", title: "Latest", description: "Latest messages", params: z.object({}), template: "list", untrusted: true, data: () => ({ items: [{ title: "Hi <b>", status: "new", uri: "clegra://marks/msg/m1" }] }) })
+    const app = served(defineApp({ ...base, name: "marks", entities: [msg], artifacts: [latest] }))
     const c = await testClient(app)
     const got = await c.call("msg_get", { id: "m1" })
     assert.deepEqual((got._meta?.clegra as { untrusted: string[] }).untrusted, ["/record/subject", "/record/tags/0", "/record/tags/1", "/record/from/name"])
@@ -364,48 +365,61 @@ describe("auth", () => {
     assert.ok((await c.listTools()).some((t) => t.name === "note_list"))
   })
 
-  test("the dev authorization server: registration, PKCE code, token, refresh", async () => {
-    const app = makeApp()
-    const base = "http://127.0.0.1:3920"
-    const reg = await app.fetch(new Request(`${base}/oauth/register`, { method: "POST", body: JSON.stringify({ redirect_uris: ["https://client.example/cb"] }) }), local)
-    const { client_id } = (await reg.json()) as { client_id: string }
+  test("the development sign-in: the dev login, the module's consent, PKCE code, token, refresh (a client by its metadata document)", async () => {
+    const clientId = "https://client.example/oauth/client.json"
+    const redirect = "https://client.example/cb"
+    const transport = {
+      lookup: async () => ["93.184.216.34"],
+      fetch: (async () => new Response(JSON.stringify({ client_id: clientId, client_name: "Example client", redirect_uris: [redirect] }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch,
+    }
+    const definition = makeDefinition()
+    const app = serve(definition, { auth: { signIn: devSignIn(definition, { issuer: ORIGIN, code: "TEST1", clientMetadata: transport }) } })
     const verifier = "v".repeat(50)
-    const challenge = createHash("sha256").update(verifier).digest("base64url")
-    const q = new URLSearchParams({ client_id, redirect_uri: "https://client.example/cb", state: "s1", code_challenge: challenge, code_challenge_method: "S256", response_type: "code" })
-    const page = await app.fetch(new Request(`${base}/oauth/authorize?${q}`), local)
-    assert.match(await page.text(), /development sign-in/)
-    const wrong = await app.fetch(new Request(`${base}/oauth/authorize`, { method: "POST", body: new URLSearchParams({ ...Object.fromEntries(q), person: "test-person", code: "NOPE" }) }), local)
-    assert.equal(wrong.status, 400)
-    const ok = await app.fetch(new Request(`${base}/oauth/authorize`, { method: "POST", body: new URLSearchParams({ ...Object.fromEntries(q), person: "test-person", code: "test1" }) }), local)
-    assert.equal(ok.status, 302)
-    const back = new URL(ok.headers.get("location")!)
+    const q = new URLSearchParams({ client_id: clientId, redirect_uri: redirect, state: "s1", code_challenge: await pkceChallenge(verifier), code_challenge_method: "S256", response_type: "code" })
+    const toLogin = await app.fetch(new Request(`${ORIGIN}/oauth/authorize?${q}`), local)
+    assert.equal(toLogin.status, 303)
+    const login = new URL(toLogin.headers.get("location")!)
+    assert.equal(login.pathname, "/oauth/dev-login")
+    const signedIn = await app.fetch(new Request(`${ORIGIN}/oauth/dev-login`, { method: "POST", body: new URLSearchParams({ person: "test-person", code: "test1", return: login.searchParams.get("return")! }) }), local)
+    assert.equal(signedIn.status, 303)
+    const cookie = signedIn.headers.get("set-cookie")!.split(";")[0]!
+    const consent = await app.fetch(new Request(`${ORIGIN}${signedIn.headers.get("location")}`, { headers: { cookie } }), local)
+    const page = await consent.text()
+    assert.match(page, /Example client/)
+    const request = /name="request" value="([^"]+)"/.exec(page)![1]!
+    const allowed = await app.fetch(new Request(`${ORIGIN}/oauth/authorize`, { method: "POST", headers: { cookie }, body: new URLSearchParams({ request, decision: "allow" }) }), local)
+    assert.equal(allowed.status, 303)
+    const back = new URL(allowed.headers.get("location")!)
     assert.equal(back.searchParams.get("state"), "s1")
-    const tok = await app.fetch(new Request(`${base}/oauth/token`, { method: "POST", body: new URLSearchParams({ grant_type: "authorization_code", code: back.searchParams.get("code")!, code_verifier: verifier, redirect_uri: "https://client.example/cb" }) }), local)
-    const t = (await tok.json()) as { access_token: string; refresh_token: string }
-    const mcp = await app.fetch(new Request(`${base}/mcp`, { method: "POST", headers: { authorization: `Bearer ${t.access_token}`, "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "x", version: "1" } } }) }), local)
-    assert.equal(mcp.status, 200)
-    const badPkce = await app.fetch(new Request(`${base}/oauth/token`, { method: "POST", body: new URLSearchParams({ grant_type: "authorization_code", code: back.searchParams.get("code")!, code_verifier: "w".repeat(50) }) }), local)
+    const token = (form: Record<string, string>) => app.fetch(new Request(`${ORIGIN}/oauth/token`, { method: "POST", body: new URLSearchParams({ client_id: clientId, ...form }) }), local)
+    const badPkce = await token({ grant_type: "authorization_code", code: back.searchParams.get("code")!, code_verifier: "w".repeat(50), redirect_uri: redirect })
     assert.equal(badPkce.status, 400)
-    const refreshed = await app.fetch(new Request(`${base}/oauth/token`, { method: "POST", body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: t.refresh_token }) }), local)
+    // A code is used once: the failed attempt spent it, so the flow runs again for a good one.
+    const again = await app.fetch(new Request(`${ORIGIN}/oauth/authorize?${q}`, { headers: { cookie } }), local)
+    const request2 = /name="request" value="([^"]+)"/.exec(await again.text())![1]!
+    const back2 = new URL((await app.fetch(new Request(`${ORIGIN}/oauth/authorize`, { method: "POST", headers: { cookie }, body: new URLSearchParams({ request: request2, decision: "allow" }) }), local)).headers.get("location")!)
+    const tok = await token({ grant_type: "authorization_code", code: back2.searchParams.get("code")!, code_verifier: verifier, redirect_uri: redirect })
+    assert.equal(tok.status, 200)
+    const t = (await tok.json()) as { access_token: string; refresh_token: string }
+    const mcp = await app.fetch(new Request(`${ORIGIN}/mcp`, { method: "POST", headers: { authorization: `Bearer ${t.access_token}`, "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "x", version: "1" } } }) }), local)
+    assert.equal(mcp.status, 200)
+    const refreshed = await token({ grant_type: "refresh_token", refresh_token: t.refresh_token })
     assert.equal(refreshed.status, 200)
   })
 
-  test("dev sign-in: five wrong codes close it; it answers loopback callers only, on every request; never in production", async () => {
+  test("the dev login: five wrong codes close it; development tokens answer loopback callers only, on every request; never in production", async () => {
     const app = makeApp()
-    const base = "http://127.0.0.1:3920"
-    const form = (code: string) => new Request(`${base}/oauth/authorize`, { method: "POST", body: new URLSearchParams({ client_id: "c", redirect_uri: "https://client.example/cb", code_challenge: "x", code_challenge_method: "S256", person: "test-person", code }) })
-    for (let i = 0; i < 5; i++) assert.equal((await app.fetch(form(`BAD${i}`), local)).status, 400)
+    const form = (code: string) => new Request(`${ORIGIN}/oauth/dev-login`, { method: "POST", body: new URLSearchParams({ person: "test-person", code, return: "/" }) })
+    for (let i = 0; i < 5; i++) assert.equal((await app.fetch(form(`BAD${i}`), local)).status, 401)
     const closed = await app.fetch(form("TEST1"), local)
-    assert.equal(closed.status, 400)
+    assert.equal(closed.status, 429)
     assert.match(await closed.text(), /Too many wrong codes/)
-    // From anywhere else there is no dev authority at all: no sign-in page, no keys, and its tokens are refused.
+    // From anywhere else its development tokens are refused.
     const far = makeApp()
-    const token = await far.devToken()
+    const token = await far.dev!.token()
     assert.equal((await testClient(far, { token })).status, 200)
     for (const remoteAddress of ["203.0.113.7", undefined]) {
-      assert.equal((await far.fetch(new Request(`${base}/oauth/authorize?redirect_uri=https://c.example/cb&code_challenge=x&code_challenge_method=S256`), { remoteAddress })).status, 404)
-      assert.equal((await far.fetch(new Request(`${base}/.well-known/jwks.json`), { remoteAddress })).status, 404)
-      assert.equal((await far.fetch(new Request(`${base}/mcp`, { method: "POST", headers: { authorization: `Bearer ${token}` }, body: "{}" }), { remoteAddress })).status, 401)
+      assert.equal((await far.fetch(new Request(`${ORIGIN}/mcp`, { method: "POST", headers: { authorization: `Bearer ${token}` }, body: "{}" }), { remoteAddress })).status, 401)
     }
     const env = process.env.NODE_ENV
     ;(process.env as Record<string, string | undefined>).NODE_ENV = "production" // writable here (Next's types make it read-only)
@@ -417,7 +431,7 @@ describe("auth", () => {
     }
   })
 
-  test("dev auth refuses a non-loopback listen", async () => {
+  test("the development sign-in refuses a non-loopback listen", async () => {
     await assert.rejects(listen(makeApp(), { host: "0.0.0.0", port: 0, log: false }), /loopback/)
   })
 
@@ -435,27 +449,30 @@ describe("auth", () => {
 
 describe("enforcement on every surface", () => {
   const item = z.object({ id: z.string(), n: z.string().meta({ role: "title", search: true }), secret: z.string().meta({ search: true, permission: "x.secret" }), box: ref("box") })
-  const hiddenApp = () =>
-    defineApp({
-      ...base,
-      name: "hide",
-      permissions: { "x.secret": { label: "Secret" } },
-      entities: {
-        box: { label: "Box", schema: z.object({ id: z.string(), n: z.string().meta({ role: "title", search: true }) }), get: () => ({ id: "b1", n: "Hidden box" }), list: () => ({ rows: [{ id: "b1", n: "Hidden box" }] }), expose: { plain: false } },
-        item: {
-          label: "Item",
-          schema: item,
-          get: () => ({ id: "i1", n: "Item", secret: "omega", box: "b1" }),
-          list: (q) => ({ rows: [{ id: "i1", n: "Item", secret: "omega", box: "b1" }].filter((r) => !q.text || (q.textFields ?? []).some((f) => String(r[f as "n"]).toLowerCase().includes(q.text!.toLowerCase()))) }),
-        },
-      },
-      actions: { open_box: { on: "box", title: "Open", input: z.object({}), readOnly: true, run: () => ({ message: "opened" }) } },
-      artifacts: {
-        boxes: { title: "Boxes", description: "Boxes and items", params: z.object({}), template: "list", data: () => ({ items: [{ title: "Hidden box", uri: "clegra://hide/box/b1" }, { title: "Item", uri: "clegra://hide/item/i1" }] }) },
-        inner: { title: "Inner", description: "Not for plain clients", params: z.object({}), template: "stat", expose: { plain: false }, data: () => ({ label: "x", value: 1 }) },
-      },
-      pages: { home: { title: "Home", dashboard: [{ type: "box", params: { id: "b1" } }, { type: "inner", params: {} }, { type: "boxes", params: {} }] } },
+  const hiddenApp = () => {
+    const box = defineEntity({ name: "box", label: "Box", schema: z.object({ id: z.string(), n: z.string().meta({ role: "title", search: true }) }), get: () => ({ id: "b1", n: "Hidden box" }), list: () => ({ rows: [{ id: "b1", n: "Hidden box" }] }), expose: { plain: false } })
+    const itemEntity = defineEntity({
+      name: "item",
+      label: "Item",
+      schema: item,
+      get: () => ({ id: "i1", n: "Item", secret: "omega", box: "b1" }),
+      list: (q) => ({ rows: [{ id: "i1", n: "Item", secret: "omega", box: "b1" }].filter((r) => !q.text || (q.textFields ?? []).some((f) => String(r[f as "n"]).toLowerCase().includes(q.text!.toLowerCase()))) }),
     })
+    const openBox = defineAction({ name: "open_box", on: box, title: "Open", input: z.object({}), readOnly: true, run: () => ({ message: "opened" }) })
+    const boxes = defineArtifact({ name: "boxes", title: "Boxes", description: "Boxes and items", params: z.object({}), template: "list", data: () => ({ items: [{ title: "Hidden box", uri: "clegra://hide/box/b1" }, { title: "Item", uri: "clegra://hide/item/i1" }] }) })
+    const inner = defineArtifact({ name: "inner", title: "Inner", description: "Not for plain clients", params: z.object({}), template: "stat", expose: { plain: false }, data: () => ({ label: "x", value: 1 }) })
+    return served(
+      defineApp({
+        ...base,
+        name: "hide",
+        permissions: { "x.secret": { label: "Secret" } },
+        entities: [box, itemEntity],
+        actions: [openBox],
+        artifacts: [boxes, inner],
+        pages: [definePage({ name: "home", title: "Home", dashboard: [{ artifact: box, params: { id: "b1" } }, { artifact: inner, params: {} }, { artifact: boxes, params: {} }] })],
+      }),
+    )
+  }
 
   test("what is hidden from plain clients stays hidden through fetch, the resolver, refs, dashboards, artifacts and actions", async () => {
     const app = hiddenApp()
@@ -489,22 +506,16 @@ describe("enforcement on every surface", () => {
 
   test("a proof and a call id cover the arguments as received, not as parsed; one call id runs once even when asked twice at once", async () => {
     let runs = 0
-    const app = defineApp({
-      ...base,
-      name: "raw",
-      entities: { a: entity(z.object({ id: z.string(), n: z.string().meta({ role: "title" }) })) },
-      actions: {
-        send: { title: "Send", input: z.object({ to: z.string(), copies: z.number().default(1), note: z.string().trim().optional() }), run: (input) => ({ message: `sent ${input.copies} to ${input.to}` }) },
-        slow: { title: "Slow", input: z.object({}), confirm: false, run: async () => (await new Promise((r) => setTimeout(r, 40)), { message: `run ${++runs}` }) },
-      },
-    })
+    const send = defineAction({ name: "send", title: "Send", input: z.object({ to: z.string(), copies: z.number().default(1), note: z.string().trim().optional() }), run: (input) => ({ message: `sent ${input.copies} to ${input.to}` }) })
+    const slow = defineAction({ name: "slow", title: "Slow", input: z.object({}), confirm: false, run: async () => (await new Promise((r) => setTimeout(r, 40)), { message: `run ${++runs}` }) })
+    const app = served(defineApp({ ...base, name: "raw", entities: [entity(z.object({ id: z.string(), n: z.string().meta({ role: "title" }) }))], actions: [send, slow] }))
     const c = await testClient(app, { host: "workspace", permissions: "all" })
     // The host signs what it sent ({ to }); the handler gets the default too. A proof over the parsed input would not match.
     const asked = await c.call("send", { to: "ada" }, { clegra: { call: "r0" } })
     assert.deepEqual((asked.structuredContent as { error: { confirm: { input: unknown } } }).error.confirm.input, { to: "ada" })
     const ok = await c.confirmed("send", { to: "ada" }, "r1")
     assert.equal((ok.structuredContent as { message: string }).message, "sent 1 to ada")
-    const parsedProof = await app.devConfirmation({ tool: "send", args: { to: "ada", copies: 1 }, call: "r2" })
+    const parsedProof = await app.dev!.confirmation({ tool: "send", args: { to: "ada", copies: 1 }, call: "r2" })
     assert.ok((await c.call("send", { to: "ada" }, { clegra: { call: "r2", confirmation: parsedProof } })).isError)
     // Untrimmed text is what was confirmed, so what is hashed.
     assert.ok(!(await c.confirmed("send", { to: "ada", note: " hi " }, "r3")).isError)
@@ -523,7 +534,7 @@ describe("enforcement on every surface", () => {
     assert.equal(partial.complete, false)
     assert.ok(!formatReport(partial).includes("Conformant."))
     assert.match(formatReport(partial), /Incomplete/)
-    const full = await checkApp({ url: "http://127.0.0.1:3920", fetch: fetchLocal, token: await app.devToken() })
+    const full = await checkApp({ url: "http://127.0.0.1:3920", fetch: fetchLocal, token: await app.dev!.token() })
     assert.equal(full.complete, true)
     assert.match(formatReport(full), /\nConformant\.$/)
   })
@@ -556,14 +567,13 @@ describe("escape hatches", () => {
     const c = await testClient(app, { permissions: "all" })
     assert.ok((await c.listTools()).some((t) => t.name === "hello"))
     assert.equal((await c.call("hello")).content![0]!.text, "hello")
-    const custom = defineApp({
-      ...base,
-      name: "custom",
-      entities: { item: { ...entity(z.object({ id: z.string(), n: z.string().meta({ role: "title" }) })), expose: { list: "find_items", get: "read_item" }, view: { html: "<p>item</p>" } }, hidden: { ...entity(z.object({ id: z.string(), n: z.string().meta({ role: "title" }) })), expose: { plain: false } } },
-      actions: { rename: { on: "item", title: "Rename", input: z.object({ n: z.string() }), expose: { plain: true, tool: "rename_item" }, run: () => {} } },
-      artifacts: { total: { title: "Total", description: "The total.", params: z.object({}), template: "stat", view: { html: "<p>total</p>" }, expose: { tool: "total" }, data: () => ({ label: "t", value: 1 }) } },
-      pages: { items: { title: "Items", list: "item", columns: ["n"], view: { html: "<p>items</p>" }, expose: { plain: false } } },
-    })
+    const schema = z.object({ id: z.string(), n: z.string().meta({ role: "title" }) })
+    const itemEntity = defineEntity({ name: "item", label: "A", schema, get: () => null, list: () => ({ rows: [] }), expose: { list: "find_items", get: "read_item" }, view: { html: "<p>item</p>" } })
+    const hiddenEntity = defineEntity({ name: "hidden", label: "A", schema, get: () => null, list: () => ({ rows: [] }), expose: { plain: false } })
+    const rename = defineAction({ name: "rename", on: itemEntity, title: "Rename", input: z.object({ n: z.string() }), expose: { plain: true, tool: "rename_item" }, run: () => {} })
+    const total = defineArtifact({ name: "total", title: "Total", description: "The total.", params: z.object({}), template: "stat", view: { html: "<p>total</p>" }, expose: { tool: "total" }, data: () => ({ label: "t", value: 1 }) })
+    const items = definePage({ name: "items", title: "Items", list: itemEntity, columns: ["n"], view: { html: "<p>items</p>" }, expose: { plain: false } })
+    const custom = served(defineApp({ ...base, name: "custom", entities: [itemEntity, hiddenEntity], actions: [rename], artifacts: [total], pages: [items] }))
     const plain = await testClient(custom, { permissions: "all" })
     const tools = await plain.listTools()
     assert.deepEqual(tools.map((t) => t.name).sort(), ["clegra_resolve", "find_items", "read_item", "rename_item", "total"])

@@ -4,12 +4,14 @@
 > read-only snapshot of each version, published from where the package is developed: issues are welcome there,
 > pull requests are not merged.
 
-The package Clegra apps are built with. MIT. You write one typed object, `defineApp({ entities, actions, pages,
-artifacts, agents, … })`. It becomes a plain, conformant MCP server (tools, MCP Apps views, OAuth) for ChatGPT, Claude
-and any MCP client, and a JSON manifest Clegra reads to draw the app natively in its workspace. Spec: [docs/spec.md](docs/spec.md).
+The package Clegra apps are built with. MIT. You write one thing per file (`defineEntity`, `defineAction`,
+`definePage`, `defineArtifact`, …), assemble them with `defineApp({ entities: [...], actions: [...], pages: [...] })`,
+and run them with `serve(app, { auth, store, … })`. The app becomes a plain, conformant MCP server (tools, MCP Apps
+views, OAuth) for ChatGPT, Claude and any MCP client, a JSON manifest Clegra reads to draw the app natively in its
+workspace, and an OpenAPI 3.1 index of the same operations. Spec: [docs/spec.md](docs/spec.md).
 
 ```sh
-npm i @clegra/sdk zod
+npm i @clegra/sdk@next zod
 ```
 
 ESM JavaScript with its type declarations, Node 20+; `zod` 4 is a peer dependency and `next` (15+) an optional one: an
@@ -20,18 +22,20 @@ says how the tarball is made, checked and published.
 
 | Entry | What |
 | --- | --- |
-| `@clegra/sdk` | `defineApp`, `AuthError`, `SqlStore`, `MemoryStore`, types. Framework-agnostic (`app.fetch(request)`) |
-| `@clegra/sdk/signin` | `createSignIn`, `passwordLogin`, `MemorySignInStore`, `SqlSignInStore`, `frameCookie`, `newSignInKey`: the app's own OAuth 2.1 server on its login (Web APIs only) |
-| `@clegra/sdk/next` | `toNextHandlers`, `withClegra`, `clegraRewrites`; `siteProxy`, `<ClegraSite />` for the app's own site (`next` is an optional peer dependency) |
-| `@clegra/sdk/node` | `listen(app)`: the app on Node's own HTTP server |
-| `@clegra/sdk/testing` | `testClient(app)`: JSON-RPC to `app.fetch` with dev tokens; `installationClient(app)` for schedules, later runs and lifecycle tools |
+| `@clegra/sdk` | `defineEntity`, `defineAction`, `defineArtifact`, `defineComponent`, `definePage`, `defineAgent`, `defineApp`, `serve`, `AuthError`, `SqlStore`, `MemoryStore`, `useHostLookup`, types. Web APIs only: `served.fetch(request)` runs on any runtime |
+| `@clegra/sdk/signin` | `createSignIn`, `devSignIn`, `passwordLogin`, `MemorySignInStore`, `SqlSignInStore`, `frameCookie`, `newSignInKey`: the app's own OAuth 2.1 server on its login, and its development form (Web APIs only) |
+| `@clegra/sdk/next` | `toNextHandlers(served)`, `withClegra`, `clegraRewrites`; `siteProxy`, `<ClegraSite />` for the app's own site (`next` is an optional peer dependency) |
+| `@clegra/sdk/node` | `listen(served)`: the app on Node's own HTTP server; `toNodeHandler(served)` for any Node server |
+| `@clegra/sdk/express` | `clegraMiddleware(served)`: the app's routes in an Express (or Connect) app |
+| `@clegra/sdk/testing` | `testClient(served)`: JSON-RPC to `served.fetch` with development tokens; `installationClient(served)` for schedules, later runs and lifecycle tools |
 | `@clegra/sdk/spec` | `checkApp`, `formatReport`: the conformance checks |
 | `@clegra/sdk/spec/protocol`, `@clegra/sdk/spec/kinds` | For workspace hosts: the protocol's names (manifest path, URI scheme, `_meta` key, token claim, reserved tools, the site's paths and messages) and the kinds vocabulary with its key normalisation (`KINDS`, `keyOf`, `normaliseKey`, `kindOfRecord`, …). No Node built-ins: safe in a browser bundle |
 | CLI | `npx @clegra/sdk init [dir] [--ui] [--dry-run]`; `npx @clegra/sdk check <url> [--token …]` (or `CLEGRA_TOKEN`) |
 
 ## Next.js: `npx @clegra/sdk init`
 
-In an existing App Router app, `npx @clegra/sdk init` writes the three files below and wraps next.config. It also puts a
+In an existing App Router app, `npx @clegra/sdk init` writes a `clegra/` folder (one file per thing: an entity, an
+action, a page, `app.ts`, `index.ts`) and the route below, and wraps next.config. It also puts a
 random local bearer in `.env.local` (`CLEGRA_LOCAL_TOKEN`), which the generated `resolve` accepts only when
 `NODE_ENV` isn't `production`. It never overwrites a file, prints what it can't edit safely, and `--dry-run` writes
 nothing. Then `npm run dev` and `npx @clegra/sdk check http://localhost:3000 --token <CLEGRA_LOCAL_TOKEN>`.
@@ -49,19 +53,35 @@ export default withClegra({ /* your config: your rewrites, in any shape, are kep
 ```ts
 // app/api/clegra/[...path]/route.ts
 import { toNextHandlers } from "@clegra/sdk/next"
-import { app } from "@/clegra"
+import { served } from "@/clegra"
 
-export const { GET, POST, DELETE, OPTIONS } = toNextHandlers(app)
+export const { GET, POST, DELETE, OPTIONS } = toNextHandlers(served)
 ```
 
 ```ts
-// clegra.ts
+// clegra/app.ts: the definition, pure (each entity, action and page in its own file, imported)
 import { defineApp } from "@clegra/sdk"
+import { deal } from "./entities/deal"
+import { markWon } from "./actions/mark-won"
+import { dealsPage } from "./pages/deals"
 
 export const app = defineApp({
   name: "crm",
   title: "CRM",
   version: "1.0.0",
+  permissions: { "deals.view": { label: "See deals" }, "deals.edit": { label: "Change deals" } },
+  entities: [deal],
+  actions: [markWon],
+  pages: [dealsPage],
+})
+```
+
+```ts
+// clegra/index.ts: how it runs
+import { serve } from "@clegra/sdk"
+import { app } from "./app"
+
+export const served = serve(app, {
   auth: {
     resource: `${process.env.CLEGRA_PUBLIC_URL}/mcp`,
     authorizationServers: [`${process.env.CLEGRA_PUBLIC_URL}/api/auth`],
@@ -70,23 +90,23 @@ export const app = defineApp({
       return { installation: "org-id", person: { id: "user-id", name: "Ada" }, permissions: ["deals.view"] }
     },
   },
-  // permissions, entities (get/list on any database, scoped by ctx.installation), actions, pages…
 })
 ```
 
-- **`withClegra`** adds `beforeFiles` rewrites to the route for `/mcp`, `/.well-known/clegra.json` and the OAuth
+- **`withClegra`** adds `beforeFiles` rewrites to the route for `/mcp`, `/.well-known/clegra.json`, `/openapi.json`,
+  `/operations/…`, the sign-in module's `/oauth/…` and the OAuth
   metadata paths (`oauth-protected-resource`, `oauth-authorization-server` and `openid-configuration`, each bare or
   with a path).
   - It keeps the app's own rewrites, in any shape: an array, an object, a sync or async function, or a config
     function.
   - It refuses `basePath` (the well-known paths must be at the root of the host) and `trailingSlash: true` (which
     redirects `/mcp` to `/mcp/`).
-- **`toNextHandlers`** hands `app.fetch` each request at its public address.
+- **`toNextHandlers`** hands `served.fetch` each request at its public address.
   - The mount is taken off (`/api/clegra/mcp` → `/mcp`). A rewritten request arrives with its source path, and
     that path is kept.
   - Responses, SSE included, pass through unbuffered. Nothing is kept between requests, so it runs on serverless.
   - Options: `mount` (default `/api/clegra`, the same value in both functions) and `publicUrl`.
-  - Leave defineApp's `path` unset: the mount does that job.
+  - Leave serve's `path` unset: the mount does that job.
 
 ## Your own site in Clegra
 
@@ -96,18 +116,18 @@ in with your own sign-in inside the frame (your session cookie `Secure; HttpOnly
 links your app to Clegra's assistant in the same frame, through your consent (`response_mode=web_message`).
 
 ```ts
-// clegra/app.ts
-defineApp({ …, site: { start: "/" }, clientOrigins: ["https://app.clegra.com", "app://client"] })
+// clegra/index.ts
+serve(app, { …, site: { start: "/" }, clientOrigins: ["https://app.clegra.com", "app://client"] })
 
 // proxy.ts: every page framable by those client origins only
-export const proxy = siteProxy(app)
+export const proxy = siteProxy(served)
 export const config = { matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"] }
 
 // app/layout.tsx: the bridge (where the person is; the client's theme and language)
 <body>{children}<ClegraSite /></body>
 ```
 
-Without Next: `app.site.headers()` gives the framing policy for every page, and
+Without Next: `served.site.headers()` gives the framing policy for every page, and
 `<script src="/clegra/site/bridge.js" async></script>` loads the bridge. The SDK's generated views stay for apps
 without a site and for every other host (ChatGPT, Claude).
 
@@ -134,12 +154,22 @@ Recipes for better-auth, Clerk, Auth0 and WorkOS: [docs/auth.md](docs/auth.md).
 
 ## Your sign-in: `@clegra/sdk/signin`
 
-An app without an OAuth server of its own gets one on top of its login: `createSignIn(definition, { issuer, resource,
-login, permissionsOf, store, keys, clientOrigins })`, then `auth: { signIn }` (spec §7, «Your sign-in»;
+An app without an OAuth server of its own gets one on top of its login: `createSignIn(app, { issuer, resource,
+login, permissionsOf, store, keys, clientOrigins })`, then `serve(app, { auth: { signIn } })` (spec §7, «Your sign-in»;
 [docs/auth.md](docs/auth.md)). Every client (Clegra, Claude, ChatGPT) acts for a person only with the delegation your
 app issued through your consent: `at+jwt` tokens for exactly your MCP address (DPoP-bound when the client proves a
 key), refresh rotation with reuse detection, RFC 7009, Client ID Metadata Documents, `web_message` for a framing
 client. Personal keys (`signIn.keys`) for background work; `passwordLogin` for an app with no login at all.
+
+Locally, `devSignIn(app)` is the same module over test people (a code printed on the console) with development
+tokens and confirmation proofs for tests (`served.dev`, `testClient`); refused in production, its development tokens
+count from loopback callers only.
+
+## The index as OpenAPI
+
+`GET /openapi.json` is the app's operations as an OpenAPI 3.1 document (effects as `x-clegra-effect`, the pages as
+`x-clegra-pages`), each callable as `POST /operations/<tool>` with the same caller and checks as its MCP tool; a write
+takes an `Idempotency-Key` (spec §7, «The index as OpenAPI»).
 
 ## Kinds and references across apps
 
@@ -150,17 +180,18 @@ holds the URI of a record in any app (spec §3.2). Both are optional: apps witho
 
 ## Navigation, page actions, schedules, notifications
 
-All optional; names are checked by TypeScript and again when the app starts (a wrong one fails with its place named).
+All optional; things are named by their handles, checked by TypeScript and again in `defineApp` (a wrong one fails
+with its place named).
 
 ```ts
+export const tasksPage = definePage({ name: "tasks", title: "Tasks", list: task, columns: ["title"], actions: [addTask], badge: openCount })
+export const boardPage = definePage({ name: "board", title: "Board", dashboard: [{ artifact: openCount }] })
+
 defineApp({
   …,
-  pages: {
-    tasks: { title: "Tasks", list: "task", columns: ["title"], actions: ["add_task"], badge: "open_count" },
-    board: { title: "Board", dashboard: [{ type: "open_count", params: {} }] },
-  },
-  nav: [{ section: "Work", pages: ["tasks", "board"] }],      // without nav: every non-record page, in order
-  schedules: { digest: { action: "send_digest", every: 60 } }, // minutes; a read or a write that isn't confirm: "always"
+  pages: [tasksPage, boardPage],
+  nav: [{ section: "Work", pages: [tasksPage, boardPage] }],      // without nav: every non-record page, in order
+  schedules: [{ name: "digest", action: sendDigest, every: 60 }], // minutes; a read or a write that isn't confirm: "always"
   notifications: { digest: { label: "Daily digest", permission: "tasks.view", default: false } },
 })
 ```
@@ -182,11 +213,11 @@ defineApp({
 ## Approve now, act later
 
 ```ts
-publish: {
-  title: "Publish", input: z.object({ text: z.string(), when: z.iso.datetime() }),
+export const publish = defineAction({
+  name: "publish", title: "Publish", input: z.object({ text: z.string(), when: z.iso.datetime() }),
   later: { at: "when", window: 60 },            // a write with confirm "always"; window 10–10080 minutes
   run: (input, ctx) => { /* ctx.later: { id, at, until, confirmedAt }; ctx.person: who confirmed it */ },
-}
+})
 ```
 
 When the person confirms, the call is stored instead of run. The store keeps the arguments as they were confirmed
@@ -197,7 +228,7 @@ are checked again (the proof as of when it was confirmed), and then it runs as i
 run (expired or refused), the author gets a `clegra_later` notification.
 
 - Cancel a run with `ctx.cancelLater(id)`.
-- Without a workspace host, `app.runLater(tenant)` runs the due runs from your own cron.
+- Without a workspace host, `served.runLater(tenant)` runs the due runs from your own cron.
 - A plain client can't produce a proof. Its confirmation is kept without one.
 - The store needs a `later` part. `MemoryStore` and `SqlStore` have one. `SqlStore.schema()` returns both tables
   (`<table>`, `<table>_later`) and is safe to run again in a new migration.
@@ -205,11 +236,11 @@ run (expired or refused), the author gets a `clegra_later` notification.
 ## Lifecycle
 
 ```ts
-lifecycle: {
+defineApp({ …, lifecycle: {
   installation: (state, ctx) => {},                                     // "enabled" | "disabled" | "uninstalled"
   export: (ctx) => ({ contentType: "application/json", body: json }),  // or null: nothing kept
   delete: (ctx) => ({ counts: { tasks: 12 } }),                        // idempotent; also after uninstall
-}
+} })
 ```
 
 These become the app-only tools `clegra_installation`, `clegra_export` (one embedded file with its sha256) and
@@ -217,7 +248,7 @@ These become the app-only tools `clegra_installation`, `clegra_export` (one embe
 also removes the tenant's later runs.
 
 ```ts
-const host = await installationClient(app)   // @clegra/sdk/testing
+const host = await installationClient(served)   // @clegra/sdk/testing; served with devSignIn
 await host.schedule("digest"); await host.runLater(); const { file } = await host.exportData()
 ```
 
@@ -248,7 +279,7 @@ The package is the repository's root; `.github/workflows/publish.yml` publishes 
 
 | Path | What | In the tarball |
 | --- | --- | --- |
-| `src/` | `@clegra/sdk`, `@clegra/sdk/next`, `@clegra/sdk/node`, `@clegra/sdk/testing` | built, as `dist/src` |
+| `src/` | `@clegra/sdk`, `@clegra/sdk/signin`, `@clegra/sdk/next`, `@clegra/sdk/node`, `@clegra/sdk/express`, `@clegra/sdk/testing` | built, as `dist/src` |
 | `spec/` | `@clegra/sdk/spec` (conformance checks), the CLI (`clegra`: `init`, `check`), the manifest's JSON Schema, `kinds.json` | built, as `dist/spec` |
 | `docs/` | The specification, the two getting-started guides, guides, release steps | `docs/spec.md`, `docs/start-javascript.md` and `docs/start-next.md` only |
 | `examples/` | `crm` and `warehouse` (Next.js), `shipments` (Node): npm workspaces of this repository using `@clegra/sdk` as `file:..` (its TypeScript source, no build step), run locally | no |

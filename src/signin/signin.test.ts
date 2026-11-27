@@ -5,9 +5,9 @@ import { describe, test } from "node:test"
 import { decodeJwt, decodeProtectedHeader, exportJWK, generateKeyPair, SignJWT } from "jose"
 import { z } from "zod"
 
-import { defineApp } from "../index"
+import { defineAction, defineApp, defineEntity, serve } from "../index"
 import { deviceKey, testClient } from "../testing"
-import { createSignIn, frameCookie, MemorySignInStore, newSignInKey, passwordLogin, PERSONAL_KEY_PREFIX } from "./index"
+import { createSignIn, devSignIn, frameCookie, MemorySignInStore, newSignInKey, passwordLogin, PERSONAL_KEY_PREFIX } from "./index"
 
 // THE SIGN-IN MODULE: an app's own login gives any client (Clegra, Claude, ChatGPT) a delegation the app issued,
 // through the app's own consent; tokens at+jwt for exactly the app's MCP address, scopes = the app's permissions,
@@ -28,18 +28,19 @@ function world(options: { clientDocument?: Record<string, unknown> } = {}) {
     fetch: (async (input: RequestInfo | URL) => (String(input) === CLIENT ? new Response(JSON.stringify(document), { headers: { "content-type": "application/json" } }) : new Response("no", { status: 404 }))) as typeof fetch,
     lookup: async () => ["93.184.215.14"],
   }
-  const definition = {
+  const note = defineEntity({ name: "note", label: "Note", permission: "notes.read", schema: z.object({ id: z.string(), text: z.string().meta({ role: "title" }) }), get: () => ({ id: "n1", text: "hello" }), list: () => ({ rows: [{ id: "n1", text: "hello" }] }) })
+  const noteAdd = defineAction({ name: "note_add", title: "Add a note", permission: "notes.write", input: z.object({ text: z.string() }), run: ({ text }) => ({ message: `added ${text}` }) })
+  const definition = defineApp({
     name: "notes",
     title: { en: "Notes", it: "Note" },
     version: "1.0.0",
     permissions: { "notes.read": { label: { en: "Read notes", it: "Leggere le note" }, default: true }, "notes.write": { label: { en: "Write notes", it: "Scrivere le note" } } },
-    entities: { note: { label: "Note", permission: "notes.read", schema: z.object({ id: z.string(), text: z.string().meta({ role: "title" }) }), get: () => ({ id: "n1", text: "hello" }), list: () => ({ rows: [{ id: "n1", text: "hello" }] }) } },
-    actions: { note_add: { title: "Add a note", permission: "notes.write", input: z.object({ text: z.string() }), run: ({ text }: { text: string }) => ({ message: `added ${text}` }) } },
-  }
-  const login = passwordLogin({ store, origin: ORIGIN, title: definition.title, iterations: 1000, frameAncestors: [FRAMER] })
-  const shell = defineApp(definition as never)
-  const signIn = createSignIn(shell, { issuer: ORIGIN, resource: RESOURCE, login, permissionsOf: (a) => login.permissionsOf(a), store, clientOrigins: [FRAMER], clientMetadata: transport })
-  const app = defineApp({ ...definition, auth: { signIn } } as never)
+    entities: [note],
+    actions: [noteAdd],
+  })
+  const login = passwordLogin({ store, origin: ORIGIN, title: { en: "Notes", it: "Note" }, iterations: 1000, frameAncestors: [FRAMER] })
+  const signIn = createSignIn(definition, { issuer: ORIGIN, resource: RESOURCE, login, permissionsOf: (a) => login.permissionsOf(a), store, clientOrigins: [FRAMER], clientMetadata: transport })
+  const app = serve(definition, { auth: { signIn } })
   return { app, signIn, login, store }
 }
 
@@ -266,10 +267,40 @@ describe("sign-in module", () => {
     const was = env.NODE_ENV
     env.NODE_ENV = "production"
     try {
-      assert.throws(() => createSignIn(defineApp({ name: "x1", title: "X", version: "1.0.0", entities: {} } as never), { issuer: "https://x.example", resource: "https://x.example/mcp", login: { session: () => null, signInUrl: () => "/" }, permissionsOf: () => "all", store: new MemorySignInStore() }), /signIn.keys/)
+      assert.throws(() => createSignIn(defineApp({ name: "x1", title: "X", version: "1.0.0", entities: [] }), { issuer: "https://x.example", resource: "https://x.example/mcp", login: { session: () => null, signInUrl: () => "/" }, permissionsOf: () => "all", store: new MemorySignInStore() }), /signIn.keys/)
     } finally {
       env.NODE_ENV = was
     }
+  })
+
+  test("devSignIn: a real client links through the dev login (test people, the console code) and the module's consent", async () => {
+    const transport = {
+      fetch: (async (input: RequestInfo | URL) => (String(input) === CLIENT ? Response.json({ client_id: CLIENT, client_name: "Inspector", redirect_uris: [CALLBACK] }) : new Response("no", { status: 404 }))) as typeof fetch,
+      lookup: async () => ["93.184.215.14"],
+    }
+    const definition = world().app.app
+    const dev = devSignIn(definition, { issuer: ORIGIN, code: "DEV42", people: [{ id: "ada", name: "Ada", permissions: ["notes.read"] }], clientMetadata: transport })
+    const app = serve(definition, { auth: { signIn: dev } })
+    const go = (r: Request) => app.fetch(r, { remoteAddress: "127.0.0.1" })
+    // Not signed in: to the dev login, which asks for the code.
+    const first = await go(new Request(authorizeUrl()))
+    assert.equal(first.status, 303)
+    const login = new URL(first.headers.get("location")!)
+    assert.equal(login.pathname, "/oauth/dev-login")
+    const signed = await go(new Request(at("/oauth/dev-login"), { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ person: "ada", code: "DEV42", return: login.searchParams.get("return")! }) }))
+    assert.equal(signed.status, 303)
+    const cookie = signed.headers.get("set-cookie")!.split(";")[0]!
+    const consent = await go(new Request(at(signed.headers.get("location")!), { headers: { cookie } }))
+    const id = /name="request" value="([^"]+)"/.exec(await consent.text())![1]!
+    const allowed = await go(new Request(at("/oauth/authorize"), { method: "POST", headers: { cookie, origin: ORIGIN, "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ request: id, decision: "allow" }) }))
+    const code = new URL(allowed.headers.get("location")!).searchParams.get("code")!
+    const token = (await (await go(new Request(at("/oauth/token"), { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ grant_type: "authorization_code", code, code_verifier: verifier, client_id: CLIENT, redirect_uri: CALLBACK }) }))).json()) as { access_token: string }
+    // A module token (not a development one): it counts from any address, with the person's permissions.
+    const client = await testClient(app, { token: token.access_token, remoteAddress: "203.0.113.9" })
+    const tools = (await client.listTools()).map((t) => t.name)
+    assert.ok(tools.includes("note_list") && !tools.includes("note_add"), tools.join(", "))
+    // Development tokens never count from another address.
+    assert.equal((await testClient(app, { remoteAddress: "203.0.113.9" })).status, 401)
   })
 
   test("frameCookie: partitioned over https, Lax over http", () => {

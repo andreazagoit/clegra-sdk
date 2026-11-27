@@ -26,7 +26,42 @@ schedules, notification types and lifecycle. The definition has two halves:
 **No MCP extension is required or announced.** An MCP client never needs the
 manifest; the workspace host needs nothing beyond the manifest and MCP. Every
 feature on this page degrades to plain MCP: what ChatGPT, Claude and other
-clients see of each one is in §6.1.
+clients see of each one is in §6.1. The same operations are also an OpenAPI 3.1
+document, callable over plain HTTP (§7, «The index as OpenAPI»).
+
+**Authoring with the SDK** (non-normative for other implementations). The
+definition is written one thing per file and served apart from it:
+
+- `defineEntity`, `defineAction`, `defineArtifact`, `defineComponent`,
+  `definePage` and `defineAgent` each take one thing (with its `name`) and
+  return a **handle**. One thing names another by its imported handle, never by
+  a string: an action `on: deal`, a page `list: deal`, `actions: [markWon]`,
+  `badge: openDeals`, a dashboard item `{ artifact: pipelineTotal }`, an
+  artifact `component: stageFunnel`, an agent `uses: [deal, markWon]`.
+  References between records stay by entity name (`ref("company")`, §3).
+- `defineApp({ name, title, version, permissions, settings, kinds,
+  notifications, entities: [...], actions: [...], components: [...],
+  artifacts: [...], pages: [...], nav, agents: [...], schedules: [...],
+  lifecycle })` assembles the handles (conventionally `clegra/app.ts`). It is
+  pure: it checks everything at once (a handle that is not one of its own, a
+  wrong permission, a column that is not a field fails here), its manifest is
+  computable (`app.manifest()`: MCP at `/mcp`, no authorization server, no
+  site), and nothing is served.
+- `serve(app, { auth, store, people, site, clientOrigins, path, mcp })` is the
+  runtime: who may call (§7), where write results, one-time ids and later runs
+  are kept, the names of people, the app's own site (§5.1) and the clients that
+  frame it, the path of its routes, and the raw-MCP escape hatch. It returns
+  the served app, one `fetch(request)` for every route (MCP, the manifest, the
+  OpenAPI index and its operations, the sign-in module, views, the site's
+  bridge); `served.manifest()` is the one hosts read.
+- The core runs on Web APIs only (Fetch, Web Crypto): Node, Deno, Bun, edge
+  runtimes. Thin adapters mount it: `@clegra/sdk/node` (`listen(served)`,
+  `toNodeHandler(served)`), `@clegra/sdk/express` (`clegraMiddleware(served)`),
+  `@clegra/sdk/next` (`toNextHandlers(served)`, `withClegra`). What the core
+  needs of its runtime beyond Web APIs, the DNS resolver that checks a
+  client's host before its metadata document is fetched (§7), an adapter gives
+  it (`useHostLookup`); without one a host name is refused, never fetched
+  unchecked.
 
 ## 2. The manifest
 
@@ -370,7 +405,8 @@ SDK writes from them (§5.4):
 A `uri` is a record of the app: the item opens it. An item (or a card) whose
 `uri` is a record the caller can't reach is not sent.
 
-**Creatable types.** `create: { action, title }` makes an artifact type one
+**Creatable types.** `create: { action, title }` (the SDK: `creates` on the
+action, `creates: thing` or `creates: { of: thing, title }`) makes an artifact type one
 people create in a workspace host, as a new file in a folder: Clegra lists it in
 «+ Nuovo» of a space and in a document's «/» block menu. `action` names a global
 write (§4) that makes a new, empty one from nothing: no required input (its
@@ -424,7 +460,8 @@ for every other host (ChatGPT, Claude: MCP Apps).
 
 1. **Declared.** The manifest's `site` is `{ start }`, the path the app opens at
    (default `/`; a path on the app's own origin, never under `/clegra/`). The
-   app lists the clients that may frame it (`clientOrigins`: exact origins,
+   app lists the clients that may frame it (`serve(app, { site, clientOrigins
+   })`: exact origins,
    the desktop app's own scheme included, e.g. `app://client`).
 2. **Framed by those clients only.** Every page of the site answers
    `Content-Security-Policy: frame-ancestors 'self' <client origins>`
@@ -603,7 +640,9 @@ A2UI host. An app's own site (§5.1) is not a surface: it stays a frame.
 
    **The record template.** Every record (`record` artifacts: an entity's
    record, `params { id }`) is one surface, written by the SDK from the
-   entity's `record: { fields, actions? }`, declared once: 1–6 key fields of
+   entity's `record: { fields, actions? }` (the SDK: the entity's `record: {
+   fields }` and its record actions marked `featured: true`, in the app's
+   order of actions), declared once: 1–6 key fields of
    the entity (not `id`) and 0–3 of its record actions, in order (the first is
    the primary). Without it the key fields are the first four a list would
    show (fields with a role or a filter, not the title, subtitle or status) and
@@ -767,10 +806,9 @@ order the host's gallery lists them.
   offer.
 
 ```ts
-defineApp({
-  artifacts: { open_jobs: { title: "Open jobs", params: z.object({}), template: "stat", data } },
-  widgets: { open_jobs: { sizes: ["small", "medium"] } },
-})
+export const openJobs = defineArtifact({ name: "open_jobs", title: "Open jobs", description: "Jobs not done yet", params: z.object({}), template: "stat", widget: { sizes: ["small", "medium"] }, data })
+// clegra/app.ts: the widgets are the artifacts with `widget`, in the order of `artifacts`
+defineApp({ …, artifacts: [openJobs] })
 ```
 
 ## 6. The generated MCP server
@@ -924,7 +962,7 @@ with the reason.
   can never equal a Clegra tenant `<company>@<issuer>`.
 - `permissions` come from the app's own roles; ids the manifest does not
   declare are dropped. The caller is a plain host (`host: "plain"`).
-- A token of the sign-in module or of the development authority is never
+- A token of the sign-in module or a development token (`devSignIn`) is never
   handed to `auth.resolve`.
 - The protected-resource metadata names the app's authorization server
   (`auth.authorizationServers`). Paths the authorization server needs outside
@@ -1027,21 +1065,38 @@ wrong> }`, in the caller's locale where the server has it; `message` names
 the fields by their labels. It is a tool error, never a protocol error, so a
 view and a model can both read it.
 
-**Development sign-in** (SDK): off unless enabled, refused in production,
-answered only to callers on a loopback address (checked on every request);
-the sign-in code allows five wrong attempts.
+**Development** (SDK): `devSignIn(app, { issuer?, resource?, people?,
+installation?, code?, clientOrigins? })` of `@clegra/sdk/signin` is the sign-in
+module (below) over a login of test people, served as `auth: { signIn }`:
 
-### Client registration (development sign-in)
+- **The dev login** (`/oauth/dev-login`): a page listing the test people
+  (default one, «Test person», who may do everything) that asks for a one-time
+  code printed when the app starts; five wrong codes close it until the app
+  restarts. Real MCP clients link through the module's own OAuth flow, consent
+  included, as in production. There is no dynamic registration. `issuer`
+  defaults to `http://localhost:3000`, `resource` to `<issuer>/mcp`: the
+  tokens' audience is the sign-in's, never the address a request reached.
+- **Development tokens** (`served.dev.token({ person?, permissions?, host?,
+  installation?, locale? })`): an access token naming any person, permissions,
+  installation and language; its tenant is `<installation>@clegra-dev`. With
+  `host: "workspace"` it stands in for a **development workspace host**: a
+  token per request (60 seconds, a `jti` used once) whose host sends
+  `settings`, confirms writes with a signed proof
+  (`served.dev.confirmation({ tool, args, call, person?, installation?,
+  until? })`, `clegra-confirm+jwt`, below) and, with no person, is the
+  installation-level caller (§10).
+- Refused when `NODE_ENV` is `production`; its development tokens and proofs
+  count only from callers on a loopback address (checked on every request; a
+  framework route that can't know the peer's address, such as a Next.js route
+  handler, never accepts them); its keys live in memory.
 
-The development authorization server knows a client in two ways:
+### Client registration (the sign-in module)
 
-- **A Client ID Metadata Document** (what current MCP clients use, MCP
-  authorization 2025-11-25): the `client_id` is the https URL of a JSON
-  document that describes the client. The server metadata says
-  `client_id_metadata_document_supported: true`.
-- **Dynamic Client Registration** (RFC 7591) at `registration_endpoint`, kept
-  for clients that don't send a metadata document yet. Any client is
-  registered; its redirect addresses are not checked.
+The sign-in module knows a client by its **Client ID Metadata Document** (what
+current MCP clients use, MCP authorization 2025-11-25): the `client_id` is the
+https URL of a JSON document that describes the client. The server metadata
+says `client_id_metadata_document_supported: true`. There is no dynamic
+registration and no client id that is not such a URL.
 
 For a URL `client_id`:
 
@@ -1081,18 +1136,19 @@ For a URL `client_id`:
   seconds. It is kept as `Cache-Control` says (`max-age` between a minute and
   a day, five minutes by default, not at all with `no-store`); a failure is
   kept 30 seconds.
+  The resolver is the runtime's (`useHostLookup`, set by the adapters); on a
+  runtime that gave none a host name is refused.
 - A known limit: the addresses are checked, then the request resolves the
   name again, so DNS rebinding is not excluded. The connection is not pinned
-  to the checked address. This is a development server; a production one
-  should pin it.
+  to the checked address.
 
 ### Production: an app with its own authorization server
 
-The SDK is not an authorization server outside development, and ships none:
-an app uses an existing one (better-auth's MCP plugin, Clerk, WorkOS, Auth0, …)
-and verifies its tokens in `auth.resolve` (recipes, non-normative: [auth.md](auth.md)). For MCP clients
-(ChatGPT, Claude, others) to connect to an app that signs people in itself,
-its authorization server needs:
+An app whose auth library already is an OAuth authorization server
+(better-auth's MCP plugin, Clerk, WorkOS, Auth0, …) uses it instead of the
+sign-in module and verifies its tokens in `auth.resolve` (recipes,
+non-normative: [auth.md](auth.md)). For MCP clients (ChatGPT, Claude, others)
+to connect to it, that authorization server needs:
 
 - OAuth 2.1 authorization code with PKCE `S256`.
 - Metadata (RFC 8414, or OpenID Connect discovery) with
@@ -1116,6 +1172,43 @@ its authorization server needs:
   store of write results and one-time token ids (§7, idempotency) is shared
   (`SqlStore` in the app's Postgres, or another atomic store), never memory.
 - No key files: keys and secrets come from the environment.
+
+### The index as OpenAPI
+
+The app's index, its operations with their effects (and its pages), is also an
+OpenAPI 3.1 document, a view of the same thing for tools that read OpenAPI:
+
+- `GET <path>/openapi.json` (no authentication) answers the document. Its
+  operations are every tool a plain client may call when it holds every
+  permission: entity reads, `search`, `fetch`, page and artifact tools and
+  actions; never the protocol's own `clegra_*` tools. Each is
+  `POST <path>/operations/<tool>`, `operationId` the tool, its request body
+  the tool's input JSON Schema, its 200 the tool's structured content, tagged by
+  its entity (else the app). Extensions: `x-mcp-tool` (the tool),
+  `x-clegra-effect` (`read`, `write`, `irreversible`, as the manifest's
+  `effect`), on an action `x-clegra-confirm` and, on a record action,
+  `x-clegra-entity`; on an entity read `x-clegra-entity` and `x-clegra-read`
+  (`list` or `get`). The document's `x-clegra-pages` lists the pages
+  (`{ name, kind, title, tool }`, no derived record pages) and
+  `x-clegra-manifest` points at `/.well-known/clegra.json`.
+- **Security**: with the sign-in module, an `oauth2` scheme (authorization
+  code, its authorize and token endpoints, the app's permissions as scopes);
+  with `auth.resolve`, an `http` bearer scheme; a public action has
+  `security: []`.
+- **A call**: `POST <path>/operations/<tool>` with the arguments as a JSON
+  object, authenticated exactly as MCP (`Authorization: Bearer` or `DPoP`, a
+  DPoP proof's `htu` being the operation's URL). It runs the same tool with the
+  same caller, permissions, field stripping, idempotency and checks; a tool
+  the caller may not use is `404`. A write's `Idempotency-Key` header (1–128
+  visible ASCII characters) is its call id. The caller is a plain client: a
+  `confirm: "always"` write runs on the caller's own approval, as for a plain
+  MCP client that can't elicit.
+- **Answers**: `200` with the structured result; an error as
+  `{ error: { code, message, … } }` with the status of its code:
+  `invalid_input` 400, `unauthorized` 401, `permission_denied` 403,
+  `not_found` 404, `conflict` 409, `confirmation_required` 428,
+  `rate_limited` 429, `internal` 500. A missing or refused token is answered as
+  on MCP (`401` with `WWW-Authenticate`).
 
 ## 8. Conformance
 

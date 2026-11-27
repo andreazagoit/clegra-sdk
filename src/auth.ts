@@ -1,23 +1,8 @@
-import { createHash, randomBytes, randomUUID } from "node:crypto"
-import { lookup as dnsLookup } from "node:dns/promises"
-import { isIP } from "node:net"
+import { createLocalJWKSet, decodeProtectedHeader, jwtVerify, type JWK, type JWTPayload } from "jose"
 
-import {
-  createLocalJWKSet,
-  decodeJwt,
-  decodeProtectedHeader,
-  exportJWK,
-  generateKeyPair,
-  importJWK,
-  jwtVerify,
-  SignJWT,
-  type CryptoKey,
-  type JWK,
-  type JWTPayload,
-} from "jose"
-
-import { CONFIRMATION_TYPE, OAUTH_SCOPE, PROTOCOL_ID, TOKEN_CLAIM } from "../spec/src/protocol"
-import type { SignIn } from "./signin"
+import { sha256 } from "./crypto"
+import { hostLookup } from "./platform"
+import type { SignIn } from "./signin/module"
 
 /**
  * AUTH (spec §7). An app's callers are its own: nobody signs in to it with someone else's accounts.
@@ -28,18 +13,11 @@ import type { SignIn } from "./signin"
  *   verified by the app, mapped to a caller (tenant, person, permissions);
  * - **the public caller** (`auth.public`): no token, only the actions declared `public`.
  *
- * Dev mode: the SDK is its own authorization server with a local key (DevAuthority below), for callers on a
- * loopback address only. Its tokens carry the `clegra` claim and can stand in for a workspace host (`host:
- * "workspace"`), which confirms writes with a signed proof (`clegra-confirm+jwt`) and calls the installation-level
- * tools (schedules, later runs, lifecycle) with no person: development and tests only.
+ * Development: the sign-in module over test people (`devSignIn` of `@clegra/sdk/signin`), whose development tokens
+ * can stand in for a workspace host that confirms writes with signed proofs and calls the installation-level tools
+ * (schedules, later runs, lifecycle) with no person: for callers on a loopback address only.
  */
 
-export { CONFIRMATION_TYPE }
-export const DEV_ISSUER = `${PROTOCOL_ID}-dev`
-/** The `typ` of an access token (RFC 9068). */
-export const ACCESS_TOKEN_TYPE = "at+jwt"
-/** How long a dev workspace host's access token may live: it is for one request. */
-export const HOST_TOKEN_SECONDS = 60
 export const INSTALLATION = /^[A-Za-z0-9._:-]{1,128}$/
 
 /** The tenant of a caller: the installation as its issuer names it, bound to that issuer. */
@@ -64,15 +42,6 @@ export type Caller = {
   admin?: boolean
   /** A caller with no token (`auth.public`): it reaches only the actions declared `public`. */
   public?: true
-}
-
-/** The `clegra` claim of a dev access token. */
-export type HostClaim = {
-  installation: string
-  person?: Person
-  permissions?: string[]
-  locale?: string
-  host?: "workspace" | "plain"
 }
 
 /**
@@ -131,12 +100,6 @@ export type AuthOptions = {
    */
   authorizationServers?: string[]
   /**
-   * Dev mode: a local signing key, a minimal authorization server for test
-   * people, `app.devToken()`. Off unless set here; refused when NODE_ENV is
-   * `production`; answers callers on a loopback address only.
-   */
-  dev?: boolean | DevOptions
-  /**
    * Public operations (spec §7 «Public operations»): signing in is not mandatory for an app. A call without a token is
    * served as this installation's public caller, which reaches only the actions declared `public: true` (global, no
    * permission; a public write is always confirmed): no record, page or artifact. Allowed in production.
@@ -144,22 +107,6 @@ export type AuthOptions = {
   public?: { installation: string; locale?: string }
   /** Serve calls without a token as this caller (local demos only). Off by default; refused when NODE_ENV is `production`. */
   anonymous?: { installation: string; person?: Person; permissions: string[] | "all"; locale?: string }
-}
-
-export type DevOptions = {
-  /** Test people offered on the sign-in page (default one, «Test person»). */
-  people?: (Person & { permissions?: string[] | "all" })[]
-  /** The installation dev tokens are for (default `dev`). */
-  installation?: string
-  /**
-   * Where the dev key is kept so tokens survive a restart (default `.clegra-dev-key.json` in the working
-   * directory); `false` keeps it in memory only. `CLEGRA_DEV_KEY` (a private JWK as JSON) wins over both.
-   */
-  keyFile?: string | false
-  /** The one-time code the sign-in page asks for (default: random, printed on start). */
-  code?: string
-  /** For tests: how a client's metadata document is fetched and its host resolved (default: the global `fetch` and the system resolver). */
-  clientMetadata?: ClientMetadataTransport
 }
 
 /** How a Client ID Metadata Document is reached: `fetch` gets it, `lookup` gives every address of its host. */
@@ -183,189 +130,20 @@ export function canonicalJson(value: unknown): string {
 }
 
 /** base64url SHA-256 of the arguments' canonical JSON (the proof's `args`). */
-export function argsHash(args: unknown): string {
-  return createHash("sha256").update(canonicalJson(args ?? {})).digest("base64url")
+export function argsHash(args: unknown): Promise<string> {
+  return sha256(canonicalJson(args ?? {}))
 }
-
-// ------------------------------------------------------------ verifying
-
-/** What one request allows: whether dev tokens are accepted (a loopback caller) and the address it came to. */
-export type RequestTrust = { dev: boolean; requestResource: string | null }
-
-/** The dev authority's tokens: verified here (the sign-in module's by it, the app's own by its `resolve`). */
-export class TokenVerifier {
-  readonly #resource: string | null
-  readonly #once: (key: string, ttlMs: number) => Promise<boolean>
-  #dev: DevAuthority | null = null
-
-  constructor(options: AuthOptions, once: (key: string, ttlMs: number) => Promise<boolean>) {
-    this.#once = once
-    this.#resource = options.resource ?? null
-    if (this.#resource) {
-      let url: URL
-      try {
-        url = new URL(this.#resource)
-      } catch {
-        throw new Error(`auth.resource: "${this.#resource}" is not a URL`)
-      }
-      if (!/^https?:$/.test(url.protocol) || url.hash || url.search) throw new Error(`auth.resource: "${this.#resource}" must be an http(s) URL without query or fragment`)
-    }
-  }
-
-  useDev(dev: DevAuthority) {
-    this.#dev = dev
-  }
-
-  /** Whether a token is one this verifier answers for (a JWT whose `iss` is the dev authority's), so it is never handed to `auth.resolve`. */
-  knows(token: string): boolean {
-    let iss: string | undefined
-    try {
-      iss = decodeJwt(token).iss
-    } catch {
-      return false
-    }
-    return Boolean(iss && this.#dev?.issues(iss))
-  }
-
-  /** The keys and the audiences of the dev authority for this request; why not, as an AuthError. */
-  #trustOf(iss: string | undefined, trust: RequestTrust): { keys: CryptoKey; audience: string[]; issuer: string } {
-    if (this.#dev && iss && this.#dev.issues(iss)) {
-      if (!trust.dev) throw new AuthError("dev sign-in answers callers on a loopback address only")
-      // Every name the dev authority answers under is one authority, one tenant space.
-      return { keys: this.#dev.publicKey, audience: [DEV_ISSUER, ...(trust.requestResource ? [trust.requestResource] : [])], issuer: DEV_ISSUER }
-    }
-    throw new AuthError(`untrusted issuer ${iss ?? "(none)"}`)
-  }
-
-  /** The caller an access token names. Throws AuthError with the reason. */
-  async verify(token: string, trust: RequestTrust): Promise<Caller & { claims: JWTPayload }> {
-    let iss: string | undefined
-    try {
-      iss = decodeJwt(token).iss
-    } catch {
-      throw new AuthError("malformed token")
-    }
-    const { keys, audience, issuer } = this.#trustOf(iss, trust)
-    let payload: JWTPayload
-    try {
-      ;({ payload } = await jwtVerify(token, keys as Parameters<typeof jwtVerify>[1], { typ: ACCESS_TOKEN_TYPE, audience, clockTolerance: 30, requiredClaims: ["exp", "sub", "aud"] }))
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "invalid token"
-      throw new AuthError(/"aud"/.test(message) ? `the token is for another server (this one is ${audience.join(" or ")})` : message)
-    }
-    const m = payload[TOKEN_CLAIM] as HostClaim | undefined
-    if (!m || typeof m.installation !== "string" || !INSTALLATION.test(m.installation)) throw new AuthError(`the token has no valid ${TOKEN_CLAIM}.installation`)
-    const host = m.host === "workspace" ? "workspace" : "plain"
-    if (host === "workspace") {
-      // A (dev) workspace host signs a token per request: short, with an id, used once.
-      if (typeof payload.jti !== "string" || !payload.jti || typeof payload.iat !== "number") throw new AuthError("a workspace host's token needs jti and iat")
-      if (payload.exp! - payload.iat > HOST_TOKEN_SECONDS) throw new AuthError(`a workspace host's token lives ${HOST_TOKEN_SECONDS} seconds at most`)
-      const left = Math.max(1, payload.exp! + 30 - Math.floor(Date.now() / 1000))
-      if (!(await this.#once(`jti:${issuer}:${payload.jti}`, left * 1000))) throw new AuthError("this token was already used (a workspace host's token is for one request)")
-    }
-    return {
-      installation: tenantOf(m.installation, issuer),
-      installationId: m.installation,
-      person: m.person && typeof m.person.id === "string" ? { id: m.person.id, name: String(m.person.name ?? "") } : null,
-      permissions: new Set(Array.isArray(m.permissions) ? m.permissions.filter((p) => typeof p === "string") : []),
-      ...(typeof m.locale === "string" ? { locale: m.locale } : {}),
-      host,
-      issuer: iss!,
-      subject: String(payload.sub ?? ""),
-      claims: payload,
-    }
-  }
-
-  /**
-   * Checks a confirmation proof for this caller, installation, tool, arguments (as received), call id and, for a
-   * later run, its deadline (`until`, epoch seconds). `at`: verify it as of that moment (a stored proof, checked
-   * again when its run is due, at its confirmation time). Gives the proof's `iat` when it holds, else why not.
-   */
-  async checkConfirmation(
-    proof: string,
-    expected: { issuer: string; subject: string; installation: string; tool: string; args: unknown; call: string | null; until?: number },
-    trust: RequestTrust,
-    at?: Date,
-  ): Promise<{ ok: true; iat: number } | { ok: false; why: string }> {
-    const no = (why: string) => ({ ok: false as const, why })
-    try {
-      const { keys, audience } = this.#trustOf(expected.issuer, trust)
-      const { payload } = await jwtVerify(proof, keys as Parameters<typeof jwtVerify>[1], { typ: CONFIRMATION_TYPE, issuer: expected.issuer, audience, clockTolerance: 30, ...(at ? { currentDate: at } : {}) })
-      if (typeof payload.iat !== "number" || typeof payload.exp !== "number" || payload.exp - payload.iat > 300) return no("a proof lives 5 minutes at most")
-      if (payload.sub !== expected.subject) return no("the proof is for someone else")
-      if (payload.installation !== expected.installation) return no("the proof is for another installation")
-      if (payload.tool !== expected.tool) return no("the proof is for another tool")
-      if (payload.args !== argsHash(expected.args)) return no("the proof is for other arguments")
-      if (!expected.call || payload.call !== expected.call) return no("the proof is for another call")
-      if (expected.until !== undefined && payload.until !== expected.until) return no("the proof is for another deadline")
-      return { ok: true, iat: payload.iat }
-    } catch (error) {
-      return no(error instanceof Error ? error.message : "invalid proof")
-    }
-  }
-}
-
-// ------------------------------------------------------------ signing (hosts, tests, dev)
 
 /** A later run's deadline, epoch seconds: its `at` (a date-time string) plus `window` minutes, rounded down. NaN when `at` is not a date-time. */
 export function laterDeadline(at: string, windowMinutes: number): number {
   return Math.floor(Date.parse(at) / 1000 + windowMinutes * 60)
 }
 
-export type SigningKey = { privateKey: CryptoKey; publicJwk: JWK; kid: string }
-
-export async function generateSigningKey(): Promise<SigningKey> {
-  const { privateKey, publicKey } = await generateKeyPair("EdDSA", { crv: "Ed25519", extractable: true })
-  const publicJwk = await exportJWK(publicKey)
-  const kid = createHash("sha256").update(String(publicJwk.x)).digest("base64url").slice(0, 16)
-  return { privateKey, publicJwk: { ...publicJwk, kid, alg: "EdDSA", use: "sig" }, kid }
-}
-
-/** An access token as a host or the dev authority signs it. */
-export async function signAccessToken(key: SigningKey, claims: { iss: string; aud: string | string[]; sub: string; clegra: HostClaim; lifetimeSeconds?: number; scope?: string }): Promise<string> {
-  const now = Math.floor(Date.now() / 1000)
-  return new SignJWT({ [TOKEN_CLAIM]: claims.clegra, ...(claims.scope ? { scope: claims.scope } : {}) })
-    .setProtectedHeader({ alg: "EdDSA", typ: ACCESS_TOKEN_TYPE, kid: key.kid })
-    .setIssuer(claims.iss)
-    .setAudience(claims.aud)
-    .setSubject(claims.sub)
-    .setIssuedAt(now)
-    .setExpirationTime(now + (claims.lifetimeSeconds ?? 3600))
-    .setJti(randomUUID())
-    .sign(key.privateKey)
-}
-
-/**
- * A confirmation proof (spec §7): the person confirmed exactly these arguments, as sent, for this call of this
- * installation. `until` (epoch seconds), for an action with `later`: the run's deadline, `at` + `window` minutes
- * (`laterDeadline`).
- */
-export async function signConfirmation(key: SigningKey, claims: { iss: string; aud: string; sub: string; installation: string; tool: string; args: unknown; call: string; until?: number; lifetimeSeconds?: number }): Promise<string> {
-  const now = Math.floor(Date.now() / 1000)
-  return new SignJWT({ installation: claims.installation, tool: claims.tool, args: argsHash(claims.args), call: claims.call, ...(claims.until !== undefined ? { until: claims.until } : {}) })
-    .setProtectedHeader({ alg: "EdDSA", typ: CONFIRMATION_TYPE, kid: key.kid })
-    .setIssuer(claims.iss)
-    .setAudience(claims.aud)
-    .setSubject(claims.sub)
-    .setIssuedAt(now)
-    .setExpirationTime(now + Math.min(claims.lifetimeSeconds ?? 120, 300))
-    .sign(key.privateKey)
-}
-
-// ------------------------------------------------------------ the dev authority
-
 const LOOPBACK = /^(127\.\d+\.\d+\.\d+|::1|::ffff:127\.\d+\.\d+\.\d+|localhost)$/
 
 export function isLoopback(host: string | null | undefined): boolean {
   return typeof host === "string" && LOOPBACK.test(host)
 }
-
-const DEV_CODE_TYPE = `${PROTOCOL_ID}-dev-code+jwt`
-const DEV_REFRESH_TYPE = `${PROTOCOL_ID}-dev-refresh+jwt`
-/** Wrong sign-in codes before the dev sign-in closes until the app restarts. */
-export const DEV_CODE_ATTEMPTS = 5
-
-const html = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!)
 
 // ------------------------------------------------------------ client id metadata documents
 
@@ -436,6 +214,31 @@ function publicV4(a: number, b: number, c: number): boolean {
   if (a === 198 && (b === 18 || b === 19)) return false // benchmarking
   if ((a === 198 && b === 51 && c === 100) || (a === 203 && b === 0 && c === 113)) return false // documentation
   return true
+}
+
+const V4 = /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/
+
+/** 4 for an IPv4 address, 6 for an IPv6 one (a zone allowed), 0 for anything else (as Node's `isIP`). */
+export function isIP(value: string): 0 | 4 | 6 {
+  if (V4.test(value)) return 4
+  const [address = "", zone, ...more] = value.split("%")
+  if (more.length || zone === "" || (zone !== undefined && !/^[\w.-]+$/.test(zone))) return 0
+  let s = address
+  let groups = 8
+  if (s.includes(".")) {
+    const cut = s.lastIndexOf(":")
+    if (cut < 0 || !V4.test(s.slice(cut + 1))) return 0
+    s = s.slice(0, cut + 1) + "0"
+    groups = 7
+  }
+  const halves = s.split("::")
+  if (halves.length > 2) return 0
+  const parts = (h: string) => (h === "" ? [] : h.split(":"))
+  const left = parts(halves[0]!)
+  const right = halves.length === 2 ? parts(halves[1]!) : []
+  if (![...left, ...right].every((g) => /^[0-9a-f]{1,4}$/i.test(g))) return 0
+  const count = left.length + right.length
+  return (halves.length === 2 ? count < groups : count === groups) ? 6 : 0
 }
 
 /** The eight 16-bit groups of an IPv6 address `isIP` accepted. */
@@ -593,7 +396,12 @@ export function clientMetadataCacheSeconds(cacheControl: string | null): number 
   return age ? Math.min(CLIENT_CACHE_MAX_SECONDS, Math.max(CLIENT_CACHE_MIN_SECONDS, Number(age[1]))) : CLIENT_CACHE_DEFAULT_SECONDS
 }
 
-const systemLookup = async (host: string) => (await dnsLookup(host, { all: true })).map((a) => a.address)
+/** The runtime's resolver (an adapter's); without one a host name is refused, never fetched unchecked. */
+function systemLookup(host: string): Promise<string[]> {
+  const lookup = hostLookup()
+  if (!lookup) throw new ClientMetadataError(`this runtime gave the SDK no DNS resolver, so ${host} can't be checked before it is fetched: serve the app through an adapter (@clegra/sdk/node, /next, /express) or give the sign-in's clientMetadata.lookup`)
+  return lookup(host)
+}
 
 /**
  * Fetches and checks the metadata document of a URL `client_id`. Nothing is
@@ -632,7 +440,8 @@ async function fetchPublicJson(address: string, transport: ClientMetadataTranspo
     let addresses: string[]
     try {
       addresses = await (transport.lookup ?? systemLookup)(host)
-    } catch {
+    } catch (error) {
+      if (error instanceof ClientMetadataError) throw error
       throw new ClientMetadataError(`the client's host ${host} does not resolve`)
     }
     if (!addresses.length) throw new ClientMetadataError(`the client's host ${host} does not resolve`)
@@ -688,7 +497,13 @@ async function readCapped(response: Response, max: number, what: string): Promis
     }
     chunks.push(value)
   }
-  return Buffer.concat(chunks).toString("utf8")
+  const all = new Uint8Array(size)
+  let at = 0
+  for (const c of chunks) {
+    all.set(c, at)
+    at += c.byteLength
+  }
+  return new TextDecoder().decode(all)
 }
 
 /**
@@ -795,256 +610,4 @@ export class ClientDirectory {
     return null
   }
 
-}
-
-/**
- * A minimal OAuth 2.1 authorization server for development (spec §7): clients
- * identify themselves with a Client ID Metadata Document URL (fetched and
- * checked, above) or register dynamically (any client); authorization code
- * with PKCE S256, a sign-in page listing test people that asks for the code
- * printed on the console (five wrong codes close the sign-in until the app
- * restarts), refresh tokens. Stateless but for a small cache of client
- * documents: codes and refresh tokens are JWTs signed with the dev key.
- * Every token's issuer is the origin the request came to (so a tunnel
- * works); the key is what is checked. The server answers it only to callers
- * on a loopback address (server.ts).
- */
-export class DevAuthority {
-  readonly code: string
-  readonly people: (Person & { permissions?: string[] | "all" })[]
-  readonly installation: string
-  #key: SigningKey | null = null
-  #wrongCodes = 0
-  publicKey!: CryptoKey
-  readonly #origins = new Set<string>([DEV_ISSUER])
-
-  constructor(readonly options: DevOptions, private readonly app: { name: string; title: string; allPermissions: () => string[] }) {
-    this.#directory = new ClientDirectory(options.clientMetadata)
-    this.code = options.code ?? randomBytes(4).toString("hex").toUpperCase()
-    this.people = options.people?.length ? options.people : [{ id: "test-person", name: "Test person", permissions: "all" }]
-    this.installation = options.installation ?? "dev"
-  }
-
-  async start(): Promise<void> {
-    const fromJwk = async (jwk: JWK) => {
-      const privateKey = (await importJWK(jwk, "EdDSA")) as CryptoKey
-      const { d: _d, ...pub } = jwk
-      const kid = String(jwk.kid ?? createHash("sha256").update(String(jwk.x)).digest("base64url").slice(0, 16))
-      return { privateKey, publicJwk: { ...pub, kid, alg: "EdDSA", use: "sig" }, kid }
-    }
-    const env = process.env.CLEGRA_DEV_KEY
-    const file = this.options.keyFile === false ? null : (this.options.keyFile ?? `.${PROTOCOL_ID}-dev-key.json`)
-    if (env) this.#key = await fromJwk(JSON.parse(env) as JWK)
-    else if (!file) this.#key = await generateSigningKey()
-    else {
-      // Loaded only here, in development on Node: nothing else in the SDK touches the disk.
-      const fs = await import("node:fs")
-      if (fs.existsSync(file)) this.#key = await fromJwk(JSON.parse(fs.readFileSync(file, "utf8")) as JWK)
-      else {
-        this.#key = await generateSigningKey()
-        const priv = await exportJWK(this.#key.privateKey)
-        fs.writeFileSync(file, JSON.stringify({ ...priv, kid: this.#key.kid }), { mode: 0o600 })
-      }
-    }
-    this.publicKey = (await importJWK(this.#key.publicJwk, "EdDSA")) as CryptoKey
-  }
-
-  get key(): SigningKey {
-    if (!this.#key) throw new Error("dev authority not started")
-    return this.#key
-  }
-
-  /** Whether `iss` is one of the dev authority's (its fixed name or an origin it answered on). */
-  issues(iss: string): boolean {
-    return this.#origins.has(iss)
-  }
-
-  permissionsOf(person: { permissions?: string[] | "all" } | undefined): string[] {
-    const p = person?.permissions ?? "all"
-    return p === "all" ? this.app.allPermissions() : p
-  }
-
-  /**
-   * A dev access token. `person: null`: no person — with `host: "workspace"` the installation-level caller (the host
-   * calling for the installation itself: schedules, later runs, lifecycle), `sub` = `installation:<installation>`,
-   * no permissions unless given.
-   */
-  async token(input: { person?: string | Person | null; permissions?: string[] | "all"; host?: "workspace" | "plain"; installation?: string; locale?: string; audience: string; issuer?: string }): Promise<string> {
-    const installation = input.installation ?? this.installation
-    const known = typeof input.person === "string" ? this.people.find((p) => p.id === input.person) : undefined
-    const person = input.person === null ? null : typeof input.person === "object" ? input.person : (known ?? this.people[0]!)
-    const permissions = input.permissions ? (input.permissions === "all" ? this.app.allPermissions() : input.permissions) : person ? this.permissionsOf(known ?? this.people[0]) : []
-    const iss = input.issuer ?? DEV_ISSUER
-    this.#origins.add(iss)
-    return signAccessToken(this.key, {
-      // A workspace host's token is for one request.
-      ...(input.host === "workspace" ? { lifetimeSeconds: HOST_TOKEN_SECONDS } : {}),
-      iss,
-      aud: input.audience,
-      sub: person ? person.id : `installation:${installation}`,
-      [TOKEN_CLAIM]: { installation, ...(person ? { person: { id: person.id, name: person.name } } : {}), permissions, ...(input.locale ? { locale: input.locale } : {}), host: input.host ?? "plain" },
-    })
-  }
-
-  readonly #directory: ClientDirectory
-
-  /** Answers the authorization server's paths; null for any other path. */
-  async handle(request: Request, origin: string, resource: string): Promise<Response | null> {
-    const url = new URL(request.url)
-    const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", "access-control-allow-origin": "*", "cache-control": "no-store" } })
-    const path = url.pathname
-    if (path === "/.well-known/oauth-authorization-server" || path === "/.well-known/openid-configuration") {
-      this.#origins.add(origin)
-      return json({
-        issuer: origin,
-        authorization_endpoint: `${origin}/oauth/authorize`,
-        token_endpoint: `${origin}/oauth/token`,
-        registration_endpoint: `${origin}/oauth/register`,
-        client_id_metadata_document_supported: true,
-        jwks_uri: `${origin}/.well-known/jwks.json`,
-        response_types_supported: ["code"],
-        grant_types_supported: ["authorization_code", "refresh_token"],
-        code_challenge_methods_supported: ["S256"],
-        // Public clients, and metadata-document clients that sign a client assertion with a key pair (RFC 7523).
-        token_endpoint_auth_methods_supported: ["none", "private_key_jwt"],
-        token_endpoint_auth_signing_alg_values_supported: [...CLIENT_ASSERTION_ALGS],
-        scopes_supported: [OAUTH_SCOPE],
-      })
-    }
-    if (path === "/.well-known/jwks.json") return json({ keys: [this.key.publicJwk] })
-    if (path === "/oauth/register" && request.method === "POST") {
-      const body = (await request.json().catch(() => ({}))) as Record<string, unknown>
-      return json({ ...body, client_id: `dev-${randomUUID()}`, client_id_issued_at: Math.floor(Date.now() / 1000), token_endpoint_auth_method: "none" }, 201)
-    }
-    if (path === "/oauth/authorize") return this.#authorize(request, url, origin, resource)
-    if (path === "/oauth/token" && request.method === "POST") return this.#token(request, origin, resource, json)
-    return null
-  }
-
-  async #authorize(request: Request, url: URL, origin: string, resource: string): Promise<Response> {
-    const form = request.method === "POST" ? new URLSearchParams(await request.text()) : url.searchParams
-    const p = (k: string) => form.get(k) ?? ""
-    const shell = (body: string, status: number) =>
-      new Response(
-        `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sign in · ${html(this.app.title)} (dev)</title>
-<style>body{font:15px system-ui,sans-serif;max-width:420px;margin:48px auto;padding:0 16px;color:#1d1d1f}h1{font-size:20px}label{display:block;margin:12px 0 4px}select,input,button{font:inherit;padding:8px;width:100%;box-sizing:border-box}button{margin-top:16px;background:#1d1d1f;color:#fff;border:0;border-radius:8px}.e{color:#b00020}.n{color:#666;font-size:13px}.c{padding:10px 12px;border:1px solid #d2d2d7;border-radius:8px;overflow-wrap:anywhere}</style></head>
-<body><h1>${html(this.app.title)} — development sign-in</h1>${body}</body></html>`,
-        { status, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-frame-options": "DENY" } },
-      )
-    let client: ClientMetadata | null = null
-    // Who is asking, as its own metadata document says: shown so the developer sees which client the sign-in is for.
-    const asking = () => {
-      if (!client) return ""
-      const host = html(new URL(client.client_id).host)
-      const name = client.client_name ? `<strong>${html(client.client_name.slice(0, 80))}</strong> (${host})` : `<strong>${host}</strong>`
-      return `<p class="c">${name} is asking to sign in.<br><span class="n">From the client's metadata document: ${html(client.client_id)}</span></p>`
-    }
-    const page = (error = "") =>
-      shell(
-        `<p class="n">Test people only. The code is printed on the app's console.</p>${asking()}${error ? `<p class="e">${html(error)}</p>` : ""}
-<form method="post" action="/oauth/authorize">${["client_id", "redirect_uri", "state", "code_challenge", "code_challenge_method", "scope", "resource"].map((k) => `<input type="hidden" name="${k}" value="${html(p(k))}">`).join("")}
-<label>Person</label><select name="person">${this.people.map((x) => `<option value="${html(x.id)}">${html(x.name)}</option>`).join("")}</select>
-<label>Code</label><input name="code" autocomplete="off" required autofocus>
-<button type="submit">Sign in</button></form>`,
-        error ? 400 : 200,
-      )
-    // A client that is not who it says, or a redirect address that is not its own: the answer stays here, nothing is ever sent to that address.
-    const refuse = (why: string) => shell(`<p class="e">This client cannot sign in: ${html(why)}.</p><p class="n">Nothing was sent to the client: its redirect address is not trusted.</p>`, 400)
-    if (!p("redirect_uri") || !p("code_challenge") || p("code_challenge_method") !== "S256") return new Response("redirect_uri and a S256 code_challenge are required", { status: 400 })
-    if (claimsUrl(p("client_id"))) {
-      try {
-        client = await this.#directory.client(p("client_id"))
-      } catch (error) {
-        return refuse(error instanceof ClientMetadataError ? error.message : "its metadata document could not be read")
-      }
-      if (!redirectUriAllowed(p("redirect_uri"), client.redirect_uris)) return refuse("redirect_uri is not one of the redirect_uris of its metadata document (it must match exactly; only the port of a loopback address may differ)")
-    }
-    if (request.method !== "POST") return page()
-    if (this.#wrongCodes >= DEV_CODE_ATTEMPTS) return page("Too many wrong codes: restart the app to sign in again.")
-    if (p("code").trim().toUpperCase() !== this.code.toUpperCase()) {
-      this.#wrongCodes++
-      if (this.#wrongCodes >= DEV_CODE_ATTEMPTS) console.warn(`[${PROTOCOL_ID}] dev sign-in closed after ${DEV_CODE_ATTEMPTS} wrong codes: restart the app to open it again`)
-      return page("Wrong code.")
-    }
-    const person = this.people.find((x) => x.id === p("person"))
-    if (!person) return page("Unknown person.")
-    this.#origins.add(origin)
-    const code = await new SignJWT({ k: "code", person: person.id, challenge: p("code_challenge"), redirect: p("redirect_uri"), client: p("client_id") })
-      .setProtectedHeader({ alg: "EdDSA", typ: DEV_CODE_TYPE, kid: this.key.kid })
-      .setIssuer(origin)
-      .setAudience(`${PROTOCOL_ID}-dev-code`)
-      .setIssuedAt()
-      .setExpirationTime("5m")
-      .sign(this.key.privateKey)
-    const back = new URL(p("redirect_uri"))
-    back.searchParams.set("code", code)
-    if (p("state")) back.searchParams.set("state", p("state"))
-    void resource
-    return new Response(null, { status: 302, headers: { location: back.toString() } })
-  }
-
-  async #token(request: Request, origin: string, resource: string, json: (b: unknown, s?: number) => Response): Promise<Response> {
-    const form = new URLSearchParams(await request.text())
-    const fail = (error: string, description: string) => json({ error, error_description: description }, 400)
-    let person: string
-    let client = ""
-    /** The redirect address a code was issued for (authorization_code only). */
-    let redirect: string | null = null
-    let sent = form.get("client_id") ?? ""
-    // A client that authenticates with a signed JWT may leave client_id out (RFC 7523 §3): the assertion names it, and is checked below.
-    if (!sent && form.get("client_assertion")) {
-      try {
-        const sub = decodeJwt(form.get("client_assertion")!).sub
-        if (typeof sub === "string") sent = sub
-      } catch {
-        // Refused below, as an assertion that does not verify.
-      }
-    }
-    if (form.get("grant_type") === "authorization_code") {
-      let claims: JWTPayload
-      try {
-        ;({ payload: claims } = await jwtVerify(form.get("code") ?? "", this.publicKey, { typ: DEV_CODE_TYPE, audience: `${PROTOCOL_ID}-dev-code` }))
-      } catch {
-        return fail("invalid_grant", "unknown or expired code")
-      }
-      const verifier = form.get("code_verifier") ?? ""
-      if (createHash("sha256").update(verifier).digest("base64url") !== claims.challenge) return fail("invalid_grant", "PKCE check failed")
-      if (form.get("redirect_uri") && form.get("redirect_uri") !== claims.redirect) return fail("invalid_grant", "redirect_uri differs")
-      // A code is for the client it was given to. A client known by its metadata document must say who it is; others may leave client_id out, as before.
-      client = typeof claims.client === "string" ? claims.client : ""
-      if (sent ? sent !== client : claimsUrl(client)) return fail("invalid_grant", sent ? "the code was issued to another client_id" : "client_id is required")
-      person = String(claims.person)
-      redirect = String(claims.redirect ?? "")
-    } else if (form.get("grant_type") === "refresh_token") {
-      try {
-        const { payload } = await jwtVerify(form.get("refresh_token") ?? "", this.publicKey, { typ: DEV_REFRESH_TYPE, audience: `${PROTOCOL_ID}-dev-refresh` })
-        person = String(payload.person)
-        client = typeof payload.client === "string" ? payload.client : ""
-      } catch {
-        return fail("invalid_grant", "unknown or expired refresh token")
-      }
-      // A refresh token stays with the metadata-document client it was issued to.
-      if (claimsUrl(client) && sent !== client) return fail("invalid_grant", "the refresh token was issued to another client_id")
-    } else return fail("unsupported_grant_type", "authorization_code or refresh_token")
-    if (claimsUrl(client)) {
-      let metadata: ClientMetadata
-      try {
-        metadata = await this.#directory.client(client)
-      } catch (error) {
-        return fail("invalid_client", error instanceof ClientMetadataError ? error.message : "the client's metadata document could not be read")
-      }
-      if (redirect !== null && !redirectUriAllowed(redirect, metadata.redirect_uris)) return fail("invalid_grant", "redirect_uri is no longer one of the client's redirect_uris")
-      // A client with a key pair proves it is itself on every grant; a public client has nothing to prove.
-      if (metadata.token_endpoint_auth_method === "private_key_jwt") {
-        const why = await this.#directory.authenticate(metadata, form, [`${origin}/oauth/token`, origin])
-        if (why) return json({ error: "invalid_client", error_description: why }, 401)
-      }
-    }
-    const who = this.people.find((x) => x.id === person)
-    if (!who) return fail("invalid_grant", "unknown person")
-    this.#origins.add(origin)
-    const access = await this.token({ person: who.id, audience: resource, issuer: origin })
-    const refresh = await new SignJWT({ person: who.id, ...(client ? { client } : {}) }).setProtectedHeader({ alg: "EdDSA", typ: DEV_REFRESH_TYPE, kid: this.key.kid }).setIssuer(origin).setAudience(`${PROTOCOL_ID}-dev-refresh`).setIssuedAt().setExpirationTime("30d").sign(this.key.privateKey)
-    return json({ access_token: access, token_type: "Bearer", expires_in: 3600, refresh_token: refresh, scope: OAUTH_SCOPE })
-  }
 }

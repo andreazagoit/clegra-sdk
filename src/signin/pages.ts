@@ -2,7 +2,7 @@
 // answer posted to a framing client (web_message) and the error page. Plain HTML in the app's language, no script but
 // the one-line answer, framable only by the configured client origins.
 
-import { randomToken } from "./crypto"
+import { randomToken } from "../crypto"
 
 export type PageLocale = "en" | "it"
 

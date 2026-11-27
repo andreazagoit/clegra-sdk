@@ -1,13 +1,10 @@
 import assert from "node:assert/strict"
-import { randomUUID } from "node:crypto"
-import { rmSync } from "node:fs"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
-import { after, describe, test } from "node:test"
+import { describe, test } from "node:test"
 
 import { z } from "zod"
 
-import { defineApp, type AuthOptions } from "./index"
+import { defineAction, defineApp, defineEntity, serve } from "./index"
+import { devSignIn } from "./signin"
 import { testClient } from "./testing"
 
 /**
@@ -15,9 +12,6 @@ import { testClient } from "./testing"
  * record's title beside its URI, an action on a record takes a title hint for the client's own approval prompt,
  * and the app never trusts that hint: it names the record from its id, and a hint naming another record stops the call.
  */
-
-const keyFile = join(tmpdir(), `clegra-titles-key-${randomUUID()}.json`)
-after(() => rmSync(keyFile, { force: true }))
 
 type Deal = { id: string; name: string; stage: string }
 
@@ -27,34 +21,27 @@ function makeApp() {
     { id: "d2", name: "Acme <Tools>", stage: "open" },
   ]
   const ran: unknown[] = []
-  const app = defineApp({
-    name: "sales",
-    title: "Sales",
-    version: "1.0.0",
-    locale: "en",
-    auth: { dev: { keyFile, code: "TITLE1" } } as AuthOptions,
-    entities: {
-      deal: {
-        label: "Deal",
-        schema: z.object({ id: z.string(), name: z.string().meta({ role: "title", label: "Deal", search: true, untrusted: true }), stage: z.string().meta({ role: "status", label: "Stage" }) }),
-        get: (id) => deals.find((d) => d.id === id) ?? null,
-        list: () => ({ rows: deals }),
-      },
-    },
-    actions: {
-      mark_won: {
-        on: "deal",
-        title: "Mark as won",
-        input: z.object({ note: z.string().optional() }),
-        confirm: true,
-        expose: { plain: true },
-        run: (input, _ctx, deal) => {
-          ran.push({ input, id: deal.id })
-          return { message: `${deal.name} marked as won.`, record: deal.id }
-        },
-      },
+  const deal = defineEntity({
+    name: "deal",
+    label: "Deal",
+    schema: z.object({ id: z.string(), name: z.string().meta({ role: "title", label: "Deal", search: true, untrusted: true }), stage: z.string().meta({ role: "status", label: "Stage" }) }),
+    get: (id) => deals.find((d) => d.id === id) ?? null,
+    list: () => ({ rows: deals }),
+  })
+  const markWon = defineAction({
+    name: "mark_won",
+    on: deal,
+    title: "Mark as won",
+    input: z.object({ note: z.string().optional() }),
+    confirm: true,
+    expose: { plain: true },
+    run: (input, _ctx, record) => {
+      ran.push({ input, id: record.id })
+      return { message: `${record.name} marked as won.`, record: record.id }
     },
   })
+  const defined = defineApp({ name: "sales", title: "Sales", version: "1.0.0", locale: "en", entities: [deal], actions: [markWon] })
+  const app = serve(defined, { auth: { signIn: devSignIn(defined, { code: "TITLE1" }) } })
   return { app, ran }
 }
 
@@ -119,14 +106,11 @@ describe("records named by their title", () => {
   test("an action can't declare the SDK's record_title", () => {
     assert.throws(
       () =>
-        defineApp({
-          name: "xy",
-          title: "X",
-          version: "1",
-          auth: { dev: { keyFile } } as AuthOptions,
-          entities: { a: { label: "A", schema: z.object({ id: z.string(), n: z.string().meta({ role: "title" }) }), get: () => null, list: () => ({ rows: [] }) } },
-          actions: { go: { on: "a", title: "Go", input: z.object({ record_title: z.string() }), run: () => ({ message: "ok" }) } },
-        }),
+        {
+          const a = defineEntity({ name: "a", label: "A", schema: z.object({ id: z.string(), n: z.string().meta({ role: "title" }) }), get: () => null, list: () => ({ rows: [] }) })
+          const go = defineAction({ name: "go", on: a, title: "Go", input: z.object({ record_title: z.string() }), run: () => ({ message: "ok" }) })
+          return defineApp({ name: "xy", title: "X", version: "1", entities: [a], actions: [go] })
+        },
       /record_title/,
     )
   })

@@ -1,15 +1,13 @@
 import assert from "node:assert/strict"
 import { createHash, randomUUID } from "node:crypto"
-import { rmSync } from "node:fs"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
-import { after, describe, test } from "node:test"
+import { describe, test } from "node:test"
 
 import { exportJWK, generateKeyPair, SignJWT, type CryptoKey, type JWK } from "jose"
 import { z } from "zod"
 
-import { CLIENT_ASSERTION_TYPE, CLIENT_METADATA_MAX_BYTES, clientMetadataCacheSeconds, clientMetadataUrlProblem, fetchClientMetadata, isClientMetadataUrl, isPublicAddress, redirectUriAllowed, validateClientMetadata } from "./auth"
-import { defineApp } from "./index"
+import { CLIENT_ASSERTION_TYPE, CLIENT_METADATA_MAX_BYTES, clientMetadataCacheSeconds, clientMetadataUrlProblem, fetchClientMetadata, isClientMetadataUrl, isIP, isPublicAddress, redirectUriAllowed, validateClientMetadata } from "./auth"
+import { defineApp, defineEntity, serve } from "./index"
+import { devSignIn } from "./signin"
 
 /** Requests of these tests come from this machine (dev sign-in answers nobody else). */
 const local = { remoteAddress: "127.0.0.1" }
@@ -20,12 +18,9 @@ const KEYS = "https://client.example/oauth/jwks.json"
 /** A public address for the fake resolver. */
 const PUBLIC = "93.184.215.14"
 
-const keyFile = join(tmpdir(), `clegra-cimd-key-${randomUUID()}.json`)
-after(() => rmSync(keyFile, { force: true }))
-
 type Answer = { status?: number; headers?: Record<string, string>; body?: unknown; raw?: string }
 
-/** An app whose dev authority reaches client documents through a fake network: `documents` by URL, `hosts` by name. Nothing here touches the real one. */
+/** An app whose sign-in (the development one: test people) reaches client documents through a fake network: `documents` by URL, `hosts` by name. Nothing here touches the real one. */
 function world(documents: Record<string, Answer | (() => Answer)> = {}, hosts: Record<string, string[]> = {}) {
   const fetched: string[] = []
   const resolved: string[] = []
@@ -43,13 +38,9 @@ function world(documents: Record<string, Answer | (() => Answer)> = {}, hosts: R
     resolved.push(host)
     return hosts[host] ?? [PUBLIC]
   }
-  const app = defineApp({
-    name: "cimd",
-    title: "Cimd",
-    version: "1.0.0",
-    auth: { dev: { keyFile, code: "TEST1", clientMetadata: { fetch: fetchFake, lookup } } },
-    entities: { a: { label: "A", schema: z.object({ id: z.string(), n: z.string().meta({ role: "title" }) }), get: () => null, list: () => ({ rows: [] }) } },
-  })
+  const a = defineEntity({ name: "a", label: "A", schema: z.object({ id: z.string(), n: z.string().meta({ role: "title" }) }), get: () => null, list: () => ({ rows: [] }) })
+  const definition = defineApp({ name: "cimd", title: "Cimd", version: "1.0.0", entities: [a] })
+  const app = serve(definition, { auth: { signIn: devSignIn(definition, { issuer: base, code: "TEST1", clientMetadata: { fetch: fetchFake, lookup } }) } })
   return { app, fetched, resolved, transport: { fetch: fetchFake, lookup } }
 }
 
@@ -57,8 +48,26 @@ const verifier = "v".repeat(50)
 const challenge = createHash("sha256").update(verifier).digest("base64url")
 const query = (client_id: string, redirect_uri: string) => new URLSearchParams({ client_id, redirect_uri, state: "s1", code_challenge: challenge, code_challenge_method: "S256", response_type: "code" })
 type TestApp = ReturnType<typeof world>["app"]
-const authorizePage = (app: TestApp, client_id: string, redirect_uri = CALLBACK) => app.fetch(new Request(`${base}/oauth/authorize?${query(client_id, redirect_uri)}`), local)
-const signIn = (app: TestApp, client_id: string, redirect_uri = CALLBACK) => app.fetch(new Request(`${base}/oauth/authorize`, { method: "POST", body: new URLSearchParams({ ...Object.fromEntries(query(client_id, redirect_uri)), person: "test-person", code: "TEST1" }) }), local)
+/** The test person's session on the dev login, one per app. */
+const sessions = new WeakMap<TestApp, Promise<string>>()
+const session = (app: TestApp) => {
+  let s = sessions.get(app)
+  if (!s) {
+    s = app.fetch(new Request(`${base}/oauth/dev-login`, { method: "POST", body: new URLSearchParams({ person: "test-person", code: "TEST1", return: "/" }) }), local).then((r) => r.headers.get("set-cookie")!.split(";")[0]!)
+    sessions.set(app, s)
+  }
+  return s
+}
+/** The authorize page, signed in: the consent, or the refusal. */
+const authorizePage = async (app: TestApp, client_id: string, redirect_uri = CALLBACK) => app.fetch(new Request(`${base}/oauth/authorize?${query(client_id, redirect_uri)}`, { headers: { cookie: await session(app) } }), local)
+/** The person allows it: the redirect back to the client with a code, or the page's refusal. */
+const signIn = async (app: TestApp, client_id: string, redirect_uri = CALLBACK) => {
+  const page = await authorizePage(app, client_id, redirect_uri)
+  const html = await page.clone().text()
+  const id = /name="request" value="([^"]+)"/.exec(html)?.[1]
+  if (!id) return page
+  return app.fetch(new Request(`${base}/oauth/authorize`, { method: "POST", headers: { cookie: await session(app), origin: base }, body: new URLSearchParams({ request: id, decision: "allow" }) }), local)
+}
 const token = (app: TestApp, fields: Record<string, string>) => app.fetch(new Request(`${base}/oauth/token`, { method: "POST", body: new URLSearchParams(fields) }), local)
 const doc = (extra: Record<string, unknown> = {}) => ({ client_id: CLIENT, client_name: "Example <b>Client</b>", redirect_uris: [CALLBACK], ...extra })
 
@@ -106,6 +115,12 @@ describe("client id metadata documents: the pure checks", () => {
       assert.equal(typeof clientMetadataUrlProblem(bad), "string", bad)
       assert.equal(isClientMetadataUrl(bad), false, bad)
     }
+  })
+
+  test("isIP: v4, v6 (zones, embedded v4), and nothing else", () => {
+    for (const ip of ["0.0.0.0", "8.8.8.8", "255.255.255.255"]) assert.equal(isIP(ip), 4, ip)
+    for (const ip of ["::", "::1", "2606:4700::1111", "fe80::1%en0", "::ffff:192.168.1.1", "64:ff9b::8.8.8.8", "1:2:3:4:5:6:7:8", "1:2:3:4:5:6:1.2.3.4"]) assert.equal(isIP(ip), 6, ip)
+    for (const ip of ["", "1.2.3", "256.1.1.1", "01.2.3.4", "1.2.3.4.5", "client.example", "1:2:3:4:5:6:7:8:9", "1::2::3", ":::", "12345::", "g::1", "fe80::1%", "1:2:3:4:5:6:7:1.2.3.4", "[::1]"]) assert.equal(isIP(ip), 0, ip)
   })
 
   test("public and non-public addresses", () => {
@@ -232,12 +247,12 @@ describe("client id metadata documents: fetching", () => {
   })
 })
 
-describe("client id metadata documents: the dev authorization server", () => {
-  test("the metadata says so, and keeps dynamic registration", async () => {
+describe("client id metadata documents: the sign-in module", () => {
+  test("the metadata says so; there is no dynamic registration", async () => {
     const { app } = world()
     const meta = (await (await app.fetch(new Request(`${base}/.well-known/oauth-authorization-server`), local)).json()) as Record<string, unknown>
     assert.equal(meta.client_id_metadata_document_supported, true)
-    assert.equal(meta.registration_endpoint, `${base}/oauth/register`)
+    assert.equal(meta.registration_endpoint, undefined)
     assert.deepEqual(meta.token_endpoint_auth_methods_supported, ["none", "private_key_jwt"])
     assert.deepEqual(meta.token_endpoint_auth_signing_alg_values_supported, ["RS256", "ES256", "PS256"])
   })
@@ -247,11 +262,11 @@ describe("client id metadata documents: the dev authorization server", () => {
     const page = await authorizePage(app, CLIENT)
     assert.equal(page.status, 200)
     const text = await page.text()
-    assert.match(text, /<strong>Example &lt;b&gt;Client&lt;\/b&gt;<\/strong> \(client\.example\) is asking to sign in/)
-    assert.match(text, /metadata document: https:\/\/client\.example\/oauth\/metadata\.json/)
+    assert.match(text, /Allow Example &lt;b&gt;Client&lt;\/b&gt; to use Cimd for you\?/)
+    assert.match(text, /https:\/\/client\.example\/oauth\/metadata\.json/)
     assert.doesNotMatch(text, /<b>Client/)
     const ok = await signIn(app, CLIENT)
-    assert.equal(ok.status, 302)
+    assert.equal(ok.status, 303)
     const back = new URL(ok.headers.get("location")!)
     assert.equal(`${back.origin}${back.pathname}`, CALLBACK)
     assert.equal(back.searchParams.get("state"), "s1")
@@ -263,10 +278,10 @@ describe("client id metadata documents: the dev authorization server", () => {
     assert.equal(mcp.status, 200)
     // The document was fetched once for the whole flow (page, sign-in, token).
     assert.deepEqual(fetched, [CLIENT])
-    // The refresh token stays with this client.
+    // The refresh token stays with this client, which must say who it is.
+    assert.equal((await token(app, { grant_type: "refresh_token", refresh_token: t.refresh_token, client_id: "https://other.example/meta.json" })).status, 401)
+    assert.equal((await token(app, { grant_type: "refresh_token", refresh_token: t.refresh_token })).status, 401)
     assert.equal((await token(app, { grant_type: "refresh_token", refresh_token: t.refresh_token, client_id: CLIENT })).status, 200)
-    assert.equal((await token(app, { grant_type: "refresh_token", refresh_token: t.refresh_token, client_id: "https://other.example/meta.json" })).status, 400)
-    assert.equal((await token(app, { grant_type: "refresh_token", refresh_token: t.refresh_token })).status, 400)
   })
 
   test("a code is for the client it was given to", async () => {
@@ -274,22 +289,21 @@ describe("client id metadata documents: the dev authorization server", () => {
     const { app } = world({ [CLIENT]: { body: doc() }, [OTHER]: { body: { client_id: OTHER, redirect_uris: [CALLBACK] } } })
     const code = new URL((await signIn(app, CLIENT)).headers.get("location")!).searchParams.get("code")!
     const grant = { grant_type: "authorization_code", code, code_verifier: verifier, redirect_uri: CALLBACK }
-    for (const client_id of [OTHER, "dev-1234", `${CLIENT}?x`]) {
-      const refused = await token(app, { ...grant, client_id })
-      assert.equal(refused.status, 400)
-      assert.match(((await refused.json()) as { error_description: string }).error_description, /another client_id/)
-    }
-    const missing = await token(app, grant)
-    assert.equal(missing.status, 400)
-    assert.match(((await missing.json()) as { error_description: string }).error_description, /client_id is required/)
-    assert.equal((await token(app, { ...grant, client_id: CLIENT })).status, 200)
+    // Another client, known by its own document: the code is not its own (and stays unused).
+    const other = await token(app, { ...grant, client_id: OTHER })
+    assert.equal(other.status, 400)
+    assert.match(((await other.json()) as { error_description: string }).error_description, /issued to another client/)
+    // No client, or one that is not a metadata document: refused as a client, before the code is looked at.
+    for (const client_id of ["dev-1234", ""]) assert.equal((await token(app, { ...grant, client_id })).status, 401, client_id)
+    const second = new URL((await signIn(app, CLIENT)).headers.get("location")!).searchParams.get("code")!
+    assert.equal((await token(app, { ...grant, code: second, client_id: CLIENT })).status, 200)
   })
 
   test("a redirect_uri that is not in the document is refused here, never redirected to", async () => {
     const { app } = world({ [CLIENT]: { body: doc() } })
     for (const evil of ["https://evil.example/callback", `${CALLBACK}/x`, "http://127.0.0.1:9999/callback"]) {
-      await assertRefused(await authorizePage(app, CLIENT, evil), /redirect_uri is not one of the redirect_uris/)
-      await assertRefused(await signIn(app, CLIENT, evil), /redirect_uri is not one of the redirect_uris/)
+      await assertRefused(await authorizePage(app, CLIENT, evil), /redirect_uri is not one of the client&#39;s redirect_uris/)
+      await assertRefused(await signIn(app, CLIENT, evil), /redirect_uri is not one of the client&#39;s redirect_uris/)
     }
   })
 
@@ -297,7 +311,7 @@ describe("client id metadata documents: the dev authorization server", () => {
     const NATIVE = "https://native.example/client.json"
     const { app } = world({ [NATIVE]: { body: { client_id: NATIVE, client_name: "Native", redirect_uris: ["http://127.0.0.1/callback"] } } })
     const ok = await signIn(app, NATIVE, "http://127.0.0.1:53124/callback")
-    assert.equal(ok.status, 302)
+    assert.equal(ok.status, 303)
     const back = new URL(ok.headers.get("location")!)
     assert.equal(back.host, "127.0.0.1:53124")
     assert.equal((await token(app, { grant_type: "authorization_code", code: back.searchParams.get("code")!, code_verifier: verifier, redirect_uri: "http://127.0.0.1:53124/callback", client_id: NATIVE })).status, 200)
@@ -328,8 +342,8 @@ describe("client id metadata documents: the dev authorization server", () => {
     const before = fetched.length
     assert.equal(before, 7)
     for (const id of ["http://client.example/meta.json", "https://client.example", "https://127.0.0.1/meta.json", "https://[::1]/meta.json", "https://169.254.169.254/latest", "https://localhost/meta.json", "https://inside.example/meta.json", "https://client.example/a/../meta.json", "https://client.example/meta.json#f"]) {
-      await assertRefused(await authorizePage(app, id), /This client cannot sign in/)
-      await assertRefused(await signIn(app, id), /This client cannot sign in/)
+      await assertRefused(await authorizePage(app, id), /client_id must be the https address|not a public address/)
+      await assertRefused(await signIn(app, id), /client_id must be the https address|not a public address/)
     }
     assert.equal(fetched.length, before)
   })
@@ -376,26 +390,11 @@ describe("client id metadata documents: the dev authorization server", () => {
     assert.equal(fetched.length, 102)
   })
 
-  test("dynamic registration and plain client ids work as before", async () => {
+  test("no dynamic registration, no plain client ids: a client is its metadata document", async () => {
     const { app, fetched, resolved } = world()
-    const reg = await app.fetch(new Request(`${base}/oauth/register`, { method: "POST", body: JSON.stringify({ redirect_uris: [CALLBACK] }) }), local)
-    assert.equal(reg.status, 201)
-    const { client_id } = (await reg.json()) as { client_id: string }
-    assert.match(client_id, /^dev-/)
-    const page = await authorizePage(app, client_id)
-    assert.equal(page.status, 200)
-    assert.doesNotMatch(await page.text(), /is asking to sign in/)
-    const first = new URL((await signIn(app, client_id)).headers.get("location")!).searchParams.get("code")!
-    // Without client_id at the token endpoint, as clients did before.
-    const tok = await token(app, { grant_type: "authorization_code", code: first, code_verifier: verifier, redirect_uri: CALLBACK })
-    assert.equal(tok.status, 200)
-    const { refresh_token } = (await tok.json()) as { refresh_token: string }
-    assert.equal((await token(app, { grant_type: "refresh_token", refresh_token })).status, 200)
-    // With it, and with a redirect address nobody registered (dev registration keeps none).
-    const second = new URL((await signIn(app, client_id, "https://anywhere.example/cb")).headers.get("location")!).searchParams.get("code")!
-    assert.equal((await token(app, { grant_type: "authorization_code", code: second, code_verifier: verifier, client_id })).status, 200)
-    const third = new URL((await signIn(app, "some-client")).headers.get("location")!).searchParams.get("code")!
-    assert.equal((await token(app, { grant_type: "authorization_code", code: third, code_verifier: verifier, client_id: "another-client" })).status, 400)
+    assert.equal((await app.fetch(new Request(`${base}/oauth/register`, { method: "POST", body: JSON.stringify({ redirect_uris: [CALLBACK] }) }), local)).status, 404)
+    await assertRefused(await authorizePage(app, "some-client"), /client_id must be the https address/)
+    assert.equal((await token(app, { grant_type: "authorization_code", code: "x", code_verifier: verifier, client_id: "some-client" })).status, 401)
     assert.deepEqual(fetched, [])
     assert.deepEqual(resolved, [])
   })
@@ -451,11 +450,14 @@ describe("client id metadata documents: clients with a key pair (private_key_jwt
     assert.equal(tok.status, 200)
     const { access_token, refresh_token } = (await tok.json()) as { access_token: string; refresh_token: string }
     assert.ok(access_token)
-    assert.equal((await token(app, { grant_type: "refresh_token", refresh_token, client_id: SIGNER, ...authFields(await assertion(k1.privateKey, { aud: base })) })).status, 200)
-    // The assertion names the client: client_id may be left out.
-    assert.equal((await token(app, { grant_type: "refresh_token", refresh_token, ...authFields(await assertion(k1.privateKey, { aud: [base, "https://else.example"] })) })).status, 200)
+    const refreshed = await token(app, { grant_type: "refresh_token", refresh_token, client_id: SIGNER, ...authFields(await assertion(k1.privateKey, { aud: base })) })
+    assert.equal(refreshed.status, 200)
+    // The assertion names the client: client_id may be left out (each refresh token is used once: the new one).
+    const next = ((await refreshed.json()) as { refresh_token: string }).refresh_token
+    const again = await token(app, { grant_type: "refresh_token", refresh_token: next, ...authFields(await assertion(k1.privateKey, { aud: [base, "https://else.example"] })) })
+    assert.equal(again.status, 200)
     // The refresh token still needs this client's proof.
-    await assertInvalidClient(await token(app, { grant_type: "refresh_token", refresh_token, client_id: SIGNER }), /client_assertion is required/)
+    await assertInvalidClient(await token(app, { grant_type: "refresh_token", refresh_token: ((await again.json()) as { refresh_token: string }).refresh_token, client_id: SIGNER }), /client_assertion is required/)
     // The document and the key set were each fetched once.
     assert.deepEqual(fetched, [SIGNER, SIGNER_KEYS])
   })

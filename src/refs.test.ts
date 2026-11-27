@@ -4,50 +4,44 @@ import { describe, test } from "node:test"
 
 import { z } from "zod"
 
-import { defineApp, ref, type AuthOptions } from "./index"
+import { defineAction, defineApp, defineEntity, ref, serve, type App } from "./index"
+import { devSignIn } from "./signin"
 import { checkApp, formatReport, type Report } from "../spec/src/conformance"
 import { CROSS_APP_HINT, CROSS_INPUT_HINT } from "./server"
 import { testClient } from "./testing"
 import { viewHtml } from "./view"
 
 const local = { remoteAddress: "127.0.0.1" }
-const auth = { dev: { keyFile: false, code: "TEST1" } } as AuthOptions
+const served = (app: App) => serve(app, { auth: { signIn: devSignIn(app, { code: "TEST1", issuer: "http://127.0.0.1:3961" }) } })
 
 type Deal = { id: string; name: string; customer?: string }
 
 function dealsApp(stored: () => Deal[] = () => [{ id: "d1", name: "Forty seats", customer: "clegra://erp/customer/42" }, { id: "d2", name: "Pilot" }]) {
   const deals = new Map(stored().map((d) => [d.id, d]))
-  return defineApp({
-    name: "deals",
-    title: "Deals",
-    version: "1.0.0",
-    auth,
-    entities: {
-      deal: {
-        label: "Deal",
-        schema: z.object({
-          id: z.string(),
-          name: z.string().meta({ role: "title", search: true }),
-          customer: ref.kind("organization").optional().meta({ label: "Customer", filter: true }),
-        }),
-        get: (id) => deals.get(id) ?? null,
-        list: (q) => ({ rows: [...deals.values()].filter((d) => q.filters.customer === undefined || d.customer === q.filters.customer) }),
-      },
-    },
-    actions: {
-      link_customer: {
-        on: "deal",
-        title: "Link the customer",
-        input: z.object({ customer: ref.kind("organization").meta({ label: "Customer" }) }),
-        confirm: "optional",
-        expose: { plain: true },
-        run: (input, _ctx, deal) => {
-          deals.set(deal.id, { ...deal, customer: input.customer })
-          return { message: "Linked.", record: deal.id }
-        },
-      },
+  const deal = defineEntity({
+    name: "deal",
+    label: "Deal",
+    schema: z.object({
+      id: z.string(),
+      name: z.string().meta({ role: "title", search: true }),
+      customer: ref.kind("organization").optional().meta({ label: "Customer", filter: true }),
+    }),
+    get: (id) => deals.get(id) ?? null,
+    list: (q) => ({ rows: [...deals.values()].filter((d) => q.filters.customer === undefined || d.customer === q.filters.customer) }),
+  })
+  const linkCustomer = defineAction({
+    name: "link_customer",
+    on: deal,
+    title: "Link the customer",
+    input: z.object({ customer: ref.kind("organization").meta({ label: "Customer" }) }),
+    confirm: "optional",
+    expose: { plain: true },
+    run: (input, _ctx, record) => {
+      deals.set(record.id, { ...record, customer: input.customer })
+      return { message: "Linked.", record: record.id }
     },
   })
+  return served(defineApp({ name: "deals", title: "Deals", version: "1.0.0", entities: [deal], actions: [linkCustomer] }))
 }
 
 describe("refs across apps: definition", () => {
@@ -134,7 +128,7 @@ const byId = (report: Report, id: string) => report.checks.find((c) => c.id === 
 describe("refs across apps: conformance", () => {
   test("refs.cross and resolve.foreign pass on a good app", async () => {
     const app = dealsApp()
-    const report = await checkApp({ url: "http://127.0.0.1:3961", token: await app.devToken(), fetch: (r) => app.fetch(r, local) })
+    const report = await checkApp({ url: "http://127.0.0.1:3961", token: await app.dev!.token(), fetch: (r) => app.fetch(r, local) })
     assert.ok(report.ok && report.complete, formatReport(report))
     assert.ok(!byId(report, "refs.cross").skipped && byId(report, "refs.cross").ok)
     assert.ok(byId(report, "resolve.foreign").ok)
@@ -142,7 +136,7 @@ describe("refs across apps: conformance", () => {
 
   test("refs.cross fails when the field holds a name instead of a URI", async () => {
     const app = dealsApp(() => [{ id: "d1", name: "Forty seats", customer: "Hartley Engineering" }])
-    const report = await checkApp({ url: "http://127.0.0.1:3961", token: await app.devToken(), fetch: (r) => app.fetch(r, local) })
+    const report = await checkApp({ url: "http://127.0.0.1:3961", token: await app.dev!.token(), fetch: (r) => app.fetch(r, local) })
     assert.equal(byId(report, "refs.cross").ok, false)
     assert.match(byId(report, "refs.cross").detail!, /"Hartley Engineering"/)
   })
@@ -153,20 +147,21 @@ describe("refs across apps: conformance", () => {
       const refs = (r.structuredContent as { refs?: Record<string, unknown> } | undefined)?.refs
       if (refs) refs.customer = { "clegra://erp/customer/42": "Hartley Engineering" }
     })
-    const report = await checkApp({ url: "http://127.0.0.1:3961", token: await app.devToken(), fetch })
+    const report = await checkApp({ url: "http://127.0.0.1:3961", token: await app.dev!.token(), fetch })
     assert.match(byId(report, "refs.cross").detail!, /sends refs titles for customer/)
   })
 
   test("resolve.foreign fails when the resolver answers for another app", async () => {
     const app = dealsApp()
     const fetch = changedCall(app, "clegra_resolve", (r) => void ((r.structuredContent as { results: { state: string }[] }).results[0]!.state = "gone"))
-    const report = await checkApp({ url: "http://127.0.0.1:3961", token: await app.devToken(), fetch })
+    const report = await checkApp({ url: "http://127.0.0.1:3961", token: await app.dev!.token(), fetch })
     assert.equal(byId(report, "resolve.foreign").ok, false)
   })
 
   test("an app without cross-app references: refs.cross is skipped, resolve.foreign still runs", async () => {
-    const app = defineApp({ name: "solo", title: "S", version: "1", auth, entities: { n: { label: "N", schema: z.object({ id: z.string(), t: z.string().meta({ role: "title" }) }), get: () => null, list: () => ({ rows: [] }) } } })
-    const report = await checkApp({ url: "http://127.0.0.1:3961", token: await app.devToken(), fetch: (r) => app.fetch(r, local) })
+    const n = defineEntity({ name: "n", label: "N", schema: z.object({ id: z.string(), t: z.string().meta({ role: "title" }) }), get: () => null, list: () => ({ rows: [] }) })
+    const app = served(defineApp({ name: "solo", title: "S", version: "1", entities: [n] }))
+    const report = await checkApp({ url: "http://127.0.0.1:3961", token: await app.dev!.token(), fetch: (r) => app.fetch(r, local) })
     assert.ok(report.ok && report.complete, formatReport(report))
     assert.ok(byId(report, "refs.cross").skipped)
     assert.ok(byId(report, "resolve.foreign").ok && !byId(report, "resolve.foreign").skipped)

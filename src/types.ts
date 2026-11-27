@@ -46,13 +46,13 @@ export type Context = {
    */
   notify(notification: Notification): void
   /** The URI of a record of this app. */
-  uri(entity: string | EntityHandle, id: string): string
+  uri(entity: string | EntityRef, id: string): string
   /**
    * Says what this call changed, for hosts to draw again where it is open (spec §5.4 rule 8): an artifact instance's
    * URI (a record's: `ctx.uri("deal", id)`), or an artifact type or entity name (every instance of it). A write on a
    * record and the record a write returns are said without it.
    */
-  changed(...what: (string | EntityHandle)[]): void
+  changed(...what: (string | EntityRef)[]): void
 }
 
 /**
@@ -160,6 +160,9 @@ export type WidgetSize = "small" | "medium" | "large" | "extraLarge"
 
 /** An artifact type offered as a Home widget (spec §5.5): the sizes it may take and the one it starts at. */
 export type WidgetConfig = { sizes?: WidgetSize[]; size?: WidgetSize }
+
+/** An entity named by its handle (`defineEntity`'s) or by name. */
+export type EntityRef = { readonly kind: "entity"; readonly name: string }
 
 /** An entity, as the SDK knows it once defined. */
 export type EntityHandle<S extends z.ZodObject = z.ZodObject> = {

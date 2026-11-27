@@ -9,7 +9,7 @@
 import { execFileSync } from "node:child_process"
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { createRequire } from "node:module"
-import { dirname, join, relative, resolve } from "node:path"
+import { dirname, join, relative, resolve, sep } from "node:path"
 import { fileURLToPath } from "node:url"
 
 const pkg = resolve(dirname(fileURLToPath(import.meta.url)), "..")
@@ -27,8 +27,10 @@ execFileSync(process.execPath, [tsc, "-p", join(pkg, "tsconfig.build.json")], { 
 const walk = (d) => readdirSync(d).flatMap((f) => (statSync(join(d, f)).isDirectory() ? walk(join(d, f)) : [join(d, f)]))
 // `from "./x"`, `import("./x")`, `import "./x"` and `export … from "./x"`, in .js and .d.ts.
 const specifier = /((?:\bfrom|\bimport)\s*\(?\s*["'])(\.{1,2}\/[^"']+?)(["'])/g
+// `clegra init`'s templates are code as text: their imports belong to the files they write, not to the package.
+const TEXT_ONLY = new Set(["dist/spec/src/init/templates.js"])
 for (const file of walk(dist)) {
-  if (!/\.(js|d\.ts)$/.test(file)) continue
+  if (!/\.(js|d\.ts)$/.test(file) || TEXT_ONLY.has(relative(pkg, file).split(sep).join("/"))) continue
   const text = readFileSync(file, "utf8")
   const fixed = text.replace(specifier, (all, a, path, b) => {
     if (/\.(js|json|mjs|cjs)$/.test(path)) return all

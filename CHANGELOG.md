@@ -4,6 +4,52 @@ Clegra apps (spec 1.0 draft) and the `@clegra/sdk` package. Newest first. Versio
 npm dist-tag `next`. Entries below «Two scoped packages» keep the names of their time (the unscoped `clegra` package
 and its `clegra/ui`, the `modelapp` package, docs/map): they are history.
 
+## 0.3.0-next.0 (2026-11-27)
+
+The redesign's second part: the definition apart from its runtime, one file per thing, a core on Web APIs. Breaking,
+with no compatibility path.
+
+- **The definition apart from the runtime** (spec §1): `defineApp(def)` is pure: it checks everything at once and
+  returns the app (`kind: "app"`, `manifest()` as defined, with MCP at `/mcp`, no authorization server and no site;
+  `uri`, `artifactUri`, `parseUri`); nothing is served. `serve(app, { auth, store, people, site, clientOrigins, path,
+  mcp })` is the runtime: those options moved out of `defineApp`. It returns the served app (`fetch`, `manifest()`
+  as hosts read it, `openapi()`, `start()`, `dev`, `runLater`, `site`, `app`).
+- **One file per thing**: `defineEntity`, `defineAction`, `defineArtifact`, `defineComponent`, `definePage` and
+  `defineAgent` take one thing with its `name` and return a handle; things name each other by handle, never by a
+  string. `defineApp` takes lists (`entities: [deal]`, `actions: [...]`, `components`, `artifacts`, `pages`,
+  `agents`, `schedules: [{ name, action, every, maxSeconds? }]`) and refuses a handle that is not one of its own.
+  An action's `on` is an entity handle (its `record` typed from the schema); a record action shown on the record
+  template is `featured: true` (the entity's `record` keeps only `fields`); «+ Nuovo» is the action's `creates:
+  thing | { of, title }` (the entity's and the artifact's `create` are gone); a Home widget is the artifact's
+  `widget: true | { sizes, size }` (`defineApp`'s `widgets` is gone); an artifact's `component` and `actions`, a
+  page's `list`/`record`, `actions` and `badge`, a dashboard item's `{ artifact, params?, size? }` (an entity handle
+  for its record card), `nav` pages and an agent's `uses` are handles. Permissions, settings, kinds and notification
+  types stay maps by id. `ctx.uri` and `ctx.changed` take an entity handle or its name.
+- **The development sign-in is the sign-in module's** (`devSignIn(app, { issuer?, resource?, people?, installation?,
+  code?, clientOrigins? })` of `@clegra/sdk/signin`), replacing `auth.dev` and the SDK's own development
+  authorization server: a dev login of test people with a console code, then the module's consent and tokens (no
+  dynamic registration, no key file: keys in memory); `served.dev.token(…)` signs development tokens (a development
+  workspace host with `host: "workspace"`, the installation-level caller with no person) and
+  `served.dev.confirmation(…)` its confirmation proofs. Their tenants stay `<installation>@clegra-dev`; their
+  audience is the sign-in's `resource` (default `http://localhost:3000/mcp`), never the address a request reached.
+  Refused in production; development tokens count from loopback callers only. Removed: `app.devToken`,
+  `app.devConfirmation`, `AuthOptions.dev`, `DevOptions`, `CLEGRA_DEV_KEY`.
+- **A core on Web APIs**: no module of Node's own in the core (`server`, `auth`, `views`, the store, the sign-in
+  module); `argsHash` is async; `useHostLookup` gives the core the runtime's DNS resolver (the adapters set it;
+  without one a client's host name is refused, never fetched unchecked). `@clegra/sdk/node`: `listen(served)` and
+  `toNodeHandler(served)`; new `@clegra/sdk/express`: `clegraMiddleware(served)` (the app's routes, everything else
+  to the next middleware). `toNextHandlers(served)` no longer refuses the development sign-in (its login works,
+  its development tokens never count there). `testClient(served)`, `installationClient(served)`;
+  `ExportedFile.body` is a `Uint8Array`.
+- **The index as OpenAPI 3.1** (spec §7, «The index as OpenAPI»): `GET <path>/openapi.json`, every operation a plain
+  client may call as `POST <path>/operations/<tool>` (the same caller, checks and results as its MCP tool;
+  `Idempotency-Key`; errors with the status of their code), with `x-clegra-effect`, `x-clegra-confirm`,
+  `x-clegra-entity`, `x-clegra-read`, the pages as `x-clegra-pages`, and the sign-in as its security scheme.
+  `withClegra` and `toNextHandlers` route `/openapi.json` and `/operations/…`.
+- `clegra init` writes a `clegra/` folder (an entity, an action, a page, `app.ts`, `index.ts` with `serve`) and a
+  route over `toNextHandlers(served)`.
+- The examples (CRM, warehouse, shipments) are one file per thing.
+
 ## 0.2.0-next.0 (2026-11-27)
 
 The redesign's first part (apps never use Clegra accounts). Breaking, with no compatibility path.

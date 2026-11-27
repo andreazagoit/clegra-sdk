@@ -1,18 +1,17 @@
 import assert from "node:assert/strict"
-import { randomUUID } from "node:crypto"
 import { describe, it } from "node:test"
 
 import { META_KEY } from "@clegra/sdk"
 import { checkApp, formatReport } from "@clegra/sdk/spec"
 import { installationClient, testClient } from "@clegra/sdk/testing"
 
-import { defineShipmentsApp } from "../src/app"
 import { shipmentsAuth } from "../src/auth"
-import { createCourier, createShipmentsApp, devTenant, PERMISSIONS, SHIPMENTS_INSTALLATION, SHIPMENTS_PEOPLE, SHIPMENTS_SETTINGS, SHIPMENTS_URL, shipmentsManifest } from "../src/fixture"
+import { createCourier, createShipmentsApp, devTenant, PERMISSIONS, SHIPMENTS_INSTALLATION, SHIPMENTS_PEOPLE, SHIPMENTS_SETTINGS, SHIPMENTS_URL, shipmentsApp, shipmentsManifest } from "../src/fixture"
+import { serveShipments } from "../src/serve"
 
 /**
- * THE SHIPMENTS APP IN-PROCESS: `app.fetch` with the SDK's dev authority, data
- * and write store in memory. No port, no network.
+ * THE SHIPMENTS APP IN-PROCESS: `served.fetch` with the SDK's development sign-in,
+ * data and write store in memory. No port, no network.
  */
 
 type Rows = { rows: Record<string, unknown>[]; total?: number; next?: string }
@@ -26,9 +25,9 @@ const fresh = () => {
 const ALL = Object.keys(PERMISSIONS)
 
 /** A confirmed write as a workspace host makes it: call id, proof, and the installation's settings. */
-async function confirmed(app: ReturnType<typeof createShipmentsApp>, person: string, installation: string, tool: string, args: Record<string, unknown>, call = randomUUID()) {
+async function confirmed(app: ReturnType<typeof createShipmentsApp>, person: string, installation: string, tool: string, args: Record<string, unknown>, call = crypto.randomUUID()) {
   const client = await testClient(app, { person, permissions: person === "ada" ? "all" : SHIPMENTS_PEOPLE.find((p) => p.id === person)!.permissions, host: "workspace", installation })
-  const confirmation = await app.devConfirmation({ tool, args, call, person, installation })
+  const confirmation = await app.dev!.confirmation({ tool, args, call, person, installation })
   return client.call(tool, args, { [META_KEY]: { call, confirmation, settings: SHIPMENTS_SETTINGS } })
 }
 
@@ -113,8 +112,9 @@ describe("the manifest", () => {
 
 describe("conformance", () => {
   it("passes the conformance checks, in-process", async () => {
-    const { app } = fresh()
-    const token = await app.devToken({ person: "ada", permissions: "all", installation: "conformance" })
+    // The development sign-in's issuer is the address the checks reach the app at: its tokens are for that MCP address.
+    const app = createShipmentsApp({ courier: createCourier(), issuer: "http://127.0.0.1:4319" })
+    const token = await app.dev!.token({ person: "ada", permissions: "all", installation: "conformance" })
     const report = await checkApp({ url: "http://127.0.0.1:4319", token, fetch: (request: Request) => app.fetch(request, { remoteAddress: "127.0.0.1" }) })
     assert.ok(report.ok && report.complete, formatReport(report))
     const skipped = report.checks.filter((c) => c.skipped).map((c) => c.id)
@@ -165,7 +165,7 @@ describe("pickups, each confirmed by the person", () => {
     const { app, courier } = fresh()
     const workspace = await testClient(app, { person: "ada", permissions: "all", host: "workspace", installation: "pickups" })
     assert.equal(errorOf(await workspace.call("book_pickup", { date: "2030-01-15", parcels: 3 }))?.code, "confirmation_required")
-    const call = randomUUID()
+    const call = crypto.randomUUID()
     const made = await confirmed(app, "ada", "pickups", "book_pickup", { date: "2030-01-15", parcels: 3, note: "Ring at the back door" }, call)
     assert.equal(made.isError, undefined, JSON.stringify(made))
     const again = await confirmed(app, "ada", "pickups", "book_pickup", { date: "2030-01-15", parcels: 3, note: "Ring at the back door" }, call)
@@ -185,8 +185,8 @@ describe("pickups, each confirmed by the person", () => {
     assert.deepEqual([errorOf(past)?.code, Object.keys(errorOf(past)?.fields ?? {})], ["invalid_input", ["date"]])
     const client = await testClient(app, { person: "ada", permissions: "all", host: "workspace", installation: "refusals" })
     const args = { date: "2030-01-15", parcels: 1 }
-    const call = randomUUID()
-    const noDepot = await client.call("book_pickup", args, { [META_KEY]: { call, confirmation: await app.devConfirmation({ tool: "book_pickup", args, call, person: "ada", installation: "refusals" }) } })
+    const call = crypto.randomUUID()
+    const noDepot = await client.call("book_pickup", args, { [META_KEY]: { call, confirmation: await app.dev!.confirmation({ tool: "book_pickup", args, call, person: "ada", installation: "refusals" }) } })
     assert.match(errorOf(noDepot)?.message ?? "", /depot is not set/)
     const booked = await confirmed(app, "ada", "refusals", "book_pickup", args)
     assert.equal(booked.isError, undefined, JSON.stringify(booked))
@@ -260,7 +260,7 @@ describe("the lifecycle", () => {
     const host = await installationClient(app, { installation: "leaving" })
     const { file } = await host.exportData()
     assert.ok(file)
-    const data = JSON.parse(file.body.toString("utf8")) as { shipments: unknown[]; pickups: { id: string }[]; people: Record<string, string> }
+    const data = JSON.parse(new TextDecoder().decode(file.body)) as { shipments: unknown[]; pickups: { id: string }[]; people: Record<string, string> }
     assert.deepEqual([data.shipments.length, data.pickups.map((p) => p.id), data.people], [5, ["PK1", "PK2"], { ada: "Ada Rossi" }])
     assert.deepEqual(((await host.call("clegra_delete", {})).structuredContent as { counts: Record<string, number> }).counts, { shipments: 5, pickups: 2 })
     assert.deepEqual(((await host.call("clegra_delete", {})).structuredContent as { counts: Record<string, number> }).counts, { shipments: 0, pickups: 0 })
@@ -272,14 +272,14 @@ describe("the lifecycle", () => {
 
 describe("who may call", () => {
   it("one public address: the MCP server and the app's own sign-in (its issuer); the courier's accounts sign in and link any client", async () => {
-    const shell = createShipmentsApp()
+    const shell = shipmentsApp
     const { auth, login, signIn } = shipmentsAuth(shell, { SHIPMENTS_PUBLIC_URL: "https://shipments.example.com/", CLEGRA_CLIENT_ORIGINS: "https://app.clegra.test" })
     assert.deepEqual([auth.resource, signIn.issuer, signIn.authorizationServers], ["https://shipments.example.com/mcp", "https://shipments.example.com", ["https://shipments.example.com"]])
     assert.throws(() => shipmentsAuth(shell, {}), /SHIPMENTS_PUBLIC_URL is not set/)
     assert.throws(() => shipmentsAuth(shell, { SHIPMENTS_PUBLIC_URL: "https://s.example.com?x=1" }), /must be an origin/)
     assert.throws(() => shipmentsAuth(shell, { SHIPMENTS_PUBLIC_URL: "https://s.example.com/app" }), /must be an origin/)
     // A customer's person with a personal key the app issued: their company's shipments only.
-    const app = defineShipmentsApp({ auth })
+    const app = serveShipments({ auth })
     const ada = await login.accounts.create({ email: "ada@acme.example", name: "Ada", password: "a long test password", installation: SHIPMENTS_INSTALLATION, permissions: ["shipments.view"] })
     const { key } = await signIn.keys.create(ada, { name: "Test" })
     const c = await testClient(app, { token: key, remoteAddress: "203.0.113.9" })
