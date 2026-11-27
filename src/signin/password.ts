@@ -1,16 +1,17 @@
 /**
  * A ready-made login for an app that has none: accounts with an email and a password (PBKDF2-SHA256), made by the
  * app (its administrator's screen, a command), and the app's own sign-in page at `/signin`. The session is a random
- * token in a frame-ready cookie (`frameCookie`), kept as a hash. It is the `login` of `createSignIn`, and the app's
- * pages read the same session (`login.session(request)`).
+ * token in a frame-ready cookie (`frameCookie`), kept as a hash. It is the `login` of `createSignIn` (with `active`), and
+ * the app's pages read the same session (`login.session(request)`). The sign-in page is never framed (ACC-4).
  */
 import { frameCookie, frameCookieName, readCookie } from "./cookies"
 import { hashPassword, PASSWORD_ITERATIONS, randomToken, sha256, verifyPassword } from "../crypto"
 import { escapeHtml, hidden, page, pageLocale, textsOf } from "./pages"
-import type { Login, SignInAccount } from "./module"
+import type { Person } from "../define"
+import type { Login } from "./module"
 import type { SignInStore } from "./store"
 
-export type PasswordAccount = SignInAccount & { email: string; permissions: readonly string[] | "all"; disabled?: boolean }
+export type PasswordAccount = Person & { email: string; disabled?: boolean }
 
 export type PasswordLoginOptions = {
   store: SignInStore
@@ -24,20 +25,18 @@ export type PasswordLoginOptions = {
   sessionDays?: number
   /** PBKDF2 iterations (default 600 000; lower only in tests). */
   iterations?: number
-  /** Who may frame the sign-in page (the client origins of `createSignIn`). */
-  frameAncestors?: string[]
 }
 
 export type PasswordLogin = Login & {
   accounts: {
-    create(input: { email: string; name: string; password: string; installation: string; permissions: readonly string[] | "all" }): Promise<PasswordAccount>
-    update(id: string, input: Partial<{ name: string; password: string; permissions: readonly string[] | "all"; disabled: boolean }>): Promise<PasswordAccount | null>
+    create(input: { email: string; name: string; password: string; tenant?: string }): Promise<PasswordAccount>
+    update(id: string, input: Partial<{ name: string; password: string; disabled: boolean }>): Promise<PasswordAccount | null>
     remove(id: string): Promise<boolean>
-    list(installation: string): Promise<PasswordAccount[]>
+    list(tenant?: string): Promise<PasswordAccount[]>
     get(id: string): Promise<PasswordAccount | null>
   }
-  /** The account's permissions now, or null when it was removed or disabled: give it to `createSignIn`'s `permissionsOf`. */
-  permissionsOf(account: SignInAccount): Promise<readonly string[] | "all" | null>
+  /** Whether the account still exists and is not disabled: give it to `createSignIn`'s `active`. */
+  active(person: Person): Promise<boolean>
 }
 
 const COOKIE = "app_session"
@@ -53,21 +52,20 @@ export function passwordLogin(options: PasswordLoginOptions): PasswordLogin {
   const sessionMs = (options.sessionDays ?? 7) * 24 * 3600_000
   const iterations = options.iterations ?? PASSWORD_ITERATIONS
   const locale = options.locale ?? "en"
-  const frames = options.frameAncestors ?? []
   const emailKey = (email: string) => `account-email:${email.trim().toLowerCase()}`
   const public_ = ({ hash: _h, ...a }: StoredAccount): PasswordAccount => a
 
   const byId = async (id: string) => (await store.get(`account:${id}`)) as StoredAccount | null
   const safeReturn = (value: string | null) => (value && value.startsWith("/") && !value.startsWith("//") && !value.includes("\\") ? value : "/")
 
-  async function session(request: Request): Promise<SignInAccount | null> {
+  async function session(request: Request): Promise<Person | null> {
     const token = readCookie(request, frameCookieName(COOKIE, secure))
     if (!token) return null
     const s = (await store.get(`session:${await sha256(token)}`)) as { account: string } | null
     if (!s) return null
     const a = await byId(s.account)
     if (!a || a.disabled) return null
-    return { id: a.id, name: a.name, email: a.email, installation: a.installation }
+    return { id: a.id, name: a.name, email: a.email, ...(a.tenant ? { tenant: a.tenant } : {}) }
   }
 
   function signInPage(request: Request, returnTo: string, error = "", status = 200) {
@@ -78,7 +76,7 @@ export function passwordLogin(options: PasswordLoginOptions): PasswordLogin {
       title: t.signInTitle(appTitle),
       locale: l,
       status,
-      frameAncestors: frames,
+      frameAncestors: [],
       body: `<h1>${escapeHtml(t.signInTitle(appTitle))}</h1>${error ? `<p class="e">${escapeHtml(error)}</p>` : ""}
 <form method="post" action="${escapeHtml(path)}">${hidden({ return: returnTo })}
 <label for="email">${escapeHtml(t.email)}</label><input id="email" name="email" type="email" autocomplete="username" required autofocus>
@@ -131,17 +129,17 @@ export function passwordLogin(options: PasswordLoginOptions): PasswordLogin {
         if (!/^[^\s@]+@[^\s@]+$/.test(email)) throw new Error("not an email address")
         checkPassword(input.password)
         if (await store.get(emailKey(email))) throw new Error("an account with this email exists")
-        const account: StoredAccount = { id: randomToken(12), email, name: input.name.trim() || email, installation: input.installation, permissions: input.permissions, hash: await hashPassword(input.password, iterations) }
+        const account: StoredAccount = { id: randomToken(12), email, name: input.name.trim() || email, ...(input.tenant ? { tenant: input.tenant } : {}), hash: await hashPassword(input.password, iterations) }
         await store.set(`account:${account.id}`, account, null)
         await store.set(emailKey(email), account.id, null)
-        await store.set(`account-in:${encodeURIComponent(account.installation)}:${account.id}`, account.id, null)
+        await store.set(`account-in:${encodeURIComponent(account.tenant ?? "")}:${account.id}`, account.id, null)
         return public_(account)
       },
       async update(id, input) {
         const a = await byId(id)
         if (!a) return null
         if (input.password !== undefined) checkPassword(input.password)
-        const next: StoredAccount = { ...a, ...(input.name !== undefined ? { name: input.name } : {}), ...(input.permissions !== undefined ? { permissions: input.permissions } : {}), ...(input.disabled !== undefined ? { disabled: input.disabled } : {}), ...(input.password !== undefined ? { hash: await hashPassword(input.password, iterations) } : {}) }
+        const next: StoredAccount = { ...a, ...(input.name !== undefined ? { name: input.name } : {}), ...(input.disabled !== undefined ? { disabled: input.disabled } : {}), ...(input.password !== undefined ? { hash: await hashPassword(input.password, iterations) } : {}) }
         await store.set(`account:${id}`, next, null)
         return public_(next)
       },
@@ -150,12 +148,12 @@ export function passwordLogin(options: PasswordLoginOptions): PasswordLogin {
         if (!a) return false
         await store.delete(`account:${id}`)
         await store.delete(emailKey(a.email))
-        await store.delete(`account-in:${encodeURIComponent(a.installation)}:${id}`)
+        await store.delete(`account-in:${encodeURIComponent(a.tenant ?? "")}:${id}`)
         return true
       },
-      async list(installation) {
+      async list(tenant) {
         const out: PasswordAccount[] = []
-        for (const { value } of await store.list(`account-in:${encodeURIComponent(installation)}:`)) {
+        for (const { value } of await store.list(`account-in:${encodeURIComponent(tenant ?? "")}:`)) {
           const a = await byId(String(value))
           if (a) out.push(public_(a))
         }
@@ -166,10 +164,9 @@ export function passwordLogin(options: PasswordLoginOptions): PasswordLogin {
         return a ? public_(a) : null
       },
     },
-    async permissionsOf(account) {
-      const a = await byId(account.id)
-      if (!a || a.disabled || a.installation !== account.installation) return null
-      return a.permissions
+    async active(person) {
+      const a = await byId(person.id)
+      return Boolean(a && !a.disabled && (a.tenant ?? "") === (person.tenant ?? ""))
     },
   }
 }

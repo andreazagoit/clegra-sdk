@@ -16,9 +16,9 @@ const pkg = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const dist = join(pkg, "dist")
 
 /** Files copied as they are: read at run time by path relative to the built module, or exported as data. */
-export const ASSETS = ["spec/schema/clegra.schema.json", "spec/kinds.json"]
+export const ASSETS = []
 /** The CLI, built. */
-export const CLI = "dist/spec/src/cli.js"
+export const CLI = "dist/src/cli/index.js"
 
 rmSync(dist, { recursive: true, force: true })
 const tsc = createRequire(join(pkg, "package.json")).resolve("typescript/bin/tsc")
@@ -28,7 +28,7 @@ const walk = (d) => readdirSync(d).flatMap((f) => (statSync(join(d, f)).isDirect
 // `from "./x"`, `import("./x")`, `import "./x"` and `export … from "./x"`, in .js and .d.ts.
 const specifier = /((?:\bfrom|\bimport)\s*\(?\s*["'])(\.{1,2}\/[^"']+?)(["'])/g
 // `clegra init`'s templates are code as text: their imports belong to the files they write, not to the package.
-const TEXT_ONLY = new Set(["dist/spec/src/init/templates.js"])
+const TEXT_ONLY = new Set(["dist/src/cli/init/templates.js"])
 for (const file of walk(dist)) {
   if (!/\.(js|d\.ts)$/.test(file) || TEXT_ONLY.has(relative(pkg, file).split(sep).join("/"))) continue
   const text = readFileSync(file, "utf8")

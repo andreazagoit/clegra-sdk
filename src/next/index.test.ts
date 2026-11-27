@@ -2,20 +2,17 @@ import assert from "node:assert/strict"
 import { afterEach, describe, test } from "node:test"
 import { z } from "zod"
 
-import { defineApp, defineEntity, MANIFEST_PATH, serve, SITE_BRIDGE_PATH, VIEWS_PATH, type ServedApp } from "../index"
-import { devSignIn } from "../signin"
+import { defineApp, defineEntity, serve, type ServedApp } from "../index"
 import type { NextConfig } from "next"
 
-import { clegraRewrites, toNextHandlers, withClegra } from "./index"
+import { clegraRewrites, recordProxy, toNextHandlers, withClegra } from "./index"
 
 // A stand-in app that records what reaches app.fetch.
 function recorder(respond?: (request: Request) => Response | Promise<Response>) {
-  const seen: { url: string; headers: Headers; method: string; body: string | null; remoteAddress: unknown }[] = []
+  const seen: { url: string; headers: Headers; method: string; body: string | null }[] = []
   const app = {
-    devMode: false,
-    manifest: () => ({ mcp: { url: "/mcp" } }),
-    fetch: async (request: Request, info: { remoteAddress?: string | null } = {}) => {
-      seen.push({ url: request.url, headers: request.headers, method: request.method, body: request.body ? await request.clone().text() : null, remoteAddress: info.remoteAddress })
+    fetch: async (request: Request) => {
+      seen.push({ url: request.url, headers: request.headers, method: request.method, body: request.body ? await request.clone().text() : null })
       return respond ? respond(request) : Response.json({ ok: true })
     },
   } as unknown as ServedApp
@@ -37,26 +34,21 @@ describe("toNextHandlers: the public address", () => {
     await GET(new Request("http://localhost:3000/api/clegra/.well-known/oauth-protected-resource/mcp?x=1"))
     await GET(new Request("http://localhost:3000/api/clegra"))
     await POST(new Request("http://localhost:3000/mcp", { method: "POST", body: "{}" }))
-    await GET(new Request("http://localhost:3000/.well-known/clegra.json"))
+    await GET(new Request("http://localhost:3000/notes/7", { headers: { authorization: "Bearer t" } }))
     assert.deepEqual(
       seen.map((s) => s.url),
-      ["http://localhost:3000/mcp", "http://localhost:3000/.well-known/oauth-protected-resource/mcp?x=1", "http://localhost:3000/", "http://localhost:3000/mcp", "http://localhost:3000/.well-known/clegra.json"],
+      ["http://localhost:3000/mcp", "http://localhost:3000/.well-known/oauth-protected-resource/mcp?x=1", "http://localhost:3000/", "http://localhost:3000/mcp", "http://localhost:3000/notes/7"],
     )
   })
 
-  test("a custom mount; a path outside it and outside the rewrites is a clear 500, not a guess", async () => {
+  test("a custom mount", async () => {
     delete process.env.CLEGRA_PUBLIC_URL
     const { app, seen } = recorder()
-    const { GET } = toNextHandlers(app, { mount: "/api/map/" })
-    await GET(new Request("http://localhost/api/map/health"))
+    await toNextHandlers(app, { mount: "/api/map/" }).GET(new Request("http://localhost/api/map/health"))
     assert.equal(seen[0]?.url, "http://localhost/health")
-    const wrong = await GET(new Request("http://localhost/api/clegra/mcp"))
-    assert.equal(wrong.status, 500)
-    assert.match(((await wrong.json()) as { error_description: string }).error_description, /mount is \/api\/map/)
-    assert.equal(seen.length, 1)
   })
 
-  test("publicUrl replaces the origin and the forwarded headers the core reads", async () => {
+  test("publicUrl replaces the origin and the forwarded headers", async () => {
     const { app, seen } = recorder()
     const { POST } = toNextHandlers(app, { publicUrl: "https://crm.example.test" })
     await POST(new Request("http://10.0.0.5:3000/api/clegra/mcp", { method: "POST", body: "{}", headers: { "x-forwarded-host": "evil.example", "x-forwarded-proto": "http" } }))
@@ -76,14 +68,6 @@ describe("toNextHandlers: the public address", () => {
     assert.equal(b.seen[0]?.url, "https://option.example.test/health")
   })
 
-  test("without publicUrl the forwarded headers reach the core untouched (it derives the origin from them)", async () => {
-    delete process.env.CLEGRA_PUBLIC_URL
-    const { app, seen } = recorder()
-    await toNextHandlers(app).GET(new Request("http://localhost:3000/api/clegra/health", { headers: { "x-forwarded-host": "crm.example.test", "x-forwarded-proto": "https" } }))
-    assert.equal(seen[0]?.headers.get("x-forwarded-host"), "crm.example.test")
-    assert.equal(seen[0]?.headers.get("x-forwarded-proto"), "https")
-  })
-
   test("a publicUrl that is not an origin is refused at start", () => {
     const { app } = recorder()
     for (const bad of ["crm.example.test", "https://crm.example.test/app", "https://crm.example.test/?a=1", "ftp://crm.example.test", "https://user:pw@crm.example.test"]) {
@@ -94,21 +78,15 @@ describe("toNextHandlers: the public address", () => {
     assert.throws(() => toNextHandlers(app, { mount: "api" }), /mount/)
   })
 
-  test("the body, method and query pass through; the peer address is never claimed (null)", async () => {
+  test("the body, method and query pass through", async () => {
     delete process.env.CLEGRA_PUBLIC_URL
     const { app, seen } = recorder()
     const handlers = toNextHandlers(app)
-    await handlers.POST(new Request("http://localhost/api/clegra/mcp?a=b", { method: "POST", body: JSON.stringify({ jsonrpc: "2.0", id: 1 }), headers: { "x-forwarded-for": "127.0.0.1" } }))
+    await handlers.POST(new Request("http://localhost/api/clegra/mcp?a=b", { method: "POST", body: JSON.stringify({ jsonrpc: "2.0", id: 1 }) }))
     await handlers.DELETE(new Request("http://localhost/api/clegra/mcp", { method: "DELETE" }))
     await handlers.OPTIONS(new Request("http://localhost/api/clegra/mcp", { method: "OPTIONS" }))
-    assert.deepEqual(
-      seen.map((s) => [s.method, s.body, s.remoteAddress]),
-      [
-        ["POST", '{"jsonrpc":"2.0","id":1}', null],
-        ["DELETE", null, null],
-        ["OPTIONS", null, null],
-      ],
-    )
+    assert.deepEqual(seen.map((s) => [s.method, s.body]), [["POST", '{"jsonrpc":"2.0","id":1}'], ["DELETE", null], ["OPTIONS", null]])
+    assert.equal(seen[0]?.url, "http://localhost/mcp?a=b")
   })
 
   test("an SSE stream passes through chunk by chunk, never buffered", async () => {
@@ -133,43 +111,56 @@ describe("toNextHandlers: the public address", () => {
     assert.equal(response.headers.get("cache-control"), "no-cache, no-transform")
     assert.equal(response.headers.get("x-accel-buffering"), "no")
     const reader = response.body!.getReader()
-    // The first event arrives while the producer is still waiting: nothing held it back.
     assert.equal(new TextDecoder().decode((await reader.read()).value), "data: first\n\n")
     release()
     assert.equal(new TextDecoder().decode((await reader.read()).value), "data: second\n\n")
     assert.equal((await reader.read()).done, true)
   })
-
-  test("the development sign-in: its login works, its development tokens never count (no peer address); an app with its own `path` is refused", async () => {
-    const empty = defineApp({ name: "dev-app", title: "Dev", version: "1.0.0", entities: [] })
-    const served = serve(empty, { auth: { signIn: devSignIn(empty) } })
-    const handlers = toNextHandlers(served, { publicUrl: "http://localhost:3000" })
-    assert.equal((await handlers.GET(new Request("http://localhost:3000/oauth/dev-login"))).status, 200)
-    const token = await served.dev!.token()
-    const call = await handlers.POST(new Request("http://localhost:3000/mcp", { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }) }))
-    assert.equal(call.status, 401)
-    const pathed = serve(empty, { path: "/api/clegra" })
-    assert.throws(() => toNextHandlers(pathed), /leave serve's `path` unset/)
-  })
 })
 
 describe("toNextHandlers with a real app", () => {
-  const note = defineEntity({ name: "note", label: "Note", schema: z.object({ id: z.string(), title: z.string().meta({ role: "title" }) }), get: () => null, list: () => ({ rows: [] }) })
-  const app = serve(defineApp({ name: "real", title: "Real", version: "1.0.0", entities: [note] }), {
-    auth: { resource: "https://crm.example.test/mcp", authorizationServers: ["https://crm.example.test/api/auth"], resolve: () => null },
+  const note = defineEntity({ name: "note", title: "Note", path: "/notes/{id}", schema: z.object({ id: z.string(), title: z.string() }), card: { title: "title" }, get: ({ id }) => ({ id: id!, title: "Hello" }) })
+  const app = defineApp({ name: "real", title: "Real", description: "Real", version: "1.0.0", entities: [note] })
+  const served = serve(app, {
+    origin: "https://crm.example.test",
+    auth: { authorizationServers: ["https://crm.example.test/api/auth"], verify: (token) => (token === "good" ? { id: "g1", clientId: "https://client.example/c.json", person: { id: "p1", name: "Ada" }, scopes: ["web.read"] } : null) },
   })
-  const handlers = toNextHandlers(app, { publicUrl: "https://crm.example.test" })
+  const handlers = toNextHandlers(served, { publicUrl: "https://crm.example.test" })
 
-  test("manifest, protected-resource metadata and the 401 challenge at the public address", async () => {
-    const manifest = await handlers.GET(new Request("http://localhost/.well-known/clegra.json"))
-    assert.equal(manifest.status, 200)
-    assert.equal(((await manifest.json()) as { mcp: { url: string } }).mcp.url, "/mcp")
+  test("server card, AI Catalog, protected-resource metadata and the 401 challenge at the public address", async () => {
+    const card = await handlers.GET(new Request("http://localhost/api/clegra/mcp/server-card"))
+    assert.equal(card.headers.get("content-type"), "application/mcp-server-card+json")
+    assert.deepEqual(((await card.json()) as { remotes: unknown }).remotes, [{ type: "streamable-http", url: "https://crm.example.test/mcp" }])
+    const catalog = (await (await handlers.GET(new Request("http://localhost/.well-known/ai-catalog.json"))).json()) as { mcpServers: { remote: string }[] }
+    assert.equal(catalog.mcpServers[0]?.remote, "https://crm.example.test/mcp")
     const prm = (await (await handlers.GET(new Request("http://localhost/api/clegra/.well-known/oauth-protected-resource/mcp"))).json()) as { resource: string; authorization_servers: string[] }
-    assert.deepEqual(prm.resource, "https://crm.example.test/mcp")
+    assert.equal(prm.resource, "https://crm.example.test/mcp")
     assert.deepEqual(prm.authorization_servers, ["https://crm.example.test/api/auth"])
     const denied = await handlers.POST(new Request("http://localhost/mcp", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }))
     assert.equal(denied.status, 401)
     assert.match(denied.headers.get("www-authenticate") ?? "", /resource_metadata="https:\/\/crm\.example\.test\/\.well-known\/oauth-protected-resource\/mcp"/)
+  })
+
+  test("a record URL read with a bearer token (as recordProxy rewrites it) answers its JSON", async () => {
+    const ok = await handlers.GET(new Request("http://localhost/notes/3", { headers: { authorization: "Bearer good" } }))
+    assert.equal(ok.status, 200)
+    assert.deepEqual(await ok.json(), { id: "3", title: "Hello" })
+    assert.equal((await handlers.GET(new Request("http://localhost/notes/3", { headers: { authorization: "Bearer bad" } }))).status, 401)
+  })
+})
+
+describe("recordProxy", () => {
+  test("a GET with a bearer (or DPoP) token goes to the mount; without one it goes on to the page", async () => {
+    const proxy = recordProxy()
+    const bearer = await proxy(new Request("http://localhost/notes/3?x=1", { headers: { authorization: "Bearer t" } }))
+    assert.equal(bearer.headers.get("x-middleware-rewrite"), "http://localhost/api/clegra/notes/3?x=1")
+    const dpop = await recordProxy({ mount: "/api/map" })(new Request("http://localhost/notes/3", { headers: { authorization: "DPoP t" } }))
+    assert.equal(dpop.headers.get("x-middleware-rewrite"), "http://localhost/api/map/notes/3")
+    const page = await proxy(new Request("http://localhost/notes/3", { headers: { cookie: "s=1" } }))
+    assert.equal(page.headers.get("x-middleware-rewrite"), null)
+    assert.equal(page.headers.get("x-middleware-next"), "1")
+    const post = await proxy(new Request("http://localhost/notes/3", { method: "POST", headers: { authorization: "Bearer t" } }))
+    assert.equal(post.headers.get("x-middleware-rewrite"), null)
   })
 })
 
@@ -179,19 +170,13 @@ describe("withClegra: rewrites and config", () => {
   const ours = clegraRewrites()
   const theirs = { source: "/old", destination: "/new" }
 
-  test("the rewrites: /mcp, the manifest, views, the site's bridge, the sign-in module, every OAuth metadata path to the mount", () => {
-    assert.deepEqual(ours, [
-      { source: "/mcp", destination: "/api/clegra/mcp" },
-      { source: MANIFEST_PATH, destination: `/api/clegra${MANIFEST_PATH}` },
-      { source: "/openapi.json", destination: "/api/clegra/openapi.json" },
-      { source: "/operations/:path*", destination: "/api/clegra/operations/:path*" },
-      { source: `${VIEWS_PATH}/:path*`, destination: `/api/clegra${VIEWS_PATH}/:path*` },
-      { source: SITE_BRIDGE_PATH, destination: `/api/clegra${SITE_BRIDGE_PATH}` },
-      { source: "/oauth/:path*", destination: "/api/clegra/oauth/:path*" },
-      { source: "/.well-known/oauth-protected-resource/:path*", destination: "/api/clegra/.well-known/oauth-protected-resource/:path*" },
-      { source: "/.well-known/oauth-authorization-server/:path*", destination: "/api/clegra/.well-known/oauth-authorization-server/:path*" },
-      { source: "/.well-known/openid-configuration/:path*", destination: "/api/clegra/.well-known/openid-configuration/:path*" },
-    ])
+  test("the rewrites: MCP and its card, the AI Catalog, the OAuth metadata, the sign-in, the confirmation and session-transfer pages, the access log, to the mount", () => {
+    assert.deepEqual(
+      ours.map((r) => r.source),
+      ["/mcp", "/mcp/server-card", "/.well-known/ai-catalog.json", "/.well-known/oauth-protected-resource/:path*", "/.well-known/oauth-authorization-server/:path*", "/.well-known/openid-configuration/:path*", "/oauth/:path*", "/session-transfer/:path*", "/confirm/:path*", "/access/log"],
+    )
+    for (const r of ours) assert.equal(r.destination, `/api/clegra${r.source}`)
+    assert.deepEqual(clegraRewrites({ signInPath: "/signin" }).slice(-2).map((r) => r.source), ["/signin", "/signin/out"])
     assert.equal(clegraRewrites({ mount: "/api/map" })[0]?.destination, "/api/map/mcp")
   })
 

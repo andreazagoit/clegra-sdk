@@ -1,10 +1,7 @@
 import { lookup } from "node:dns/promises"
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 
-import { PROTOCOL_ID } from "../spec/src/protocol"
-
-import { isLoopback } from "./auth"
-import type { ServedApp } from "./define"
+import type { ServedApp } from "./server"
 import { useHostLookup } from "./platform"
 
 /**
@@ -26,15 +23,16 @@ export type NodeHandlerOptions = {
 export function toNodeHandler(served: ServedApp): (req: IncomingMessage, res: ServerResponse, next?: (error?: unknown) => void) => Promise<void> {
   return async (req, res, next) => {
     try {
-      const response = await served.fetch(await toRequest(req), { remoteAddress: req.socket.remoteAddress ?? null })
-      if (next && response.status === 404 && response.headers.get("x-clegra-route") === "none") {
-        await response.body?.cancel()
-        return next()
+      const response = await served.handle(await toRequest(req))
+      if (!response) {
+        if (next) return next()
+        res.writeHead(404, { "content-type": "text/plain" }).end("Not found")
+        return
       }
       await writeResponse(res, response)
     } catch (error) {
       if (next) return next(error)
-      console.error(`[${PROTOCOL_ID} http]`, error)
+      console.error(`[${served.app.name} http]`, error)
       if (!res.headersSent) res.writeHead(500).end()
       else res.end()
     }
@@ -44,8 +42,6 @@ export function toNodeHandler(served: ServedApp): (req: IncomingMessage, res: Se
 export async function listen(served: ServedApp, options: { port?: number; host?: string; log?: boolean } = {}): Promise<{ url: string; close: () => Promise<void> }> {
   const port = options.port ?? 3000
   const host = options.host ?? "127.0.0.1"
-  if (served.devMode && !isLoopback(host)) throw new Error(`the development sign-in (devSignIn) works only on a loopback address, not ${host}`)
-  const { devCode } = await served.start()
   const handle = toNodeHandler(served)
   const http = createServer(async (req, res) => {
     const started = Date.now()
@@ -58,9 +54,7 @@ export async function listen(served: ServedApp, options: { port?: number; host?:
   })
   const address = http.address()
   const url = `http://${host}:${typeof address === "object" && address ? address.port : port}`
-  const base = served.manifest().mcp.url
-  console.log(`${served.name} — MCP ${url}${base} · manifest ${url}/.well-known/clegra.json · OpenAPI ${url}${base.replace(/\/mcp$/, "")}/openapi.json`)
-  if (devCode) console.log(`DEVELOPMENT SIGN-IN ON (never in production) — code: ${devCode}`)
+  if (options.log !== false) console.log(`${served.app.name} on ${url}: MCP ${served.mcpUrl()}`)
   return { url, close: () => new Promise((resolve) => http.close(() => resolve())) }
 }
 

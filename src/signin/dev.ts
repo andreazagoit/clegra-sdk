@@ -1,120 +1,80 @@
 /**
- * THE SIGN-IN MODULE IN DEVELOPMENT (`devSignIn`, spec §7 «Development»): the sign-in module over a login of test
- * people, with what development and tests need beside it:
+ * THE SIGN-IN MODULE IN DEVELOPMENT (`devSignIn`): the sign-in module over a login of test people, with what
+ * development and tests need beside it:
  *
  * - **the dev login**: a page listing the test people that asks for a one-time code printed on the app's console (five
- *   wrong codes close it until the app restarts). Real MCP clients (Claude, ChatGPT, an inspector) link through the
- *   module's own OAuth flow, consent included, exactly as in production;
- * - **development tokens** (`dev.token`): an access token naming any person, permissions, installation and language,
- *   and optionally standing in for a **development workspace host** (`host: "workspace"`): such a host confirms writes
- *   with a signed proof (`dev.confirmation`, `clegra-confirm+jwt`) and calls the installation-level tools (schedules,
- *   later runs, the lifecycle) with no person. No production host has such tokens.
+ *   wrong codes close it until the app restarts). Real MCP clients link through the module's own OAuth flow, consent
+ *   included, exactly as in production;
+ * - **development tokens** (`dev.token`): an access token for a test person with the scopes a test needs, accepted by
+ *   `verify` for requests to a loopback address only.
  *
- * Refused when NODE_ENV is `production`; its development tokens count only from callers on a loopback address (the
- * server checks it), its keys live in memory (everyone is signed out at restart). Web APIs only.
+ * Refused when NODE_ENV is `production`; its keys live in memory (everyone is signed out at restart). Web APIs only.
  */
 import { decodeJwt, decodeProtectedHeader, exportJWK, generateKeyPair, jwtVerify, SignJWT, type CryptoKey, type JWTPayload } from "jose"
 
-import { CONFIRMATION_TYPE, TOKEN_CLAIM } from "../../spec/src/protocol"
-import { argsHash, AuthError, INSTALLATION, type ClientMetadataTransport, type Person } from "../auth"
+import { ALL_SCOPES } from "../access"
+import type { App } from "../app"
+import { AuthError, isLoopback, type ClientMetadataTransport } from "../auth"
 import { randomToken, sameText, sha256 } from "../crypto"
+import type { Person } from "../define"
 import { isProduction } from "../env"
 import { frameCookie, frameCookieName, readCookie } from "./cookies"
-import { buildSignIn, type Login, type SignIn, type SignInAccount, type SignInApp } from "./module"
+import { buildSignIn, type Login, type SignIn } from "./module"
 import { escapeHtml, hidden, page, pageLocale, textsOf } from "./pages"
 import { MemorySignInStore } from "./store"
 
-/** The issuer of development tokens and proofs, and the suffix of their tenants (`<installation>@clegra-dev`). */
+/** The issuer of development tokens. */
 export const DEV_ISSUER = "clegra-dev"
-/** How long a development workspace host's token lives: it is for one request. */
-export const HOST_TOKEN_SECONDS = 60
 /** Wrong codes before the dev login closes until the app restarts. */
 export const DEV_CODE_ATTEMPTS = 5
-
-/** A test person: who they are, their installation (default the dev installation) and what they may do (default all). */
-export type DevPerson = Person & { installation?: string; permissions?: readonly string[] | "all" }
+/** The client a development token names unless the test says. */
+export const DEV_CLIENT = "https://dev.clegra.invalid/client.json"
 
 export type DevSignInOptions = {
   /** The app's public origin while developing (default `http://localhost:3000`). */
   issuer?: string
   /** The app's MCP address (default `<issuer>/mcp`). */
   resource?: string
-  /** The test people on the dev login (default one, «Test person», who may do everything). */
-  people?: DevPerson[]
-  /** Their installation, and the one development tokens are for unless they say (default `dev`). */
-  installation?: string
+  /** The test people on the dev login (default one, «Test person»). */
+  people?: Person[]
   /** The one-time code the dev login asks for (default: random, printed when the app starts). */
   code?: string
-  /** The origins of the clients that frame the app (as `createSignIn`'s). */
-  clientOrigins?: string[]
   /** For tests: how client metadata documents are fetched. */
   clientMetadata?: ClientMetadataTransport
 }
-
-/** What a development token says, verified (`DevTools.verify`). */
-export type DevCaller = { installation: string; person: Person | null; permissions: string[]; locale?: string; host: "workspace" | "plain"; subject: string; claims: JWTPayload }
 
 /** The development side of a `devSignIn` (`signIn.dev`). */
 export type DevTools = {
   /** The dev login's code. */
   readonly code: string
-  readonly people: readonly DevPerson[]
-  readonly installation: string
+  readonly people: readonly Person[]
   /**
-   * A development access token. `host: "workspace"` stands in for a development workspace host (it confirms writes
-   * with proofs); `person: null` with it: the installation-level caller (schedules, later runs, lifecycle tools),
-   * `sub` = `installation:<installation>`, no permissions unless given.
+   * A development access token: a test person (by id, or any person), the scopes (default all the app offers) and the
+   * client it stands for. Its grant id is `dev:<person>:<client>`, revocable like any other.
    */
-  token(input?: { person?: string | Person | null; permissions?: readonly string[] | "all"; host?: "workspace" | "plain"; installation?: string; locale?: string }): Promise<string>
-  /**
-   * A development workspace host's confirmation proof for one call (what it signs after the person's «Confirm»): the
-   * arguments as sent, the call id, and for an action with `later` the run's deadline (`until`, epoch seconds).
-   */
-  confirmation(input: { tool: string; args: Record<string, unknown>; call: string; person?: string; installation?: string; until?: number }): Promise<string>
-  /** Whether a token is a development token (never handed to the module's own verification or `auth.resolve`). */
-  issues(token: string): boolean
-  /** A development token, verified for `resource`. Throws AuthError with the reason. */
-  verify(token: string, resource: string): Promise<DevCaller>
-  /**
-   * Checks a confirmation proof for this caller, installation, tool, arguments (as received), call id and, for a later
-   * run, its deadline. `at`: as of that moment (a stored proof, checked again when its run is due). Gives the proof's
-   * `iat` when it holds, else why not.
-   */
-  checkConfirmation(
-    proof: string,
-    expected: { subject: string; installation: string; tool: string; args: unknown; call: string | null; until?: number },
-    at?: Date,
-  ): Promise<{ ok: true; iat: number } | { ok: false; why: string }>
+  token(input?: { person?: string | Person; scopes?: string[]; clientId?: string; clientName?: string }): Promise<string>
 }
 
-const DEFAULT_PEOPLE: DevPerson[] = [{ id: "test-person", name: "Test person", permissions: "all" }]
+const DEFAULT_PEOPLE: Person[] = [{ id: "test-person", name: "Test person" }]
 const COOKIE = "dev_session"
 const LOGIN_PATH = "/oauth/dev-login"
 
-/**
- * The sign-in module for development: `createSignIn` over a login of test people, in memory, with development
- * tokens and confirmation proofs (`signIn.dev`). Refused when NODE_ENV is `production`.
- */
-export function devSignIn(app: SignInApp, options: DevSignInOptions = {}): SignIn & { readonly dev: DevTools } {
+/** The sign-in module for development: `createSignIn` over a login of test people, in memory, with development tokens. */
+export function devSignIn(app: App, options: DevSignInOptions = {}): SignIn & { readonly dev: DevTools } {
   if (isProduction()) throw new Error("devSignIn is for development: it is refused when NODE_ENV is production (createSignIn is the sign-in for production)")
   const issuer = (options.issuer ?? "http://localhost:3000").replace(/\/$/, "")
   const resource = options.resource ?? `${issuer}/mcp`
-  const installation = options.installation ?? "dev"
-  if (!INSTALLATION.test(installation)) throw new Error("devSignIn installation must match [A-Za-z0-9._:-]{1,128}")
   const people = options.people?.length ? options.people : DEFAULT_PEOPLE
   const code = options.code ?? randomToken(6).replace(/[-_]/g, "x").slice(0, 8).toUpperCase()
   const store = new MemorySignInStore()
   const secure = new URL(issuer).protocol === "https:" || /^(localhost|127\.0\.0\.1|\[::1\])$/.test(new URL(issuer).hostname)
-  const all = () => app.manifest().permissions.map((p) => p.id)
-  const account = (p: DevPerson): SignInAccount => ({ id: p.id, name: p.name, installation: p.installation ?? installation })
   let wrong = 0
 
   const login: Login = {
     async session(request) {
       const token = readCookie(request, frameCookieName(COOKIE, secure))
       const id = token ? ((await store.get(`dev-session:${await sha256(token)}`)) as string | null) : null
-      const person = id ? people.find((p) => p.id === id) : undefined
-      return person ? account(person) : null
+      return (id ? people.find((p) => p.id === id) : undefined) ?? null
     },
     signInUrl: (returnTo) => `${LOGIN_PATH}?return=${encodeURIComponent(returnTo)}`,
     async fetch(request) {
@@ -127,7 +87,7 @@ export function devSignIn(app: SignInApp, options: DevSignInOptions = {}): SignI
           title: `${textsOf(locale).signIn} (development)`,
           locale,
           status,
-          frameAncestors: options.clientOrigins ?? [],
+          frameAncestors: [],
           body: `<h1>Development sign-in</h1><p class="m">Test people only. The code is printed on the app's console.</p>${error ? `<p class="e">${escapeHtml(error)}</p>` : ""}
 <form method="post" action="${LOGIN_PATH}">${hidden({ return: returnTo })}<label for="person">Person</label><select id="person" name="person">${people.map((p) => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)}</option>`).join("")}</select>
 <label for="code">Code</label><input id="code" name="code" autocomplete="off" required autofocus><div class="b"><button class="p" type="submit">${escapeHtml(textsOf(locale).signIn)}</button></div></form>`,
@@ -149,97 +109,63 @@ export function devSignIn(app: SignInApp, options: DevSignInOptions = {}): SignI
     },
   }
 
-  const signIn = buildSignIn(app, {
-    issuer,
-    resource,
-    login,
-    store,
-    clientOrigins: options.clientOrigins,
-    ...(options.clientMetadata ? { clientMetadata: options.clientMetadata } : {}),
-    permissionsOf: (a) => {
-      const p = people.find((x) => x.id === a.id && (x.installation ?? installation) === a.installation)
-      return p ? (p.permissions ?? "all") : null
-    },
-  }, true)
+  const signIn = buildSignIn(app, { issuer, resource, login, store, ...(options.clientMetadata ? { clientMetadata: options.clientMetadata } : {}) }, true)
 
-  // The development key: tokens and proofs, in memory.
+  const moduleVerify = signIn.verify
+  const moduleRevoke = signIn.revokeGrant
   const key = generateKeyPair("EdDSA", { crv: "Ed25519", extractable: true }).then(async ({ privateKey, publicKey }) => ({ privateKey, publicKey, kid: (await exportJWK(publicKey)).x!.slice(0, 16) }))
-  const once = (k: string, ttl: number) => store.once(k, ttl)
-  const signed = async (claims: Record<string, unknown>, typ: string, sub: string, seconds: number) => {
-    const k = await key
-    const now = Math.floor(Date.now() / 1000)
-    return new SignJWT(claims).setProtectedHeader({ alg: "EdDSA", typ, kid: k.kid }).setIssuer(DEV_ISSUER).setAudience(resource).setSubject(sub).setIssuedAt(now).setExpirationTime(now + seconds).setJti(crypto.randomUUID()).sign(k.privateKey as CryptoKey)
-  }
+  const offered = ALL_SCOPES.filter((s) => s !== "browser_session" || Boolean(app.config.sessionTransfer?.link))
+  const revoked = new Set<string>()
 
   const dev: DevTools = {
     code,
     people,
-    installation,
     async token(input = {}) {
-      const known = typeof input.person === "string" ? people.find((p) => p.id === input.person) : undefined
-      const person = input.person === null ? null : typeof input.person === "object" ? input.person : (known ?? people[0]!)
-      const granted = input.permissions ?? (person ? ((known ?? (typeof input.person === "object" ? undefined : people[0]))?.permissions ?? "all") : [])
-      const permissions = granted === "all" ? all() : [...granted]
-      const inst = input.installation ?? known?.installation ?? installation
-      const host = input.host ?? "plain"
-      const claim = { installation: inst, ...(person ? { person: { id: person.id, name: person.name } } : {}), permissions, ...(input.locale ? { locale: input.locale } : {}), host }
-      return signed({ [TOKEN_CLAIM]: claim }, "at+jwt", person ? person.id : `installation:${inst}`, host === "workspace" ? HOST_TOKEN_SECONDS : 3600)
-    },
-    async confirmation(input) {
-      const claims = { installation: input.installation ?? installation, tool: input.tool, args: await argsHash(input.args), call: input.call, ...(input.until !== undefined ? { until: input.until } : {}) }
-      return signed(claims, CONFIRMATION_TYPE, input.person ?? people[0]!.id, 120)
-    },
-    issues(token) {
-      try {
-        return decodeJwt(token).iss === DEV_ISSUER && decodeProtectedHeader(token).typ === "at+jwt"
-      } catch {
-        return false
-      }
-    },
-    async verify(token, aud) {
-      let payload: JWTPayload
-      try {
-        ;({ payload } = await jwtVerify(token, (await key).publicKey, { issuer: DEV_ISSUER, typ: "at+jwt", audience: aud, clockTolerance: 30, requiredClaims: ["exp", "sub", "aud"] }))
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "invalid token"
-        throw new AuthError(/"aud"/.test(message) ? `the token is for another server (this one is ${aud})` : message)
-      }
-      const m = payload[TOKEN_CLAIM] as { installation?: unknown; person?: { id?: unknown; name?: unknown }; permissions?: unknown; locale?: unknown; host?: unknown } | undefined
-      if (!m || typeof m.installation !== "string" || !INSTALLATION.test(m.installation)) throw new AuthError(`the token has no valid ${TOKEN_CLAIM}.installation`)
-      const host = m.host === "workspace" ? "workspace" : "plain"
-      if (host === "workspace") {
-        // A workspace host signs a token per request: short, with an id, used once.
-        if (typeof payload.jti !== "string" || typeof payload.iat !== "number") throw new AuthError("a workspace host's token needs jti and iat")
-        if (payload.exp! - payload.iat > HOST_TOKEN_SECONDS) throw new AuthError(`a workspace host's token lives ${HOST_TOKEN_SECONDS} seconds at most`)
-        const left = Math.max(1, payload.exp! + 30 - Math.floor(Date.now() / 1000))
-        if (!(await once(`dev-jti:${payload.jti}`, left * 1000))) throw new AuthError("this token was already used (a workspace host's token is for one request)")
-      }
-      return {
-        installation: m.installation,
-        person: m.person && typeof m.person.id === "string" ? { id: m.person.id, name: String(m.person.name ?? "") } : null,
-        permissions: Array.isArray(m.permissions) ? m.permissions.filter((p): p is string => typeof p === "string") : [],
-        ...(typeof m.locale === "string" ? { locale: m.locale } : {}),
-        host,
-        subject: String(payload.sub ?? ""),
-        claims: payload,
-      }
-    },
-    async checkConfirmation(proof, expected, at) {
-      const no = (why: string) => ({ ok: false as const, why })
-      try {
-        const { payload } = await jwtVerify(proof, (await key).publicKey, { typ: CONFIRMATION_TYPE, issuer: DEV_ISSUER, audience: resource, clockTolerance: 30, ...(at ? { currentDate: at } : {}) })
-        if (typeof payload.iat !== "number" || typeof payload.exp !== "number" || payload.exp - payload.iat > 300) return no("a proof lives 5 minutes at most")
-        if (payload.sub !== expected.subject) return no("the proof is for someone else")
-        if (payload.installation !== expected.installation) return no("the proof is for another installation")
-        if (payload.tool !== expected.tool) return no("the proof is for another tool")
-        if (payload.args !== (await argsHash(expected.args))) return no("the proof is for other arguments")
-        if (!expected.call || payload.call !== expected.call) return no("the proof is for another call")
-        if (expected.until !== undefined && payload.until !== expected.until) return no("the proof is for another deadline")
-        return { ok: true, iat: payload.iat }
-      } catch (error) {
-        return no(error instanceof Error ? error.message : "invalid proof")
-      }
+      const person = typeof input.person === "object" ? input.person : (people.find((p) => p.id === input.person) ?? (input.person ? { id: input.person, name: input.person } : people[0]!))
+      const clientId = input.clientId ?? DEV_CLIENT
+      const k = await key
+      const now = Math.floor(Date.now() / 1000)
+      return new SignJWT({ scope: (input.scopes ?? offered).join(" "), client_id: clientId, ...(input.clientName ? { client_name: input.clientName } : {}), person })
+        .setProtectedHeader({ alg: "EdDSA", typ: "at+jwt", kid: k.kid })
+        .setIssuer(DEV_ISSUER)
+        .setAudience(resource)
+        .setSubject(person.id)
+        .setIssuedAt(now)
+        .setExpirationTime(now + 3600)
+        .setJti(crypto.randomUUID())
+        .sign(k.privateKey as CryptoKey)
     },
   }
-  return Object.assign(signIn, { dev })
+
+  const verify: SignIn["verify"] = async (token, request, info) => {
+    let iss: unknown
+    try {
+      iss = decodeJwt(token).iss
+      decodeProtectedHeader(token)
+    } catch {
+      return null
+    }
+    if (iss !== DEV_ISSUER) return moduleVerify(token, request, info)
+    // Development tokens count only on a request to a loopback address.
+    if (!isLoopback(new URL(request.url).hostname.replace(/^\[|\]$/g, ""))) throw new AuthError("development tokens are accepted on a loopback address only")
+    let payload: JWTPayload
+    try {
+      ;({ payload } = await jwtVerify(token, (await key).publicKey, { issuer: DEV_ISSUER, typ: "at+jwt", audience: info.resource, clockTolerance: 30, requiredClaims: ["exp", "sub", "aud"] }))
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "invalid token"
+      throw new AuthError(/"aud"/.test(message) ? `the token is for another server (this one is ${info.resource})` : message)
+    }
+    const person = payload.person as Person
+    const clientId = String(payload.client_id)
+    const id = `dev:${person.id}:${clientId}`
+    if (revoked.has(id)) throw new AuthError("this access was revoked")
+    return { id, clientId, ...(typeof payload.client_name === "string" ? { clientName: payload.client_name } : {}), person, scopes: String(payload.scope ?? "").split(" ").filter(Boolean) }
+  }
+
+  const revokeGrant: SignIn["revokeGrant"] = async (grant) => {
+    if (grant.startsWith("dev:")) revoked.add(grant)
+    else await moduleRevoke(grant)
+  }
+
+  return Object.assign(signIn, { verify, revokeGrant, dev })
 }

@@ -1,5 +1,5 @@
 // `npm pack` / `npm publish`, step 1 (the package's "prepack"). In the repository the package exports its TypeScript
-// source (the examples, tsx and Next import it with no build step); the tarball gets the built one:
+// source (tsx and Next import it with no build step); the tarball gets the built one:
 //   1. build dist/ (scripts/build.mjs);
 //   2. package.json becomes the published one until scripts/postpack.mjs puts the repository's back: every export to
 //      { types, default } in dist, the bin to the built CLI, no devDependencies, workspaces or overrides, and of the

@@ -1,9 +1,0 @@
-node_modules
-.next
-.data
-.env.local
-.env*.local
-next-env.d.ts
-*.tsbuildinfo
-.clegra-dev-key.json
-.vercel

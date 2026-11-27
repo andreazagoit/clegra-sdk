@@ -2,112 +2,11 @@ import { createLocalJWKSet, decodeProtectedHeader, jwtVerify, type JWK, type JWT
 
 import { sha256 } from "./crypto"
 import { hostLookup } from "./platform"
-import type { SignIn } from "./signin/module"
 
 /**
- * AUTH (spec §7). An app's callers are its own: nobody signs in to it with someone else's accounts.
- *
- * - **its sign-in module** (`auth.signIn`, `@clegra/sdk/signin`): the delegations the app issues over its own login
- *   to any client (Clegra, Claude, ChatGPT), and the personal keys its people make;
- * - **its own authorization server** (`auth.resolve`): tokens of the app's auth library (better-auth, Clerk, …),
- *   verified by the app, mapped to a caller (tenant, person, permissions);
- * - **the public caller** (`auth.public`): no token, only the actions declared `public`.
- *
- * Development: the sign-in module over test people (`devSignIn` of `@clegra/sdk/signin`), whose development tokens
- * can stand in for a workspace host that confirms writes with signed proofs and calls the installation-level tools
- * (schedules, later runs, lifecycle) with no person: for callers on a loopback address only.
+ * The OAuth helpers the sign-in module and the server share: errors, canonical JSON, loopback hosts, and Client ID
+ * Metadata Documents (fetched with every address checked, so a client's URL never reaches the app's own network).
  */
-
-export const INSTALLATION = /^[A-Za-z0-9._:-]{1,128}$/
-
-/** The tenant of a caller: the installation as its issuer names it, bound to that issuer. */
-export const tenantOf = (installation: string, issuer: string) => `${installation}@${issuer}`
-
-export type Person = { id: string; name: string }
-
-/** Who is calling, as every handler sees it (`ctx`). */
-export type Caller = {
-  /** The tenant: the installation bound to its issuer (`<installation>@<issuer>`). Unique across issuers. */
-  installation: string
-  /** The installation as the issuer names it (the token's claim; what a confirmation proof repeats). */
-  installationId: string
-  person: Person | null
-  permissions: ReadonlySet<string>
-  locale?: string
-  /** `workspace`: a host that confirms writes itself and sends proofs; `plain`: any other MCP host. */
-  host: "workspace" | "plain"
-  issuer: string
-  subject: string
-  /** An administrator of the app, as its own sign-in says (`ctx.admin`). */
-  admin?: boolean
-  /** A caller with no token (`auth.public`): it reaches only the actions declared `public`. */
-  public?: true
-}
-
-/**
- * Who a token of the app's own names, as `auth.resolve` says it. The tenant is
- * the app's to say (an organization, a workspace, an account): never a value a
- * request parameter carries.
- */
-export type ResolvedCaller = {
-  /** The tenant handlers scope every read and write by: `[A-Za-z0-9._:-]{1,128}` (no `@`: a host's tenants are `<installation>@<issuer>`, so the two can never meet). */
-  installation: string
-  person: Person | null
-  /** What this person may do here, from the app's own roles. */
-  permissions: readonly string[] | "all"
-  locale?: string
-  /** A stable id of who is calling (default the person's id): idempotency is kept per subject. */
-  subject?: string
-  /** An administrator of the app (`ctx.admin`: the lifecycle and settings an administrator may change). */
-  admin?: boolean
-}
-
-/** What `auth.resolve` is told about the request beside the token. */
-export type ResolveInfo = {
-  /** This server's public MCP address: the audience the token must have been issued for (RFC 8707). */
-  resource: string
-}
-
-/**
- * Verifies a token of the app's own and names its caller: null when the token is not one (the request is
- * refused with a 401 and the protected-resource metadata), or throws an `AuthError` with the reason. It MUST
- * check the signature, the expiry and that the token's audience is `info.resource`.
- */
-export type CallerResolver = (token: string, request: Request, info: ResolveInfo) => Promise<ResolvedCaller | null> | ResolvedCaller | null
-
-export type AuthOptions = {
-  /**
-   * The app's own sign-in (`createSignIn` of `@clegra/sdk/signin`): the delegations it issues are verified here, the
-   * protected-resource metadata names it, its routes are served on the app's address.
-   */
-  signIn?: SignIn
-  /** The app's own access tokens (spec §7, «The app's own tokens»): verified by the app, mapped to a caller. */
-  resolve?: CallerResolver
-  /**
-   * Answers the app's authorization-server paths that live outside its auth library's mount (RFC 8414
-   * metadata under `/.well-known/…`), on the same routes as MCP: null for any other path.
-   */
-  serve?: (request: Request) => Promise<Response | null> | Response | null
-  /**
-   * This server's public MCP address, exactly as clients reach it (`https://crm.example.com/mcp`): the only audience
-   * (`aud`) accepted, and what DPoP proofs must name (`htu`). Default the sign-in module's; required in production
-   * with `resolve`.
-   */
-  resource?: string
-  /**
-   * The authorization servers named in the protected-resource metadata, with `resolve`: the app's own (its sign-in).
-   * With `signIn` it is the sign-in module. Default none.
-   */
-  authorizationServers?: string[]
-  /**
-   * Public operations (spec §7 «Public operations»): signing in is not mandatory for an app. A call without a token is
-   * served as this installation's public caller, which reaches only the actions declared `public: true` (global, no
-   * permission; a public write is always confirmed): no record, page or artifact. Allowed in production.
-   */
-  public?: { installation: string; locale?: string }
-  /** Serve calls without a token as this caller (local demos only). Off by default; refused when NODE_ENV is `production`. */
-  anonymous?: { installation: string; person?: Person; permissions: string[] | "all"; locale?: string }
-}
 
 /** How a Client ID Metadata Document is reached: `fetch` gets it, `lookup` gives every address of its host. */
 export type ClientMetadataTransport = { fetch?: typeof fetch; lookup?: (host: string) => Promise<string[]> }
@@ -129,14 +28,9 @@ export function canonicalJson(value: unknown): string {
   return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonicalJson(v)}`).join(",")}}`
 }
 
-/** base64url SHA-256 of the arguments' canonical JSON (the proof's `args`). */
+/** base64url SHA-256 of a value's canonical JSON. */
 export function argsHash(args: unknown): Promise<string> {
   return sha256(canonicalJson(args ?? {}))
-}
-
-/** A later run's deadline, epoch seconds: its `at` (a date-time string) plus `window` minutes, rounded down. NaN when `at` is not a date-time. */
-export function laterDeadline(at: string, windowMinutes: number): number {
-  return Math.floor(Date.parse(at) / 1000 + windowMinutes * 60)
 }
 
 const LOOPBACK = /^(127\.\d+\.\d+\.\d+|::1|::ffff:127\.\d+\.\d+\.\d+|localhost)$/

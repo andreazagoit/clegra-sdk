@@ -4,8 +4,6 @@ import type { NextRequest } from "next/server"
 
 // Test-only probes: what a route handler sees of a (rewritten) request, and an SSE stream through toNextHandlers.
 const streaming = {
-  devMode: false,
-  manifest: () => ({ mcp: { url: "/mcp" } }),
   fetch: async (request: Request) => {
     const url = new URL(request.url)
     if (url.pathname === "/stream") {

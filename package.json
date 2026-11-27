@@ -1,12 +1,12 @@
 {
   "name": "@clegra/sdk",
-  "version": "0.3.0-next.0",
+  "version": "0.4.0-next.0",
   "clegra": {
     "kind": "public",
     "owner": "sdk"
   },
   "type": "module",
-  "description": "Clegra apps: entities, actions, pages and artifacts defined one per file (defineEntity, defineAction, …) and assembled with defineApp, served on Web APIs with serve(app, …): a JSON manifest and OpenAPI index for workspace hosts and a plain, conformant MCP server (tools, annotations, MCP Apps views, OAuth) for ChatGPT, Claude and any MCP client. The app's own sign-in module, Node, Express and Next.js adapters, test client, conformance checks, CLI.",
+  "description": "Clegra apps: a web app's MCP server (revision 2026-07-28) with the web-map and app-share extensions and the session-transfer, access and app-agents profiles: records at their own web URLs, pages for people, the app's own confirmation of irreversible calls, one sign-in for the MCP grant and the site. Definitions one per file (defineEntity, defineTool, definePage, \u2026) assembled with defineApp and served on Web APIs with serve(app, \u2026); the app's own OAuth 2.1 sign-in; Node, Express and Next.js adapters; a test client; the conformance check CLI.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -20,10 +20,11 @@
     "mcp",
     "model-context-protocol",
     "mcp-server",
-    "mcp-apps",
-    "chatgpt-apps",
+    "mcp-extensions",
+    "web-map",
+    "session-transfer",
     "claude",
-    "manifest",
+    "chatgpt",
     "nextjs",
     "oauth",
     "sdk"
@@ -42,15 +43,11 @@
     "./express": "./src/express.ts",
     "./signin": "./src/signin/index.ts",
     "./testing": "./src/testing.ts",
-    "./spec": "./spec/src/conformance.ts",
-    "./spec/protocol": "./spec/src/protocol.ts",
-    "./spec/kinds": "./spec/src/kinds.ts",
-    "./clegra.schema.json": "./spec/schema/clegra.schema.json",
-    "./kinds.json": "./spec/kinds.json",
+    "./check": "./src/cli/check.ts",
     "./package.json": "./package.json"
   },
   "bin": {
-    "clegra": "spec/src/cli.ts"
+    "clegra": "src/cli/index.ts"
   },
   "files": [
     "dist",
@@ -58,45 +55,35 @@
     "docs/start-javascript.md",
     "docs/start-next.md",
     "docs/accents.svg",
+    "docs/extensions",
     "!docs/README.md",
     "README.md",
     "LICENSE",
     "NOTICE.md",
     "CHANGELOG.md"
   ],
-  "workspaces": [
-    "examples/*"
-  ],
   "scripts": {
     "build": "node scripts/build.mjs",
     "typecheck": "tsc -p tsconfig.json",
-    "typecheck:all": "npm run typecheck && npm run typecheck --workspaces --if-present",
-    "test": "tsx --test \"{src,spec/src}/**/*.test.ts\"",
+    "test": "tsx --test \"src/**/*.test.ts\"",
     "test:next": "tsx --test test/next.test.ts",
-    "test:examples": "npm test --workspaces --if-present",
-    "test:all": "npm test && npm run test:examples && npm run test:next",
+    "test:all": "npm test && npm run test:next",
     "pack:check": "tsx scripts/pack-check.mjs",
-    "schema": "tsx scripts/schema.ts",
-    "clegra:check": "tsx spec/src/cli.ts check",
+    "clegra:check": "tsx src/cli/index.ts check",
     "prepack": "node scripts/prepack.mjs",
     "postpack": "node scripts/postpack.mjs",
     "postpublish": "node scripts/postpack.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "^2.4.0",
-    "ajv": "^8.20.0",
     "jose": "^6.2.13"
   },
   "peerDependencies": {
     "next": ">=15",
-    "react": ">=19",
     "zod": "^4.0.0"
   },
   "peerDependenciesMeta": {
     "next": {
-      "optional": true
-    },
-    "react": {
       "optional": true
     }
   },

@@ -2,7 +2,7 @@ import type { SqlQuery } from "../store"
 
 /**
  * Where the sign-in module keeps what it issued: pending consents, codes, delegations (links), refresh tokens,
- * personal keys, sessions and accounts of the password login, used proof ids. Secrets are kept only as hashes.
+ * sessions and accounts of the password login, used proof ids. Secrets are kept only as hashes.
  * A key–value store with expiry; `take` reads and deletes in one step (a code is used once), `list` reads by prefix.
  * Several instances of the app share one (SqlSignInStore); MemorySignInStore is for tests and one process.
  */

@@ -1,17 +1,20 @@
 import { defineEntity } from "@clegra/sdk"
 import { z } from "zod"
 
-// The fixture's one entity: notes of the caller's organization.
-const notes = [
-  { id: "n1", title: "First note", org: "org-a" },
-  { id: "n2", title: "Second note", org: "org-a" },
-]
+// The fixture's one entity: notes, kept in the process (globalThis: next dev may load a module more than once).
+type Note = { id: string; title: string; body: string }
+const g = globalThis as { __notes?: Map<string, Note> }
+export const notes: Map<string, Note> = (g.__notes ??= new Map([
+  ["n1", { id: "n1", title: "First note", body: "Hello" }],
+  ["n2", { id: "n2", title: "Second note", body: "World" }],
+]))
 
 export const note = defineEntity({
   name: "note",
-  label: "Note",
-  permission: "notes.view",
-  schema: z.object({ id: z.string(), title: z.string().meta({ role: "title", search: true, sort: true }) }),
-  get: (id, ctx) => notes.find((n) => n.id === id && n.org === ctx.installation) ?? null,
-  list: (_q, ctx) => ({ rows: notes.filter((n) => n.org === ctx.installation).map(({ id, title }) => ({ id, title })) }),
+  title: "Note",
+  path: "/notes/{id}",
+  schema: z.object({ id: z.string(), title: z.string(), body: z.string() }),
+  card: { title: "title", subtitle: "body" },
+  get: ({ id }) => notes.get(id!) ?? null,
+  list: () => ({ rows: [...notes.values()] }),
 })

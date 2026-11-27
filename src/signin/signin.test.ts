@@ -2,166 +2,161 @@ import assert from "node:assert/strict"
 import { createHash, randomUUID } from "node:crypto"
 import { describe, test } from "node:test"
 
-import { decodeJwt, decodeProtectedHeader, exportJWK, generateKeyPair, SignJWT } from "jose"
-import { z } from "zod"
+import { decodeJwt, exportJWK, generateKeyPair, SignJWT } from "jose"
 
-import { defineAction, defineApp, defineEntity, serve } from "../index"
-import { deviceKey, testClient } from "../testing"
-import { createSignIn, devSignIn, frameCookie, MemorySignInStore, newSignInKey, passwordLogin, PERSONAL_KEY_PREFIX } from "./index"
+import { defineApp } from "../app"
+import { createSignIn, devSignIn, frameCookie, MemorySignInStore, newSignInKey, passwordLogin } from "./index"
 
-// THE SIGN-IN MODULE: an app's own login gives any client (Clegra, Claude, ChatGPT) a delegation the app issued,
-// through the app's own consent; tokens at+jwt for exactly the app's MCP address, scopes = the app's permissions,
-// read live; refresh rotated, reuse ends the link; revocation; web_message for a framing client; DPoP; personal keys.
+// THE SIGN-IN MODULE: the app's own login gives any MCP client a grant the app issued, through the app's own consent;
+// scopes are the access profile's, each on its own consent line; tokens at+jwt for exactly the app's MCP address;
+// refresh rotated, reuse revokes the grant; the grants page; DPoP; development tokens.
 
 const ORIGIN = "http://localhost:3990"
 const RESOURCE = `${ORIGIN}/mcp`
 const CLIENT = "https://client.example/oauth/client.json"
 const CALLBACK = "https://client.example/callback"
-const FRAMER = "https://app.client.example"
 const verifier = "v".repeat(64)
 const challenge = createHash("sha256").update(verifier).digest("base64url")
 
-function world(options: { clientDocument?: Record<string, unknown> } = {}) {
+const appOf = (link = false) => defineApp({ name: "notes", title: { en: "Notes", it: "Note" }, description: "Notes", version: "1.0.0", ...(link ? { sessionTransfer: { link: true } } : {}) })
+
+function world(options: { clientDocument?: Record<string, unknown>; link?: boolean; redirect?: string } = {}) {
   const store = new MemorySignInStore()
-  const document = options.clientDocument ?? { client_id: CLIENT, client_name: "Clegra", redirect_uris: [CALLBACK] }
+  const document = options.clientDocument ?? { client_id: CLIENT, client_name: "Assistant", redirect_uris: [options.redirect ?? CALLBACK] }
   const transport = {
     fetch: (async (input: RequestInfo | URL) => (String(input) === CLIENT ? new Response(JSON.stringify(document), { headers: { "content-type": "application/json" } }) : new Response("no", { status: 404 }))) as typeof fetch,
     lookup: async () => ["93.184.215.14"],
   }
-  const note = defineEntity({ name: "note", label: "Note", permission: "notes.read", schema: z.object({ id: z.string(), text: z.string().meta({ role: "title" }) }), get: () => ({ id: "n1", text: "hello" }), list: () => ({ rows: [{ id: "n1", text: "hello" }] }) })
-  const noteAdd = defineAction({ name: "note_add", title: "Add a note", permission: "notes.write", input: z.object({ text: z.string() }), run: ({ text }) => ({ message: `added ${text}` }) })
-  const definition = defineApp({
-    name: "notes",
-    title: { en: "Notes", it: "Note" },
-    version: "1.0.0",
-    permissions: { "notes.read": { label: { en: "Read notes", it: "Leggere le note" }, default: true }, "notes.write": { label: { en: "Write notes", it: "Scrivere le note" } } },
-    entities: [note],
-    actions: [noteAdd],
+  const app = appOf(options.link)
+  const login = passwordLogin({ store, origin: ORIGIN, title: { en: "Notes", it: "Note" }, iterations: 1000 })
+  const signIn = createSignIn(app, { issuer: ORIGIN, resource: RESOURCE, login, active: (p) => login.active(p), store, clientMetadata: transport })
+  const revoked: string[] = []
+  signIn.onRevoke((g) => {
+    revoked.push(g)
   })
-  const login = passwordLogin({ store, origin: ORIGIN, title: { en: "Notes", it: "Note" }, iterations: 1000, frameAncestors: [FRAMER] })
-  const signIn = createSignIn(definition, { issuer: ORIGIN, resource: RESOURCE, login, permissionsOf: (a) => login.permissionsOf(a), store, clientOrigins: [FRAMER], clientMetadata: transport })
-  const app = serve(definition, { auth: { signIn } })
-  return { app, signIn, login, store }
+  const send = async (request: Request) => (await signIn.fetch(request)) ?? new Response("not found", { status: 404 })
+  return { app, signIn, login, store, send, revoked }
 }
+type World = ReturnType<typeof world>
 
 const at = (path: string) => `${ORIGIN}${path}`
-const send = (app: ReturnType<typeof world>["app"], request: Request) => app.fetch(request, { remoteAddress: "203.0.113.9" })
-const authorizeUrl = (extra: Record<string, string> = {}) =>
-  at(`/oauth/authorize?${new URLSearchParams({ response_type: "code", client_id: CLIENT, redirect_uri: CALLBACK, state: "s1", code_challenge: challenge, code_challenge_method: "S256", resource: RESOURCE, ...extra })}`)
+const form = (body: Record<string, string>, headers: Record<string, string> = {}) => ({ method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", ...headers }, body: new URLSearchParams(body) })
+const authorizeUrl = (extra: Record<string, string> = {}, redirect = CALLBACK) =>
+  at(`/oauth/authorize?${new URLSearchParams({ response_type: "code", client_id: CLIENT, redirect_uri: redirect, state: "s1", code_challenge: challenge, code_challenge_method: "S256", resource: RESOURCE, ...extra })}`)
 
-async function signedIn(w: ReturnType<typeof world>, email = "ada@example.com", permissions: string[] | "all" = "all") {
-  await w.login.accounts.create({ email, name: "Ada", password: "correct horse battery", installation: "acme", permissions })
-  const r = await send(w.app, new Request(at("/signin"), { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", origin: ORIGIN }, body: new URLSearchParams({ email, password: "correct horse battery", return: "/" }) }))
+async function signedIn(w: World, email = "ada@example.com") {
+  await w.login.accounts.create({ email, name: "Ada", password: "correct horse battery", tenant: "acme" })
+  const r = await w.send(new Request(at("/signin"), form({ email, password: "correct horse battery", return: "/" }, { origin: ORIGIN })))
   assert.equal(r.status, 303)
-  const cookie = r.headers.get("set-cookie")!
-  assert.match(cookie, /HttpOnly/)
-  return cookie.split(";")[0]!
+  return r.headers.get("set-cookie")!.split(";")[0]!
 }
 
-async function consent(w: ReturnType<typeof world>, cookie: string, extra: Record<string, string> = {}, decision = "allow") {
-  const page = await send(w.app, new Request(authorizeUrl(extra), { headers: { cookie, "accept-language": "it-IT" } }))
+async function consent(w: World, cookie: string, extra: Record<string, string> = {}, decision = "allow", redirect = CALLBACK) {
+  const page = await w.send(new Request(authorizeUrl(extra, redirect), { headers: { cookie, "accept-language": "it-IT" } }))
   assert.equal(page.status, 200)
   const html = await page.text()
   const id = /name="request" value="([^"]+)"/.exec(html)![1]!
-  return { html, page, answer: await send(w.app, new Request(at("/oauth/authorize"), { method: "POST", headers: { cookie, origin: ORIGIN, "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ request: id, decision }) })) }
+  return { html, page, answer: await w.send(new Request(at("/oauth/authorize"), form({ request: id, decision }, { cookie, origin: ORIGIN }))) }
 }
 
-async function linked(w: ReturnType<typeof world>, extra: Record<string, string> = {}, headers: Record<string, string> = {}) {
+async function linked(w: World, extra: Record<string, string> = {}, headers: Record<string, string> = {}) {
   const cookie = await signedIn(w)
   const { answer } = await consent(w, cookie, extra)
   const code = new URL(answer.headers.get("location")!).searchParams.get("code")!
-  const r = await send(w.app, new Request(at("/oauth/token"), { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", ...headers }, body: new URLSearchParams({ grant_type: "authorization_code", code, code_verifier: verifier, client_id: CLIENT, redirect_uri: CALLBACK, resource: RESOURCE }) }))
+  const r = await w.send(new Request(at("/oauth/token"), form({ grant_type: "authorization_code", code, code_verifier: verifier, client_id: CLIENT, redirect_uri: CALLBACK, resource: RESOURCE }, headers)))
   return { response: r, body: (await r.json()) as Record<string, string>, cookie }
 }
 
-const refresh = (w: ReturnType<typeof world>, token: string) =>
-  send(w.app, new Request(at("/oauth/token"), { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: token, client_id: CLIENT }) }))
+const refresh = (w: World, token: string) => w.send(new Request(at("/oauth/token"), form({ grant_type: "refresh_token", refresh_token: token, client_id: CLIENT })))
+const mcpRequest = (token: string, scheme = "Bearer", extra: Record<string, string> = {}) => new Request(RESOURCE, { method: "POST", headers: { authorization: `${scheme} ${token}`, ...extra } })
+const verifyAt = (w: { signIn: { verify: World["signIn"]["verify"] } }, token: string, resource = RESOURCE) => w.signIn.verify(token, mcpRequest(token), { resource, scheme: "Bearer" })
 
 describe("sign-in module", () => {
-  test("metadata: issuer, PKCE, metadata documents, web_message, DPoP, the app's permissions as scopes; the resource names it", async () => {
+  test("metadata: issuer, PKCE, metadata documents, DPoP, the access profile's scopes; no web_message", async () => {
     const w = world()
-    const m = (await (await send(w.app, new Request(at("/.well-known/oauth-authorization-server")))).json()) as Record<string, unknown>
+    const m = (await (await w.send(new Request(at("/.well-known/oauth-authorization-server")))).json()) as Record<string, unknown>
     assert.equal(m.issuer, ORIGIN)
     assert.deepEqual(m.code_challenge_methods_supported, ["S256"])
     assert.equal(m.client_id_metadata_document_supported, true)
-    assert.ok((m.response_modes_supported as string[]).includes("web_message"))
-    assert.deepEqual(m.scopes_supported, ["notes.read", "notes.write", "offline_access"])
+    assert.deepEqual(m.response_modes_supported, ["query"])
+    assert.deepEqual(m.scopes_supported, ["web.read", "web.write", "web.irreversible", "bound_browser_session", "offline_access"])
     assert.equal(m.registration_endpoint, undefined)
-    const prm = (await (await send(w.app, new Request(at("/.well-known/oauth-protected-resource/mcp")))).json()) as Record<string, unknown>
-    assert.deepEqual(prm.authorization_servers, [ORIGIN])
-    assert.equal(prm.resource, RESOURCE)
-    const jwks = (await (await send(w.app, new Request(at("/oauth/jwks.json")))).json()) as { keys: Record<string, unknown>[] }
-    assert.equal(jwks.keys.length, 1)
-    assert.equal(jwks.keys[0]!.d, undefined)
+    const linkMode = world({ link: true })
+    const m2 = (await (await linkMode.send(new Request(at("/.well-known/oauth-authorization-server")))).json()) as Record<string, unknown>
+    assert.ok((m2.scopes_supported as string[]).includes("browser_session"))
   })
 
   test("not signed in: to the app's own sign-in, coming back to the same request", async () => {
     const w = world()
-    const r = await send(w.app, new Request(authorizeUrl()))
+    const r = await w.send(new Request(authorizeUrl()))
     assert.equal(r.status, 303)
     const to = new URL(r.headers.get("location")!)
     assert.equal(to.pathname, "/signin")
-    assert.ok(to.searchParams.get("return")!.startsWith("/oauth/authorize?"))
-    const page = await send(w.app, new Request(to, { headers: { "accept-language": "it" } }))
-    assert.match(await page.text(), /Entra in Note/)
+    assert.match(to.searchParams.get("return")!, /^\/oauth\/authorize\?/)
   })
 
-  test("a wrong password, an unknown client, a redirect address not its own: nothing sent", async () => {
-    const w = world()
-    await w.login.accounts.create({ email: "ada@example.com", name: "Ada", password: "correct horse battery", installation: "acme", permissions: "all" })
-    const wrong = await send(w.app, new Request(at("/signin"), { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", origin: ORIGIN }, body: new URLSearchParams({ email: "ada@example.com", password: "nope nope nope" }) }))
-    assert.equal(wrong.status, 401)
-    assert.equal(wrong.headers.get("set-cookie"), null)
-    const cookie = await signedIn(world(), "bob@example.com")
-    const other = await send(w.app, new Request(authorizeUrl({ redirect_uri: "https://evil.example/cb" }), { headers: { cookie } }))
-    assert.equal(other.status, 400)
-    assert.equal(other.headers.get("location"), null)
-    const opaque = await send(w.app, new Request(authorizeUrl({ client_id: "some-client" }), { headers: { cookie } }))
-    assert.equal(opaque.status, 400)
-  })
-
-  test("consent in the person's language; code → at+jwt for exactly the resource, then MCP calls as the person", async () => {
+  test("consent: each scope on its own line in the person's language, the client's host and redirect, never framed", async () => {
     const w = world()
     const cookie = await signedIn(w)
-    const { html, page, answer } = await consent(w, cookie)
-    assert.match(html, /Permetti a Clegra di usare Note per te\?/)
-    assert.match(page.headers.get("content-security-policy")!, new RegExp(`frame-ancestors ${FRAMER}`))
-    assert.equal(answer.status, 303)
-    const back = new URL(answer.headers.get("location")!)
-    assert.equal(back.origin + back.pathname, CALLBACK)
-    assert.equal(back.searchParams.get("state"), "s1")
-    assert.equal(back.searchParams.get("iss"), ORIGIN)
-    const code = back.searchParams.get("code")!
-    const token = await send(w.app, new Request(at("/oauth/token"), { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ grant_type: "authorization_code", code, code_verifier: verifier, client_id: CLIENT, redirect_uri: CALLBACK, resource: RESOURCE }) }))
-    const body = (await token.json()) as Record<string, string>
+    const { html, page } = await consent(w, cookie, { scope: "web.read web.write offline_access" }, "deny")
+    assert.match(html, /<li>Vedere i tuoi dati<\/li><li>Modificare i tuoi dati<\/li><li>Continuare a lavorare mentre non ci sei<\/li>/)
+    assert.match(html, /client\.example/)
+    assert.match(html, /https:\/\/client\.example\/callback/)
+    assert.doesNotMatch(html, /non si può verificare/)
+    assert.match(page.headers.get("content-security-policy")!, /frame-ancestors 'none'/)
+    const signInPage = await w.send(new Request(at("/signin")))
+    assert.match(signInPage.headers.get("content-security-policy")!, /frame-ancestors 'none'/)
+  })
+
+  test("a loopback or custom-scheme redirect is warned about on the consent", async () => {
+    const w = world({ redirect: "http://127.0.0.1:7777/cb" })
+    const cookie = await signedIn(w)
+    const { html } = await consent(w, cookie, {}, "deny", "http://127.0.0.1:7777/cb")
+    assert.match(html, /non si può verificare/)
+  })
+
+  test("scopes: none asked gets web.read; an unknown one and browser_session without the link mode are refused", async () => {
+    const w = world()
+    const { body } = await linked(w)
+    assert.equal(body.scope, "web.read")
+    const cookie = await signedIn(w, "bob@example.com")
+    for (const scope of ["browser_session", "admin"]) {
+      const r = await w.send(new Request(authorizeUrl({ scope }), { headers: { cookie } }))
+      assert.equal(r.status, 303)
+      assert.equal(new URL(r.headers.get("location")!).searchParams.get("error"), "invalid_scope")
+    }
+    const l = world({ link: true })
+    const ok = await linked(l, { scope: "web.read browser_session" })
+    assert.equal(ok.body.scope, "web.read browser_session")
+  })
+
+  test("code → at+jwt for exactly the resource; verify gives the grant with the consented scopes", async () => {
+    const w = world()
+    const { body } = await linked(w, { scope: "web.read web.write" })
     assert.equal(body.token_type, "Bearer")
-    assert.equal(decodeProtectedHeader(body.access_token!).typ, "at+jwt")
     const claims = decodeJwt(body.access_token!)
     assert.equal(claims.aud, RESOURCE)
-    assert.equal(claims.client_id, CLIENT)
-    assert.equal(claims.installation, "acme")
-    // A code is used once.
-    const again = await send(w.app, new Request(at("/oauth/token"), { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ grant_type: "authorization_code", code, code_verifier: verifier, client_id: CLIENT, redirect_uri: CALLBACK }) }))
-    assert.equal(again.status, 400)
-    const client = await testClient(w.app, { token: body.access_token!, remoteAddress: "203.0.113.9" })
-    assert.equal(client.status, 200)
-    const added = await client.call("note_add", { text: "x" })
-    assert.equal(added.isError, undefined, JSON.stringify(added))
+    assert.equal(claims.iss, ORIGIN)
+    const grant = await verifyAt(w, body.access_token!)
+    assert.ok(grant)
+    assert.equal(grant.clientId, CLIENT)
+    assert.equal(grant.clientName, "Assistant")
+    assert.equal(grant.person.name, "Ada")
+    assert.equal(grant.person.tenant, "acme")
+    assert.deepEqual(grant.scopes, ["web.read", "web.write"])
+    await assert.rejects(verifyAt(w, body.access_token!, `${ORIGIN}/other`), /another server/)
+    assert.equal(await verifyAt(w, "not-a-jwt"), null)
   })
 
-  test("the scopes narrow what the person may do; the person's permissions are read live", async () => {
+  test("a disabled account: its tokens are refused at once", async () => {
     const w = world()
-    const { body } = await linked(w, { scope: "notes.read" })
-    const client = await testClient(w.app, { token: body.access_token!, remoteAddress: "203.0.113.9" })
-    const refused = await client.call("note_add", { text: "x" })
-    assert.equal(refused.isError, true)
+    const { body } = await linked(w)
     const [account] = await w.login.accounts.list("acme")
     await w.login.accounts.update(account!.id, { disabled: true })
-    const gone = await testClient(w.app, { token: body.access_token!, remoteAddress: "203.0.113.9" })
-    assert.equal(gone.status, 401)
+    await assert.rejects(verifyAt(w, body.access_token!), /may not use the app/)
   })
 
-  test("refresh rotates; a used refresh token presented again ends the link; revoking the link ends its access tokens", async () => {
+  test("refresh rotates; a used refresh token presented again revokes the grant and tells onRevoke", async () => {
     const w = world()
     const { body } = await linked(w)
     const r1 = await refresh(w, body.refresh_token!)
@@ -170,137 +165,151 @@ describe("sign-in module", () => {
     assert.notEqual(next.refresh_token, body.refresh_token)
     const reuse = await refresh(w, body.refresh_token!)
     assert.equal(reuse.status, 400)
+    assert.equal(((await reuse.json()) as { error: string }).error, "invalid_grant")
+    assert.equal(w.revoked.length, 1)
     assert.equal((await refresh(w, next.refresh_token!)).status, 400)
-    const client = await testClient(w.app, { token: next.access_token!, remoteAddress: "203.0.113.9" })
-    assert.equal(client.status, 401)
+    await assert.rejects(verifyAt(w, next.access_token!), /revoked/)
   })
 
-  test("RFC 7009 revocation by the client; the app's own screen lists and removes links", async () => {
+  test("offline_access: refresh tokens live refreshTokenDays; without it 12 hours from the grant", async () => {
+    const w = world()
+    await linked(w)
+    const shortEntry = (await w.store.list("refresh:")).map((e) => e.value as { until: number })[0]!
+    assert.ok(shortEntry.until - Date.now() <= 12 * 3600_000 && shortEntry.until - Date.now() > 11 * 3600_000)
+    const l = world()
+    await linked(l, { scope: "web.read offline_access" })
+    const longEntry = (await l.store.list("refresh:")).map((e) => e.value as { until: number })[0]!
+    assert.ok(longEntry.until - Date.now() > 29 * 24 * 3600_000)
+  })
+
+  test("RFC 7009 revocation by the client ends the grant and tells onRevoke", async () => {
     const w = world()
     const { body } = await linked(w)
-    const [account] = await w.login.accounts.list("acme")
-    const who = { id: account!.id, name: account!.name, installation: "acme" }
-    assert.equal((await w.signIn.links.list(who)).length, 1)
-    const r = await send(w.app, new Request(at("/oauth/revoke"), { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ token: body.refresh_token!, client_id: CLIENT }) }))
+    const r = await w.send(new Request(at("/oauth/revoke"), form({ token: body.refresh_token!, client_id: CLIENT })))
     assert.equal(r.status, 200)
-    assert.equal((await w.signIn.links.list(who)).length, 0)
-    assert.equal((await testClient(w.app, { token: body.access_token!, remoteAddress: "203.0.113.9" })).status, 401)
+    assert.equal(w.revoked.length, 1)
+    await assert.rejects(verifyAt(w, body.access_token!), /revoked/)
   })
 
-  test("web_message: the answer is posted to the framing client's origin only; the consent is framable by it alone", async () => {
+  test("revokeGrant by id (the confirmation page's «revoke») ends the grant and tells onRevoke once (idempotent)", async () => {
     const w = world()
-    const cookie = await signedIn(w)
-    const { answer } = await consent(w, cookie, { response_mode: "web_message" })
-    assert.equal(answer.status, 200)
-    const html = await answer.text()
-    assert.match(html, /"type":"authorization_response"/)
-    assert.match(html, new RegExp(`\\["${FRAMER}"\\]`))
-    assert.match(html, /"iss":"http:\/\/localhost:3990"/)
-    assert.match(answer.headers.get("content-security-policy")!, /script-src 'nonce-/)
+    const { body } = await linked(w)
+    const grant = (await verifyAt(w, body.access_token!))!
+    await w.signIn.revokeGrant(grant.id)
+    await w.signIn.revokeGrant(grant.id)
+    assert.deepEqual(w.revoked, [grant.id])
+    assert.equal((await refresh(w, body.refresh_token!)).status, 400)
+  })
+
+  test("the grants page: lists the person's grants; revoking needs the page's nonce and the same origin", async () => {
+    const w = world()
+    const { body, cookie } = await linked(w, { scope: "web.read bound_browser_session" })
+    const anon = await w.send(new Request(at("/oauth/grants")))
+    assert.equal(anon.status, 303)
+    const page = await w.send(new Request(at("/oauth/grants"), { headers: { cookie } }))
+    assert.equal(page.status, 200)
+    assert.match(page.headers.get("content-security-policy")!, /frame-ancestors 'none'/)
+    const html = await page.text()
+    assert.match(html, /Assistant/)
+    assert.match(html, /Open this app&#39;s pages signed in as you/)
+    assert.match(html, /\/access\/log/)
+    const nonce = /name="nonce" value="([^"]+)"/.exec(html)![1]!
+    const grant = /name="grant" value="([^"]+)"/.exec(html)![1]!
+    const person = (await w.login.session(new Request(ORIGIN, { headers: { cookie } })))!
+    assert.equal((await w.signIn.grants.list(person))[0]!.browserSessions, true)
+    assert.equal((await w.send(new Request(at("/oauth/grants"), form({ nonce: "wrong", grant }, { cookie, origin: ORIGIN })))).status, 403)
+    assert.equal((await w.send(new Request(at("/oauth/grants"), form({ nonce, grant }, { cookie, origin: "https://evil.example" })))).status, 403)
+    const done = await w.send(new Request(at("/oauth/grants"), form({ nonce, grant }, { cookie, origin: ORIGIN })))
+    assert.equal(done.status, 200)
+    assert.match(await done.text(), /Access revoked/)
+    assert.deepEqual(w.revoked, [grant])
+    await assert.rejects(verifyAt(w, body.access_token!), /revoked/)
   })
 
   test("a consent posted by another site, or by another person, is refused", async () => {
     const w = world()
     const cookie = await signedIn(w)
-    const page = await send(w.app, new Request(authorizeUrl(), { headers: { cookie } }))
+    const page = await w.send(new Request(authorizeUrl(), { headers: { cookie } }))
     const id = /name="request" value="([^"]+)"/.exec(await page.text())![1]!
-    const cross = await send(w.app, new Request(at("/oauth/authorize"), { method: "POST", headers: { cookie, origin: "https://evil.example", "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ request: id, decision: "allow" }) }))
-    assert.equal(cross.status, 403)
+    assert.equal((await w.send(new Request(at("/oauth/authorize"), form({ request: id, decision: "allow" }, { cookie, origin: "https://evil.example" })))).status, 403)
     const other = await signedIn(w, "eve@example.com")
-    const stolen = await send(w.app, new Request(at("/oauth/authorize"), { method: "POST", headers: { cookie: other, origin: ORIGIN, "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ request: id, decision: "allow" }) }))
-    assert.equal(stolen.status, 403)
+    const page2 = await w.send(new Request(authorizeUrl(), { headers: { cookie } }))
+    const id2 = /name="request" value="([^"]+)"/.exec(await page2.text())![1]!
+    assert.equal((await w.send(new Request(at("/oauth/authorize"), form({ request: id2, decision: "allow" }, { cookie: other, origin: ORIGIN })))).status, 403)
   })
 
   test("DPoP: a proof at the token endpoint binds the tokens; then only DPoP with that key", async () => {
     const w = world()
-    const { privateKey, publicKey } = await generateKeyPair("EdDSA", { crv: "Ed25519", extractable: true })
+    const { privateKey, publicKey } = await generateKeyPair("EdDSA", { crv: "Ed25519" })
     const jwk = await exportJWK(publicKey)
     const proof = await new SignJWT({ htm: "POST", htu: at("/oauth/token") }).setProtectedHeader({ alg: "EdDSA", typ: "dpop+jwt", jwk }).setIssuedAt().setJti(randomUUID()).sign(privateKey)
     const { body } = await linked(w, {}, { dpop: proof })
     assert.equal(body.token_type, "DPoP")
-    assert.ok((decodeJwt(body.access_token!).cnf as { jkt?: string }).jkt)
-    assert.equal((await testClient(w.app, { token: body.access_token!, remoteAddress: "203.0.113.9" })).status, 401)
-    // The test client's key is another one: refused.
-    const other = await deviceKey()
-    assert.equal((await testClient(w.app, { token: body.access_token!, remoteAddress: "203.0.113.9", dpop: { key: other, htu: RESOURCE } })).status, 401)
-    const own = { jkt: "", publicJwk: jwk, privateKey, proof: async (i: { htm: string; htu: string; token: string }) => new SignJWT({ htm: i.htm, htu: i.htu, ath: createHash("sha256").update(i.token).digest("base64url") }).setProtectedHeader({ alg: "EdDSA", typ: "dpop+jwt", jwk }).setIssuedAt().setJti(randomUUID()).sign(privateKey), confirm: async () => "" }
-    assert.equal((await testClient(w.app, { token: body.access_token!, remoteAddress: "203.0.113.9", dpop: { key: own, htu: RESOURCE } })).status, 200)
-  })
-
-  test("personal keys: made by the person in the app, scoped, listed without the key, revoked at once", async () => {
-    const w = world()
-    await signedIn(w)
-    const [account] = await w.login.accounts.list("acme")
-    const who = { id: account!.id, name: account!.name, installation: "acme" }
-    const { key, id } = await w.signIn.keys.create(who, { name: "Nightly export", scopes: ["notes.read"] })
-    assert.ok(key.startsWith(PERSONAL_KEY_PREFIX))
-    const client = await testClient(w.app, { token: key, remoteAddress: "203.0.113.9" })
-    assert.equal(client.status, 200)
-    assert.equal((await client.call("note_add", { text: "x" })).isError, true)
-    const listed = await w.signIn.keys.list(who)
-    assert.equal(listed.length, 1)
-    assert.equal(JSON.stringify(listed).includes(key), false)
-    assert.equal(await w.signIn.keys.revoke(who, id), true)
-    assert.equal((await testClient(w.app, { token: key, remoteAddress: "203.0.113.9" })).status, 401)
+    const token = body.access_token!
+    await assert.rejects(verifyAt(w, token), /bound to a key/)
+    const call = await new SignJWT({ htm: "POST", htu: RESOURCE, ath: createHash("sha256").update(token).digest("base64url") }).setProtectedHeader({ alg: "EdDSA", typ: "dpop+jwt", jwk }).setIssuedAt().setJti(randomUUID()).sign(privateKey)
+    assert.ok(await w.signIn.verify(token, mcpRequest(token, "DPoP", { dpop: call }), { resource: RESOURCE, scheme: "DPoP" }))
   })
 
   test("a client with a key pair proves itself at the token endpoint (private_key_jwt)", async () => {
     const { privateKey, publicKey } = await generateKeyPair("ES256", { extractable: true })
     const pub = { ...(await exportJWK(publicKey)), kid: "k1", alg: "ES256" }
-    const w = world({ clientDocument: { client_id: CLIENT, redirect_uris: [CALLBACK], token_endpoint_auth_method: "private_key_jwt", token_endpoint_auth_signing_alg: "ES256", jwks: { keys: [pub] } } })
-    const unauthenticated = await linked(w)
-    assert.equal(unauthenticated.response.status, 401)
-    const w2 = world({ clientDocument: { client_id: CLIENT, redirect_uris: [CALLBACK], token_endpoint_auth_method: "private_key_jwt", token_endpoint_auth_signing_alg: "ES256", jwks: { keys: [pub] } } })
+    const doc = { client_id: CLIENT, redirect_uris: [CALLBACK], token_endpoint_auth_method: "private_key_jwt", token_endpoint_auth_signing_alg: "ES256", jwks: { keys: [pub] } }
+    assert.equal((await linked(world({ clientDocument: doc }))).response.status, 401)
+    const w = world({ clientDocument: doc })
     const assertion = await new SignJWT({}).setProtectedHeader({ alg: "ES256", kid: "k1" }).setIssuer(CLIENT).setSubject(CLIENT).setAudience(at("/oauth/token")).setIssuedAt().setExpirationTime("1m").setJti(randomUUID()).sign(privateKey)
-    const cookie = await signedIn(w2)
-    const { answer } = await consent(w2, cookie)
+    const cookie = await signedIn(w)
+    const { answer } = await consent(w, cookie)
     const code = new URL(answer.headers.get("location")!).searchParams.get("code")!
-    const ok = await send(w2.app, new Request(at("/oauth/token"), { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ grant_type: "authorization_code", code, code_verifier: verifier, client_id: CLIENT, redirect_uri: CALLBACK, client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer", client_assertion: assertion }) }))
+    const ok = await w.send(new Request(at("/oauth/token"), form({ grant_type: "authorization_code", code, code_verifier: verifier, client_id: CLIENT, redirect_uri: CALLBACK, client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer", client_assertion: assertion })))
     assert.equal(ok.status, 200)
   })
 
   test("keys: production needs one; newSignInKey makes a private Ed25519 JWK", async () => {
     const jwk = JSON.parse(await newSignInKey()) as Record<string, string>
+    assert.equal(jwk.kty, "OKP")
     assert.equal(jwk.crv, "Ed25519")
     assert.ok(jwk.d && jwk.kid)
     const env = process.env as Record<string, string | undefined>
-    const was = env.NODE_ENV
+    const before = env.NODE_ENV
     env.NODE_ENV = "production"
     try {
-      assert.throws(() => createSignIn(defineApp({ name: "x1", title: "X", version: "1.0.0", entities: [] }), { issuer: "https://x.example", resource: "https://x.example/mcp", login: { session: () => null, signInUrl: () => "/" }, permissionsOf: () => "all", store: new MemorySignInStore() }), /signIn.keys/)
+      assert.throws(() => createSignIn(appOf(), { issuer: "https://notes.example.com", resource: "https://notes.example.com/mcp", login: { session: () => null, signInUrl: () => "/" }, store: new MemorySignInStore() }), /signIn\.keys/)
+      assert.throws(() => devSignIn(appOf()), /refused when NODE_ENV is production/)
     } finally {
-      env.NODE_ENV = was
+      env.NODE_ENV = before
     }
   })
 
-  test("devSignIn: a real client links through the dev login (test people, the console code) and the module's consent", async () => {
+  test("devSignIn: the dev login (test people, the console code) and the module's consent; development tokens on loopback only", async () => {
     const transport = {
       fetch: (async (input: RequestInfo | URL) => (String(input) === CLIENT ? Response.json({ client_id: CLIENT, client_name: "Inspector", redirect_uris: [CALLBACK] }) : new Response("no", { status: 404 }))) as typeof fetch,
       lookup: async () => ["93.184.215.14"],
     }
-    const definition = world().app.app
-    const dev = devSignIn(definition, { issuer: ORIGIN, code: "DEV42", people: [{ id: "ada", name: "Ada", permissions: ["notes.read"] }], clientMetadata: transport })
-    const app = serve(definition, { auth: { signIn: dev } })
-    const go = (r: Request) => app.fetch(r, { remoteAddress: "127.0.0.1" })
-    // Not signed in: to the dev login, which asks for the code.
+    const dev = devSignIn(appOf(), { issuer: ORIGIN, code: "DEV42", people: [{ id: "ada", name: "Ada" }], clientMetadata: transport })
+    const go = async (r: Request) => (await dev.fetch(r)) ?? new Response(null, { status: 404 })
     const first = await go(new Request(authorizeUrl()))
     assert.equal(first.status, 303)
-    const login = new URL(first.headers.get("location")!)
+    const login = new URL(first.headers.get("location")!, ORIGIN)
     assert.equal(login.pathname, "/oauth/dev-login")
-    const signed = await go(new Request(at("/oauth/dev-login"), { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ person: "ada", code: "DEV42", return: login.searchParams.get("return")! }) }))
+    assert.equal((await go(new Request(at("/oauth/dev-login"), form({ person: "ada", code: "WRONG", return: "/" })))).status, 401)
+    const signed = await go(new Request(at("/oauth/dev-login"), form({ person: "ada", code: "DEV42", return: login.searchParams.get("return")! })))
     assert.equal(signed.status, 303)
     const cookie = signed.headers.get("set-cookie")!.split(";")[0]!
-    const consent = await go(new Request(at(signed.headers.get("location")!), { headers: { cookie } }))
-    const id = /name="request" value="([^"]+)"/.exec(await consent.text())![1]!
-    const allowed = await go(new Request(at("/oauth/authorize"), { method: "POST", headers: { cookie, origin: ORIGIN, "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ request: id, decision: "allow" }) }))
+    const consentPage = await go(new Request(at(signed.headers.get("location")!), { headers: { cookie } }))
+    const id = /name="request" value="([^"]+)"/.exec(await consentPage.text())![1]!
+    const allowed = await go(new Request(at("/oauth/authorize"), form({ request: id, decision: "allow" }, { cookie, origin: ORIGIN })))
     const code = new URL(allowed.headers.get("location")!).searchParams.get("code")!
-    const token = (await (await go(new Request(at("/oauth/token"), { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ grant_type: "authorization_code", code, code_verifier: verifier, client_id: CLIENT, redirect_uri: CALLBACK }) }))).json()) as { access_token: string }
-    // A module token (not a development one): it counts from any address, with the person's permissions.
-    const client = await testClient(app, { token: token.access_token, remoteAddress: "203.0.113.9" })
-    const tools = (await client.listTools()).map((t) => t.name)
-    assert.ok(tools.includes("note_list") && !tools.includes("note_add"), tools.join(", "))
-    // Development tokens never count from another address.
-    assert.equal((await testClient(app, { remoteAddress: "203.0.113.9" })).status, 401)
+    const token = (await (await go(new Request(at("/oauth/token"), form({ grant_type: "authorization_code", code, code_verifier: verifier, client_id: CLIENT, redirect_uri: CALLBACK })))).json()) as { access_token: string }
+    assert.equal((await dev.verify(token.access_token, mcpRequest(token.access_token), { resource: RESOURCE, scheme: "Bearer" }))?.person.id, "ada")
+    // A development token: the scopes a test needs, on a loopback address only; revocable.
+    const t = await dev.dev.token({ person: "ada", scopes: ["web.read", "web.write"] })
+    const g = (await dev.verify(t, mcpRequest(t), { resource: RESOURCE, scheme: "Bearer" }))!
+    assert.deepEqual(g.scopes, ["web.read", "web.write"])
+    assert.equal(g.person.name, "Ada")
+    await assert.rejects(dev.verify(t, new Request("https://notes.example.com/mcp", { method: "POST" }), { resource: RESOURCE, scheme: "Bearer" }), /loopback/)
+    await dev.revokeGrant(g.id)
+    await assert.rejects(dev.verify(t, mcpRequest(t), { resource: RESOURCE, scheme: "Bearer" }), /revoked/)
   })
 
   test("frameCookie: partitioned over https, Lax over http", () => {

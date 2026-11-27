@@ -1,19 +1,22 @@
-# Clegra apps
+# @clegra/sdk
 
-> Clegra's developer platform: apps that are also MCP servers. One thing per file — `defineEntity`, `defineAction`, `definePage`, `defineArtifact`, `defineAgent` handles assembled by `defineApp({ entities: [...], actions: [...], pages: [...] })` and run by `serve(app, { auth, … })`, from the package `@clegra/sdk` — becomes a plain, conformant MCP server with tools, annotations, MCP Apps views and OAuth (for ChatGPT, Claude and any MCP client) a JSON manifest Clegra reads to draw the app natively in its workspace, and an OpenAPI 3.1 index of the same operations. No MCP extension required.
+> Clegra apps: a web app with a plain MCP server (revision 2026-07-28, the official @modelcontextprotocol/server underneath) plus small extensions: com.clegra/web-map (records as resources at their web URLs, tools that name their page, the per-person webmap://pages resource, badges and widgets), com.clegra/app-share (share targets and plugins), and profiles for session transfer, access scopes, app agents as skills, the app's own confirmation of irreversible calls, and two event types. Agents use MCP tools; pages are for people; one OAuth login on the app's own page.
 
-## Start here
+## Docs
 
-- [AI guide](ai-guide.md): the complete single-file reference for coding agents — the whole shape (define* handles, defineApp, serve), the rules, the common mistakes, a full example. Read this one file to build an app.
+- [Reference](spec.md): definitions, what they become on the wire, serve and its routes, confirmation, session transfer, events, access log, adapters, testing, the check CLI
+- [AI guide](ai-guide.md): the single-file reference for coding agents
+- [Getting started: plain JavaScript](start-javascript.md)
+- [Getting started: Next.js](start-next.md)
+- [Sign-in](auth.md): the sign-in module, devSignIn, passwordLogin, or your own authorization server
+- [Extensions index](extensions/README.md): the normative documents and the adoption levels A, B1, B2, C
 
-## More
+## Extensions
 
-- [Specification](spec.md): the manifest, kinds and cross-app references, the generated MCP server, enforcement, conformance, the workspace host across apps (normative, short)
-- [Getting started: plain JavaScript](start-javascript.md): one file per thing, any runtime with Fetch (Node `listen`, Express); pages, tests, data, kinds
-- [Getting started: Next.js](start-next.md): 5 minutes (`npx @clegra/sdk init`), a day to ship
-- UI: `@clegra/ui`, a separate package (its own repository and guide): Clegra's components for React and React Native, the theme and `<ClegraProvider>` for an app's own view; `npx @clegra/sdk init --ui` adds it with Tailwind 4
-- [Auth](auth.md): the sign-in module (`createSignIn`, `devSignIn`) or your own authorization server with `auth.resolve`; recipes for better-auth, Clerk, Auth0, WorkOS
-- [CRM example](examples/crm.md): Next.js, better-auth, Drizzle; code in `examples/crm/clegra/`
-- [Warehouse example](examples/warehouse.md): Next.js, better-auth, plain SQL; code in `examples/warehouse/clegra/`
-- JSON Schema of the manifest: `spec/schema/clegra.schema.json`
-- The kinds of this version (person, organization, event, task, document, product, order): `spec/kinds.json`
+- [web-map](extensions/web-map.md)
+- [app-share](extensions/app-share.md)
+- [session transfer](extensions/session-transfer.md)
+- [access](extensions/access.md)
+- [app agents](extensions/app-agents.md)
+- [confirmation](extensions/confirmation.md)
+- [event types](extensions/event-types.md)
