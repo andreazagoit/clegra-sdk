@@ -45,8 +45,12 @@ What it serves:
 | `/oauth/grants` | The person's grants (client, scopes, created, last used, background, browser sessions), each with «Revoke»; a link to «Download the access log» (`/access/log`) |
 
 - **Clients** identify themselves with a Client ID Metadata Document (an https URL), public or with a key pair
-  (`private_key_jwt`); no dynamic registration. The document's host is resolved and refused if it points inside the
-  network.
+  (`private_key_jwt`); no dynamic registration. The document's host (and its `jwks_uri`'s) is resolved and refused if
+  it points inside the network. Outside production (`NODE_ENV` is not `production`, read from the app's environment,
+  never from the request) a document and its `jwks_uri` on a loopback name (`localhost`, `*.localhost`, `127.0.0.1`,
+  `[::1]`) may also be http, fetched without that check, so a client on a local stack
+  (`http://core.localhost:3000/oauth/client.json`) can sign in. In production it is https on a public host, with no
+  option to relax it.
 - **Scopes** are the access profile's: `web.read`, `web.write`, `web.irreversible`, `bound_browser_session`,
   `browser_session` (only when the app sets `sessionTransfer: { link: true }`, else `invalid_scope`),
   `offline_access`. A request with none gets `web.read`; a grant holds only what was asked (ACC-1).

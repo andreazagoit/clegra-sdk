@@ -40,7 +40,11 @@ the same tool, kept so that the Clerk-compatible mode is that in name too. An ap
 - **ACC-4 Sign-in.** Authorization happens in the person's system browser (RFC 8252), never in a web view of the
   client. If that browser already holds another person's session the app asks which to use. Sign-in and consent
   send `frame-ancestors 'none'`, show the client (host of `client_id`, redirect target), and are never remembered
-  for loopback or custom-scheme redirects, where they also warn that the application cannot be verified.
+  for loopback or custom-scheme redirects, where they also warn that the application cannot be verified. The client
+  is known by its Client ID Metadata Document: an https URL on a public host, fetched only when every address of the
+  host is public. Outside production an app MAY also accept a document (and its `jwks_uri`) at http on a loopback
+  name (`localhost`, `*.localhost`, `127.0.0.1`, `[::1]`), deciding from its own configuration and never from the
+  request; in production it MUST NOT.
 - **ACC-5 Tokens.** Access tokens are audience-bound (RFC 8707) and SHOULD live at most 10 minutes; refresh tokens
   rotate, and a reused one revokes the whole grant. Without `offline_access` no refresh token outlives the
   person's presence, and the client says background work is unavailable. Sender-constrained tokens (DPoP, RFC

@@ -22,7 +22,7 @@ import { calculateJwkThumbprint, createLocalJWKSet, decodeJwt, decodeProtectedHe
 
 import { ALL_SCOPES, SCOPES } from "../access"
 import type { App } from "../app"
-import { AuthError, CLIENT_ASSERTION_ALGS, ClientDirectory, ClientMetadataError, isClientMetadataUrl, redirectUriAllowed, type ClientMetadata, type ClientMetadataTransport } from "../auth"
+import { AuthError, CLIENT_ASSERTION_ALGS, ClientDirectory, ClientMetadataError, clientMetadataUrlProblem, isClientMetadataUrl, redirectUriAllowed, type ClientMetadata, type ClientMetadataTransport } from "../auth"
 import { randomToken, sha256 } from "../crypto"
 import type { Grant, Person } from "../define"
 import { checkDpopProof, DPOP_ALGS, DpopError } from "../dpop"
@@ -282,7 +282,8 @@ export function buildSignIn(app: App, options: SignInOptions, memoryKey: boolean
     const locale = pageLocale(request, url.searchParams.get("ui_locales"), app.locale)
     // Who asks, first: until the client and its redirect address are known good, nothing is sent anywhere.
     const clientId = q("client_id")
-    if (!isClientMetadataUrl(clientId)) return errorPage(locale, "client_id must be the https address of the client's metadata document (Client ID Metadata Document)")
+    const problem = clientMetadataUrlProblem(clientId)
+    if (problem) return errorPage(locale, `client_id must be the address of the client's metadata document (Client ID Metadata Document): ${problem}`)
     let client: ClientMetadata
     try {
       client = await directory.client(clientId)

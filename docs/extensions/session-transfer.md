@@ -166,7 +166,9 @@ From 0.4.0, `serve` implements both modes on top of the app's own login: the sig
 (SES-5), checks who initiated a redeem `POST` (SES-3), and logs every issue and redeem in the access log (SES-10,
 SES-17). The transferred session is the SDK's own cookie (`__Host-clegra-transferred`, 1 hour idle, 8 hours at most,
 ended by revoking the grant); the app's pages read either session with `served.session(request)` and enforce SES-6 on
-their own actions from its `transferred.scopes`. Reference: [the SDK's spec](../spec.md).
+their own actions from its `transferred.scopes`. The grant behind it is the sign-in module's, so on a local stack a
+client whose Client ID Metadata Document is http on a loopback host gets its per-person links too, outside production
+only ([auth](../auth.md); [access](access.md), ACC-4). Reference: [the SDK's spec](../spec.md).
 
 A sketch of the redeem in Rails, for an app without the SDK:
 

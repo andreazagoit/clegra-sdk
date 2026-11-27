@@ -1,6 +1,7 @@
 import { createLocalJWKSet, decodeProtectedHeader, jwtVerify, type JWK, type JWTPayload } from "jose"
 
 import { sha256 } from "./crypto"
+import { isProduction } from "./env"
 import { hostLookup } from "./platform"
 
 /**
@@ -48,7 +49,23 @@ export function isLoopback(host: string | null | undefined): boolean {
  * whoever opens the sign-in page chose (through a tunnel that is anyone), so
  * the fetch must never reach this machine or its network: everything below
  * that refuses an address is there for that.
+ *
+ * Outside production (NODE_ENV is not `production`, read from the app's own
+ * environment, never from the request) one exception: a URL on a loopback
+ * name (localhost, *.localhost, 127.0.0.1, [::1]) may be http, and it is
+ * fetched without the public-address check, so a client on a local stack
+ * (its document at http://core.localhost:3000/...) can sign in to an app on
+ * the same machine. In production the rule stays https on a public host,
+ * with no option to relax it.
  */
+
+/** The loopback names a client document may live on outside production, as `URL.hostname` spells them (the sign-in's issuer rule). */
+const LOCAL_CLIENT_HOST = /^(localhost|127\.0\.0\.1|\[::1\]|[a-z0-9-]+\.localhost)$/i
+
+/** Whether a client document URL is a local one: outside production only, http or https on a loopback name. */
+function isLocalClientUrl(url: URL): boolean {
+  return !isProduction() && (url.protocol === "http:" || url.protocol === "https:") && LOCAL_CLIENT_HOST.test(url.hostname)
+}
 
 /** How a client with a key pair may sign its `client_assertion` (RFC 7523): asymmetric only, never `none` or a shared-secret HMAC. */
 export const CLIENT_ASSERTION_ALGS = ["RS256", "ES256", "PS256"] as const
@@ -194,13 +211,15 @@ export function clientMetadataUrlProblem(clientId: string): string | null {
   } catch {
     return "it is not a URL"
   }
-  if (url.protocol !== "https:" || !/^https:\/\//i.test(clientId)) return "it must be an https URL"
+  const local = isLocalClientUrl(url)
+  const scheme = /^https:\/\//i.test(clientId) ? 8 : local && /^http:\/\//i.test(clientId) ? 7 : 0
+  if (!scheme || (url.protocol !== "https:" && !local)) return isProduction() ? "it must be an https URL" : "it must be an https URL (http only on a loopback host: localhost, *.localhost, 127.0.0.1, [::1])"
   if (clientId.includes("#")) return "it must not have a fragment"
-  const [authority = "", ...rest] = clientId.slice(8).split(/[?]/)[0]!.split("/")
+  const [authority = "", ...rest] = clientId.slice(scheme).split(/[?]/)[0]!.split("/")
   if (authority.includes("@") || url.username || url.password) return "it must not carry a user name or password"
   if (url.pathname === "/" || !rest.length) return "it needs a path (https://host/path), not only a host"
   if (rest.some((segment) => /^(\.|%2e){1,2}$/i.test(segment))) return "its path must not contain . or .. segments"
-  return hostProblem(url.hostname)
+  return local ? null : hostProblem(url.hostname)
 }
 
 export const isClientMetadataUrl = (clientId: string) => clientMetadataUrlProblem(clientId) === null
@@ -243,7 +262,7 @@ export function validateClientMetadata(clientId: string, document: unknown): Cli
   if ((d.jwks_uri === undefined) === (d.jwks === undefined)) throw new ClientMetadataError("a private_key_jwt client needs its keys: jwks_uri or jwks (exactly one of them)")
   const keys: Pick<ClientMetadata, "jwks_uri" | "jwks"> = {}
   if (d.jwks_uri !== undefined) {
-    // Fetched like the document itself: https, a public host, no fragment, no user name.
+    // Fetched like the document itself: https, a public host (a loopback one outside production), no fragment, no user name.
     const problem = typeof d.jwks_uri === "string" ? clientMetadataUrlProblem(d.jwks_uri) : "it is not a string"
     if (problem) throw new ClientMetadataError(`the metadata document's jwks_uri is not a valid key set URL: ${problem}`)
     keys.jwks_uri = d.jwks_uri as string
@@ -327,10 +346,11 @@ export async function fetchClientJwks(jwksUri: string, transport: ClientMetadata
   return { jwks: validateClientJwks(value, "key set (jwks_uri)"), cacheSeconds }
 }
 
-/** A JSON document at a checked https URL `address`, fetched only when every address of its host is public (see fetchClientMetadata). `what` names it in errors. */
+/** A JSON document at a checked URL `address`, fetched only when every address of its host is public, or when it is a local one outside production (see fetchClientMetadata). `what` names it in errors. */
 async function fetchPublicJson(address: string, transport: ClientMetadataTransport, what: string): Promise<{ value: unknown; cacheSeconds: number }> {
-  const host = new URL(address).hostname.replace(/^\[|\]$/g, "")
-  if (!isIP(host)) {
+  const url = new URL(address)
+  const host = url.hostname.replace(/^\[|\]$/g, "")
+  if (!isIP(host) && !isLocalClientUrl(url)) {
     let addresses: string[]
     try {
       addresses = await (transport.lookup ?? systemLookup)(host)

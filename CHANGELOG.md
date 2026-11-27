@@ -4,6 +4,16 @@ Clegra apps and the `@clegra/sdk` package. Newest first. Versions before 1.0 are
 npm dist-tag `next`. Entries below «Two scoped packages» keep the names of their time (the unscoped `clegra` package
 and its `clegra/ui`, the `modelapp` package, docs/map): they are history.
 
+## 0.4.0-next.3 (2026-11-27)
+
+- Outside production (`NODE_ENV` is not `production`, read from the app's own environment, never from the request),
+  the sign-in accepts a Client ID Metadata Document and its `jwks_uri` at http on a loopback name (`localhost`,
+  `*.localhost`, `127.0.0.1`, `[::1]`, the issuer's own rule), fetched without the public-address check: a client on a
+  local stack (`http://core.localhost:3000/oauth/client.json`) can sign in and get per-person links. Any other http
+  host and private non-loopback addresses stay refused. In production nothing changes: https on a public host, with
+  no option to relax it.
+- The authorize error page says why a `client_id` was refused.
+
 ## 0.4.0-next.2 (2026-11-27)
 
 - `SqlSignInStore` writes its values as a `text` parameter cast in SQL (`$n::text::jsonb`). Over postgres.js, which

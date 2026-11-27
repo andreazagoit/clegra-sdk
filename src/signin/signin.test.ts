@@ -5,6 +5,7 @@ import { describe, test } from "node:test"
 import { decodeJwt, exportJWK, generateKeyPair, SignJWT } from "jose"
 
 import { defineApp } from "../app"
+import { clientMetadataUrlProblem, fetchClientJwks, fetchClientMetadata } from "../auth"
 import { createSignIn, devSignIn, frameCookie, MemorySignInStore, newSignInKey, passwordLogin } from "./index"
 
 // THE SIGN-IN MODULE: the app's own login gives any MCP client a grant the app issued, through the app's own consent;
@@ -310,6 +311,84 @@ describe("sign-in module", () => {
     await assert.rejects(dev.verify(t, new Request("https://notes.example.com/mcp", { method: "POST" }), { resource: RESOURCE, scheme: "Bearer" }), /loopback/)
     await dev.revokeGrant(g.id)
     await assert.rejects(dev.verify(t, mcpRequest(t), { resource: RESOURCE, scheme: "Bearer" }), /revoked/)
+  })
+
+  test("a client document on a loopback host: http accepted outside production only, fetched without the address check; never in production", async () => {
+    const env = process.env as Record<string, string | undefined>
+    const before = env.NODE_ENV
+    const LOCAL = "http://core.localhost:3000/oauth/client.json"
+    const LOCAL_JWKS = "http://core.localhost:3000/oauth/jwks.json"
+    const LOCAL_CALLBACK = "http://core.localhost:3000/oauth/callback"
+    const { privateKey, publicKey } = await generateKeyPair("ES256", { extractable: true })
+    const pub = { ...(await exportJWK(publicKey)), kid: "k1", alg: "ES256" }
+    const documents: Record<string, unknown> = {
+      [LOCAL]: { client_id: LOCAL, client_name: "Clegra", redirect_uris: [LOCAL_CALLBACK], token_endpoint_auth_method: "private_key_jwt", token_endpoint_auth_signing_alg: "ES256", jwks_uri: LOCAL_JWKS },
+      [LOCAL_JWKS]: { keys: [pub] },
+    }
+    const fetched: string[] = []
+    const looked: string[] = []
+    const transport = {
+      fetch: (async (input: RequestInfo | URL) => {
+        fetched.push(String(input))
+        const d = documents[String(input)]
+        return d ? Response.json(d) : new Response("no", { status: 404 })
+      }) as typeof fetch,
+      lookup: async (host: string) => {
+        looked.push(host)
+        return host === "inside.example" ? ["10.0.0.7"] : ["93.184.215.14"]
+      },
+    }
+    const signInOf = async () => {
+      const store = new MemorySignInStore()
+      const login = passwordLogin({ store, origin: ORIGIN, title: { en: "Notes", it: "Note" }, iterations: 1000 })
+      const signIn = createSignIn(appOf(), { issuer: ORIGIN, resource: RESOURCE, login, store, clientMetadata: transport, keys: [JSON.parse(await newSignInKey())] })
+      const w = { login, send: async (r: Request) => (await signIn.fetch(r)) ?? new Response("not found", { status: 404 }) } as unknown as World
+      return { w, cookie: await signedIn(w) }
+    }
+    const authorize = (client: string) => at(`/oauth/authorize?${new URLSearchParams({ response_type: "code", client_id: client, redirect_uri: LOCAL_CALLBACK, state: "s1", code_challenge: challenge, code_challenge_method: "S256", resource: RESOURCE })}`)
+    try {
+      env.NODE_ENV = "production"
+      for (const id of [LOCAL, "http://localhost:3000/oauth/client.json", "http://127.0.0.1:3000/c.json", "http://[::1]:3000/c.json"]) assert.match(clientMetadataUrlProblem(id) ?? "", /must be an https URL$/)
+      assert.match(clientMetadataUrlProblem("https://core.localhost/oauth/client.json") ?? "", /not a public host name/)
+      assert.match(clientMetadataUrlProblem("https://127.0.0.1/c.json") ?? "", /not a public address/)
+      await assert.rejects(fetchClientMetadata(LOCAL, transport), /must be an https URL/)
+      await assert.rejects(fetchClientJwks(LOCAL_JWKS, transport), /must be an https URL/)
+      assert.deepEqual(fetched, [])
+      {
+        const { w, cookie } = await signInOf()
+        const page = await w.send(new Request(authorize(LOCAL), { headers: { cookie } }))
+        assert.equal(page.status, 400)
+        assert.match(await page.text(), /must be an https URL/)
+        assert.deepEqual(fetched, [])
+      }
+
+      env.NODE_ENV = "development"
+      for (const id of [LOCAL, "http://localhost:3000/oauth/client.json", "http://127.0.0.1:3000/c.json", "http://[::1]:3000/c.json", "https://localhost:3443/c.json"]) assert.equal(clientMetadataUrlProblem(id), null, id)
+      // Only loopback names: any other http host, a private address and a name that merely starts with localhost stay refused.
+      for (const id of ["http://client.example/c.json", "http://10.0.0.7/c.json", "http://192.168.1.4:3000/c.json", "http://localhost.client.example/c.json", "http://a.b.localhost/c.json"]) assert.match(clientMetadataUrlProblem(id) ?? "", /must be an https URL \(http only on a loopback host/, id)
+      assert.match(clientMetadataUrlProblem("https://10.0.0.7/c.json") ?? "", /not a public address/)
+      assert.match(clientMetadataUrlProblem("http://localhost:3000") ?? "", /needs a path/)
+      assert.match(clientMetadataUrlProblem("http://user@localhost:3000/c.json") ?? "", /user name/)
+      await assert.rejects(fetchClientMetadata("https://inside.example/c.json", transport), /10\.0\.0\.7, which is not a public address/)
+      looked.length = 0
+      fetched.length = 0
+      {
+        const { w, cookie } = await signInOf()
+        const page = await w.send(new Request(authorize(LOCAL), { headers: { cookie } }))
+        assert.equal(page.status, 200)
+        const id = /name="request" value="([^"]+)"/.exec(await page.text())![1]!
+        const allowed = await w.send(new Request(at("/oauth/authorize"), form({ request: id, decision: "allow" }, { cookie, origin: ORIGIN })))
+        const code = new URL(allowed.headers.get("location")!).searchParams.get("code")!
+        const assertion = await new SignJWT({}).setProtectedHeader({ alg: "ES256", kid: "k1" }).setIssuer(LOCAL).setSubject(LOCAL).setAudience(at("/oauth/token")).setIssuedAt().setExpirationTime("1m").setJti(randomUUID()).sign(privateKey)
+        const token = await w.send(new Request(at("/oauth/token"), form({ grant_type: "authorization_code", code, code_verifier: verifier, client_id: LOCAL, redirect_uri: LOCAL_CALLBACK, client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer", client_assertion: assertion })))
+        assert.equal(token.status, 200)
+        // The document and its key set were fetched; their loopback host was never resolved for the public-address check.
+        assert.deepEqual([...new Set(fetched)].sort(), [LOCAL, LOCAL_JWKS].sort())
+        assert.deepEqual(looked, [])
+      }
+    } finally {
+      env.NODE_ENV = before
+    }
   })
 
   test("frameCookie: partitioned over https, Lax over http", () => {
