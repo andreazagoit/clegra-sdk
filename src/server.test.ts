@@ -66,6 +66,20 @@ function fixture(options: { link?: boolean; waitMs?: number; fetch?: typeof fetc
       return { data: { sent } }
     },
   })
+  const removeJob = defineTool({
+    name: "job.delete",
+    title: "Delete job",
+    description: "Deletes a job for good",
+    input: z.object({ id: z.string() }),
+    annotations: { readOnly: false, destructive: true },
+    entity: job,
+    on: "record",
+    confirm: { message: (_i, _c, r) => `Delete «${r.title}» for good?` },
+    run: (_i, _c, record) => {
+      jobs.delete(record.id)
+      return { data: { deleted: record.id } }
+    },
+  })
   const createJob = defineTool({
     name: "job.create",
     title: { en: "New job", it: "Nuovo lavoro" },
@@ -102,7 +116,7 @@ function fixture(options: { link?: boolean; waitMs?: number; fetch?: typeof fetc
     description: "Job requests",
     version: "1.0.0",
     entities: [job],
-    tools: [getJob, listJobs, complete, sendReport, createJob, notifyTool],
+    tools: [getJob, listJobs, complete, sendReport, removeJob, createJob, notifyTool],
     pages: [jobsPage, jobPage, adminPage],
     badges: [open],
     widgets: [tile],
@@ -289,6 +303,16 @@ describe("confirmation", () => {
     assert.equal((changedArgs.structuredContent?.error as { code: string }).code, "confirmation_required", "other arguments need their own confirmation")
     const run = await c.call("job.send_report", { id: "1" })
     assert.deepEqual(run.structuredContent, { sent: 1 })
+  })
+
+  test("a repeat of a confirmed call that deleted its record returns the first result", async () => {
+    const f = fixture()
+    const c = testClient(f.served, { token: await f.signIn.dev.token({ person: "ada" }) })
+    const first = await c.call("job.delete", { id: "2" })
+    await confirmOnPage(f.served, first.inputRequests!.confirm!.params.url!, await login(f.served, "ada"))
+    const more = { inputResponses: { confirm: { action: "accept" } }, requestState: first.requestState! }
+    assert.deepEqual((await c.call("job.delete", { id: "2" }, more)).structuredContent, { deleted: "2" })
+    assert.deepEqual((await c.call("job.delete", { id: "2" }, more)).structuredContent, { deleted: "2" })
   })
 
   test("decline, a changed record and another person's session", async () => {

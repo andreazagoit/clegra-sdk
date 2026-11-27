@@ -117,7 +117,7 @@ export class SqlSignInStore implements SignInStore {
   }
 
   async get(key: string) {
-    const [row] = await this.#rows(`SELECT value FROM ${this.#table} WHERE key = $1 AND (expires_at IS NULL OR expires_at >= now())`, [key])
+    const [row] = await this.#rows(`SELECT value::text AS value FROM ${this.#table} WHERE key = $1 AND (expires_at IS NULL OR expires_at >= now())`, [key])
     return row ? this.#value(row.value) : null
   }
 
@@ -131,7 +131,7 @@ export class SqlSignInStore implements SignInStore {
   }
 
   async take(key: string) {
-    const [row] = await this.#rows(`DELETE FROM ${this.#table} WHERE key = $1 RETURNING value, (expires_at IS NULL OR expires_at >= now()) AS live`, [key])
+    const [row] = await this.#rows(`DELETE FROM ${this.#table} WHERE key = $1 RETURNING value::text AS value, (expires_at IS NULL OR expires_at >= now()) AS live`, [key])
     return row && (row.live === true || row.live === "t") ? this.#value(row.value) : null
   }
 
@@ -141,7 +141,7 @@ export class SqlSignInStore implements SignInStore {
 
   async list(prefix: string) {
     const pattern = `${prefix.replace(/[\\%_]/g, (c) => `\\${c}`)}%`
-    const rows = await this.#rows(`SELECT key, value FROM ${this.#table} WHERE key LIKE $1 AND (expires_at IS NULL OR expires_at >= now()) ORDER BY key`, [pattern])
+    const rows = await this.#rows(`SELECT key, value::text AS value FROM ${this.#table} WHERE key LIKE $1 AND (expires_at IS NULL OR expires_at >= now()) ORDER BY key`, [pattern])
     return rows.map((r) => ({ key: String(r.key), value: this.#value(r.value) }))
   }
 
@@ -162,7 +162,7 @@ export class SqlSignInStore implements SignInStore {
        ON CONFLICT (key) DO UPDATE SET
          value = CASE WHEN ${this.#table}.expires_at < now() THEN '1'::jsonb ELSE to_jsonb((${this.#table}.value #>> '{}')::bigint + 1) END,
          expires_at = CASE WHEN ${this.#table}.expires_at < now() THEN EXCLUDED.expires_at ELSE ${this.#table}.expires_at END
-       RETURNING value`,
+       RETURNING value::text AS value`,
       [`#hit#${key}`, Math.max(1, Math.round(windowMs))],
     )
     return Number(this.#value(row?.value) ?? 1)

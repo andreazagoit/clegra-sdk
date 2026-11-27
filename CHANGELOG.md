@@ -4,6 +4,14 @@ Clegra apps and the `@clegra/sdk` package. Newest first. Versions before 1.0 are
 npm dist-tag `next`. Entries below «Two scoped packages» keep the names of their time (the unscoped `clegra` package
 and its `clegra/ui`, the `modelapp` package, docs/map): they are history.
 
+## 0.4.0-next.1 (2026-11-27)
+
+- `SqlSignInStore` reads its `jsonb` values as text, so a driver that parses `jsonb` itself (postgres.js, PGlite) no
+  longer breaks a stored string.
+- A repeat of a confirmed call (the same `requestState`) returns its first result before the record is read again:
+  a confirmed delete repeated after it ran no longer answers `not_found` (CNF-6).
+- The password login counts only wrong attempts against its limit (five per address in 15 minutes).
+
 ## 0.4.0-next.0 (2026-11-27)
 
 A Clegra app is now a **web app with a plain MCP server plus small MCP extensions** (docs/extensions): web-map,

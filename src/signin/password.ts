@@ -92,12 +92,16 @@ export function passwordLogin(options: PasswordLoginOptions): PasswordLogin {
     const form = new URLSearchParams(await request.text())
     const returnTo = safeReturn(form.get("return"))
     const email = (form.get("email") ?? "").trim().toLowerCase()
-    if ((await store.hit(`signin:${email}`, 15 * 60_000)) > 5) return signInPage(request, returnTo, t.tooMany, 429)
+    // Five wrong attempts per address in 15 minutes; a right one is never counted.
+    if (Number((await store.get(`#hit#signin:${email}`)) ?? 0) >= 5) return signInPage(request, returnTo, t.tooMany, 429)
     const id = (await store.get(emailKey(email))) as string | null
     const account = id ? await byId(id) : null
     // The same work whether the account exists or not: the answer's timing does not tell.
     const ok = await verifyPassword(form.get("password") ?? "", account?.hash ?? `pbkdf2-sha256$${iterations}$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA`)
-    if (!account || !ok || account.disabled) return signInPage(request, returnTo, t.wrong, 401)
+    if (!account || !ok || account.disabled) {
+      await store.hit(`signin:${email}`, 15 * 60_000)
+      return signInPage(request, returnTo, t.wrong, 401)
+    }
     const token = randomToken()
     await store.set(`session:${await sha256(token)}`, { account: account.id }, sessionMs)
     return new Response(null, { status: 303, headers: { location: returnTo, "set-cookie": frameCookie({ name: COOKIE, value: token, secure, maxAgeSeconds: sessionMs / 1000 }), "cache-control": "no-store" } })

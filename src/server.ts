@@ -277,6 +277,10 @@ export function serve(app: App, options: ServeOptions): ServedApp {
           let recordUrl: string | undefined
           try {
             if (c.allow && !(await c.allow(ctx))) throw new AppError("permission_denied", `You may not use ${t(c.title)}`)
+            const requestState = typeof mctx.mcpReq.requestState === "function" ? (mctx.mcpReq.requestState() as string | undefined) : undefined
+            // A repeat of a confirmed call returns its first result, even when that call deleted its record (CNF-6).
+            const kept = c.confirm ? await confirmations.kept(requestState) : null
+            if (kept) return kept
             const record = await recordOf(tool, args, ctx)
             if (record && c.entity) recordUrl = urlOf(c.entity, record, origin)
             const run = async () => {
@@ -295,7 +299,7 @@ export function serve(app: App, options: ServeOptions): ServedApp {
                 message: async () => confirm.message(args as never, ctx, record as never),
                 values: async () => (confirm.values ? confirm.values(args as never, ctx, record as never) : null),
                 elicitsUrl: extra.elicitsUrl,
-                requestState: typeof mctx.mcpReq.requestState === "function" ? (mctx.mcpReq.requestState() as string | undefined) : undefined,
+                requestState,
                 answered: Boolean(mctx.mcpReq.inputResponses && "confirm" in mctx.mcpReq.inputResponses),
               })
               if (!gate.run) {

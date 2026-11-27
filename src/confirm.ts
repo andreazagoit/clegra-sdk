@@ -169,6 +169,11 @@ export class Confirmations {
     return sha256(canonicalJson({ tool, args, client: ctx.grant.clientId, subject: ctx.person.id }))
   }
 
+  /** The first result of a confirmed call, for a repeat with its request state (CNF-6), else null. */
+  async kept(requestState: string | undefined): Promise<CallToolResult | null> {
+    return requestState ? this.#store.get<CallToolResult>(`cnfres:${requestState}`) : null
+  }
+
   /** Decides whether the call runs now (CNF-1 to CNF-8). */
   async gate(input: GateInput): Promise<GateOutcome> {
     const { ctx } = input
