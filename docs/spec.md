@@ -253,7 +253,8 @@ The [profile](extensions/session-transfer.md), both modes. The tools return `{ u
 
 - **Strong** (`create_bound_browser_session { target, challenge }`, scope `bound_browser_session`, hidden from
   models): a 256-bit code for 60 seconds, bound to the grant, client, target and challenge. The client posts
-  `verifier=…` to `url` in its browser context; a bare `GET` shows the interstitial.
+  `verifier=…` to `url` in its browser context. There is no other way in: a `GET` shows no form (`400`, the code
+  stays valid for the client), and a `POST` without the right verifier is refused and burns the code.
 - **Clerk-compatible** (`create_browser_session { target }`, scope `browser_session`, only with
   `sessionTransfer.link`): a one-time link for 5 minutes, redeemed only through the interstitial («You are entering as
   X through Y, started at hh:mm. Continue / This is not me»).
@@ -343,5 +344,5 @@ conformance scenarios against a running app and prints the adoption level it fin
 **A** (map: the settings object, tool `_meta`, record templates, the pages resource, the bearer `GET`, nothing public
 but the card), **B1** (confirmed actions: the URL elicitation or the fallback for the call given), **B2** (hardened
 access: step-up with a read-only token, the protected-resource metadata), **C** (one sign-in: the session-transfer
-tool, the refusal without `challenge`, the interstitial). A level is what the check finds, never a claim.
+tool, the refusal without `challenge`, a strong-mode code useless without its verifier). A level is what the check finds, never a claim.
 `npx @clegra/sdk init` sets up a Next.js app ([start-next.md](start-next.md)).

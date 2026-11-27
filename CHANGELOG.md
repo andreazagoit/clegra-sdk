@@ -4,6 +4,20 @@ Clegra apps and the `@clegra/sdk` package. Newest first. Versions before 1.0 are
 npm dist-tag `next`. Entries below «Two scoped packages» keep the names of their time (the unscoped `clegra` package
 and its `clegra/ui`, the `modelapp` package, docs/map): they are history.
 
+## 0.4.0-next.4 (2026-11-27)
+
+- **Security.** Session transfer, strong mode: a copied redeem URL could sign its holder in as the person, without the
+  verifier. 0.4.0-next.0 to next.3 showed the interstitial (with its nonce) on a `GET` of any code, the strong mode's
+  included, and the redeem `POST` checked the verifier only when one was sent: a `GET`, then a `POST` of «Continue»
+  with that nonce, created the session (against SES-2 and SES-3). Now a strong-mode code redeems only by a `POST` with
+  its verifier: a `GET` answers `400` with no form and no nonce (the code stays valid for the client), and a `POST`
+  without the right verifier is refused and consumes the code, so there is no second guess. Only the link mode keeps
+  the interstitial, and a `verifier` field there is refused. Upgrade every app that serves session transfer; a
+  strong-mode code lives 60 seconds, so no code issued before the upgrade outlives it.
+- The conformance check (`npx @clegra/sdk check`) tests it: `C.bound-get` (a `GET` on a strong-mode code offers no
+  form and sets no cookie) replaces `C.interstitial`, and `C.verifier` also posts the interstitial's «Continue»
+  without a verifier.
+
 ## 0.4.0-next.3 (2026-11-27)
 
 - Outside production (`NODE_ENV` is not `production`, read from the app's own environment, never from the request),

@@ -411,13 +411,19 @@ export async function checkApp(options: CheckOptions): Promise<Report> {
       const url = (issued.result?.structuredContent as { url?: string } | undefined)?.url
       if (typeof url !== "string" || !onOrigin(url, origin)) return add("C", "C.bound-code", false, `no same-origin url: ${JSON.stringify(issued.result ?? issued.error).slice(0, 200)}`)
       add("C", "C.bound-code", true, "a one-time URL on the app's origin")
+      // SES-2/SES-3: a strong-mode code redeems only by a POST with its verifier. A GET offers no form and no nonce,
+      // sets no cookie, and a POST without the verifier (the interstitial's "continue", with whatever nonce the page
+      // showed) creates no session.
       const get = await doFetch(url, { redirect: "manual" })
-      add("C", "C.interstitial", get.status === 200 && !get.headers.get("set-cookie"), get.status === 200 && !get.headers.get("set-cookie") ? "a bare GET shows the interstitial and sets no cookie (SES-4)" : `a bare GET answered ${get.status}${get.headers.get("set-cookie") ? " with a cookie" : ""}`)
+      const html = await get.text()
+      const nonce = /name="nonce" value="([^"]+)"/.exec(html)?.[1] ?? ""
+      const closed = get.status !== 303 && !get.headers.get("set-cookie") && !/<form/i.test(html)
+      add("C", "C.bound-get", closed, closed ? "a GET on a strong-mode code offers no way in and sets no cookie (SES-3)" : `a GET on a strong-mode code answered ${get.status}${get.headers.get("set-cookie") ? " with a cookie" : ""}${/<form/i.test(html) ? " with a form" : ""}`)
       const form = { "content-type": "application/x-www-form-urlencoded" }
-      const noVerifier = await doFetch(url, { method: "POST", headers: form, body: "", redirect: "manual" })
+      const noVerifier = await doFetch(url, { method: "POST", headers: form, body: new URLSearchParams({ decision: "continue", nonce }).toString(), redirect: "manual" })
       const wrong = await doFetch(url, { method: "POST", headers: form, body: new URLSearchParams({ verifier: randomB64url(32) }).toString(), redirect: "manual" })
       const none = !noVerifier.headers.get("set-cookie") && !wrong.headers.get("set-cookie") && noVerifier.status !== 303 && wrong.status !== 303
-      add("C", "C.verifier", none, none ? "no session without its verifier (SES-3)" : `a redeem without the right verifier answered ${noVerifier.status} / ${wrong.status}${noVerifier.headers.get("set-cookie") || wrong.headers.get("set-cookie") ? " with a cookie" : ""}`)
+      add("C", "C.verifier", none, none ? "no session without its verifier, through the interstitial or not (SES-3)" : `a redeem without the right verifier answered ${noVerifier.status} / ${wrong.status}${noVerifier.headers.get("set-cookie") || wrong.headers.get("set-cookie") ? " with a cookie" : ""}`)
     })
   }
   const link = tools.find((t) => t.name === "create_browser_session")

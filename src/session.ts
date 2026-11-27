@@ -45,6 +45,7 @@ const TEXT = {
     other: (name: string) => `This browser is signed in as ${name}. Sign out first if you want to enter as someone else.`,
     signOut: "Sign out",
     gone: "This link has expired or was already used.",
+    boundOnly: "This link opens only in the app that asked for it. Open the page again from there.",
     notMeDone: "The link was cancelled. If you did not ask for it, revoke the client's access on the app's access page.",
     banner: (who: string, client: string) => `Signed in as ${who} through ${client}.`,
   },
@@ -56,6 +57,7 @@ const TEXT = {
     other: (name: string) => `In questo browser è entrato ${name}. Esci prima, se vuoi entrare come un'altra persona.`,
     signOut: "Esci",
     gone: "Questo link è scaduto o è già stato usato.",
+    boundOnly: "Questo link si apre solo nell'app che l'ha chiesto. Riapri la pagina da lì.",
     notMeDone: "Il link è stato annullato. Se non l'hai chiesto tu, revoca l'accesso del client nella pagina degli accessi dell'app.",
     banner: (who: string, client: string) => `Accesso come ${who} tramite ${client}.`,
   },
@@ -187,6 +189,9 @@ export class SessionTransfer {
     if (request.method === "GET") {
       const row = await this.#store.get<Code>(key)
       if (!row) return show(`<h1>${t.title}</h1><p>${t.gone}</p>`, 410)
+      // SES-2/SES-3: a strong-mode code redeems only by a POST with its verifier. A GET offers no way in (no form,
+      // no nonce) and leaves the code to the client that holds the verifier.
+      if (row.mode === "bound") return show(`<h1>${t.title}</h1><p>${t.boundOnly}</p>`, 400)
       // SES-4: a bare GET never creates a session: the interstitial first.
       const at = new Date(row.issuedAt).toLocaleTimeString(lang === "it" ? "it-IT" : "en-GB", { hour: "2-digit", minute: "2-digit" })
       const client = row.clientName ?? hostOf(row.clientId)
@@ -206,12 +211,15 @@ export class SessionTransfer {
     const row = await this.#store.take<Code>(key)
     if (!row || row.expires <= Date.now()) return show(`<h1>${t.title}</h1><p>${t.gone}</p>`, 410)
     const restore = async () => this.#store.set(key, row, Math.max(1, Math.ceil((row.expires - Date.now()) / 1000)))
-    if (typeof verifier === "string") {
-      // SES-2/SES-3: the strong mode redeems only with the verifier of its challenge.
-      if (!row.challenge || !sameText(base64url(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier)))), row.challenge)) return show(`<p>${t.gone}</p>`, 400)
+    if (row.mode === "bound") {
+      // SES-2/SES-3: the strong mode redeems only with the verifier of its challenge, never through an interstitial.
+      // The code is already taken: a missing or wrong verifier burns it, so there is no second guess.
+      if (typeof verifier !== "string" || verifier === "" || !row.challenge) return show(`<p>${t.gone}</p>`, 400)
+      const digest = base64url(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier))))
+      if (!sameText(digest, row.challenge)) return show(`<p>${t.gone}</p>`, 400)
     } else {
-      // Through the interstitial only: the page's own form, with its nonce.
-      if (typeof decision !== "string" || form.get("nonce") !== row.nonce) {
+      // SES-4/SES-15: the link mode only through the interstitial, the page's own form with its nonce.
+      if (typeof verifier === "string" || typeof decision !== "string" || form.get("nonce") !== row.nonce) {
         await restore()
         return show(`<p>${t.gone}</p>`, 400)
       }

@@ -39,7 +39,7 @@ Two modes. An app offers the strong mode, and MAY also offer the Clerk-compatibl
 | Marker | `_meta["com.clegra/session-transfer"]: { "revision": "0.3", "mode": "bound" }` and `_meta.ui.visibility: ["app"]` | `_meta["com.clegra/session-transfer"]: { "revision": "0.3", "mode": "link" }`; visible to models |
 | Input | `{ "target", "challenge" }`, both required; `challenge` is the base64url SHA-256 of a verifier | `{ "target" }` |
 | Output (`structuredContent`) | `{ "url": <redeem URL with a one-time code>, "expiresAt" }` | the same |
-| Redeem | `POST` with the verifier; a bare `GET` shows the interstitial | `GET` with the interstitial, always |
+| Redeem | `POST` with the verifier, only; a `GET` offers no way in | `GET` with the interstitial, always |
 
 Scopes are described in [access](access.md). A client knows the app follows the profile by the marker on the tool.
 Nothing is negotiated.
@@ -56,13 +56,14 @@ Nothing is negotiated.
 ```
 
 **Redeeming.** The client loads `url` in the browser context that will hold the session by a form `POST` with the
-body `verifier=…`. The app checks code and verifier, sets the session cookie and answers `303` to `target`. Where
-a context can only navigate (`GET`), no verifier is sent and the app shows an interstitial first (SES-4).
+body `verifier=…`. The app checks code and verifier, sets the session cookie and answers `303` to `target`. A `GET`
+on `url` offers no way in: no interstitial, no form, no session, and the code stays valid for the client's `POST`. A
+context that can only navigate cannot use the strong mode (§9.4).
 
 ## 3. Rules
 
-SES-1 to SES-11 are the strong mode. SES-4 to SES-6 and SES-10 apply to both modes; §4 adds the rest of the
-Clerk-compatible mode.
+SES-1 to SES-11 are the strong mode. SES-5, SES-6 and SES-10 apply to both modes; SES-4 is the Clerk-compatible
+mode's, and §4 adds the rest of it.
 
 - **SES-1 Its own scope.** `bound_browser_session` is a separate line on the consent page («open this app's pages
   signed in as you»), implied by no other scope, never a default scope. Without it the tool answers
@@ -74,10 +75,13 @@ Clerk-compatible mode.
   a page.
 - **SES-3 The verifier never travels in a URL.** It goes only in the body of the `POST` the client makes in the
   context it opens, and the client keeps it out of any model's reach. A `url` copied from a log, a transcript or
-  a message is useless without it. The redeem response has `Cache-Control: no-store` and
+  a message is useless without it: a strong-mode code is redeemed only by a `POST` carrying its verifier, never
+  through an interstitial or any other page, and a `POST` without the right verifier is refused and consumes the
+  code (no second guess). A `GET` on `url` shows no form and creates nothing. The redeem response has `Cache-Control: no-store` and
   `Referrer-Policy: no-referrer`; the app rejects a redeem `POST` that another website initiated (`Origin`,
   `Sec-Fetch-Site`), except a web origin the client registered in its Client ID Metadata Document.
-- **SES-4 Navigation only: an interstitial, always.** A `GET` on `url` never creates a session by itself. The app
+- **SES-4 Navigation only: an interstitial, always.** In the Clerk-compatible mode (§4) the link is a `GET`, which
+  never creates a session by itself. The app
   shows «You are entering as X through the client Y, started at hh:mm. Continue / This is not me», and creates the
   session only after the person presses «Continue» on that page. «This is not me» consumes the code and offers to
   revoke the grant. This is what stops a link, sent by someone else, from signing a person into the sender's
@@ -162,7 +166,8 @@ From 0.4.0, `serve` implements both modes on top of the app's own login: the sig
 `auth.sessions.read(request)` with an authorization server of the app's own. The SDK registers
 `create_bound_browser_session` whenever the app has such a login (and `create_browser_session` only when the app sets
 `sessionTransfer: { link: true }`), keeps the codes (hashed, single use, bound as SES-2 and SES-14 say), serves
-`/session-transfer/<code>` with its interstitial in the person's language, refuses over another person's session
+`/session-transfer/<code>` (a strong-mode code only by `POST` with its verifier, a link through its interstitial in
+the person's language), refuses over another person's session
 (SES-5), checks who initiated a redeem `POST` (SES-3), and logs every issue and redeem in the access log (SES-10,
 SES-17). The transferred session is the SDK's own cookie (`__Host-clegra-transferred`, 1 hour idle, 8 hours at most,
 ended by revoking the grant); the app's pages read either session with `served.session(request)` and enforce SES-6 on
@@ -170,10 +175,10 @@ their own actions from its `transferred.scopes`. The grant behind it is the sign
 client whose Client ID Metadata Document is http on a loopback host gets its per-person links too, outside production
 only ([auth](../auth.md); [access](access.md), ACC-4). Reference: [the SDK's spec](../spec.md).
 
-A sketch of the redeem in Rails, for an app without the SDK:
+A sketch of the strong-mode redeem in Rails, for an app without the SDK:
 
 ```ruby
-# routes: post "/session/:code", to: "transferred_sessions#create"; get → :confirm
+# routes: post "/session/:code", to: "transferred_sessions#create"; get → :show
 class TransferredSessionsController < ApplicationController
   skip_before_action :require_login
   before_action -> { head :forbidden unless allowed_initiator? }, only: :create       # SES-3
@@ -192,7 +197,7 @@ class TransferredSessionsController < ApplicationController
     redirect_to row.target, status: :see_other, allow_other_host: false
   end
 
-  def confirm = render(:entering_as)   # SES-4: the interstitial; «Continue» posts to its own action, with the page's own forgery token
+  def show = head(:bad_request)        # SES-3: a GET offers no way in (no interstitial), and the code stays valid
 end
 ```
 
@@ -221,10 +226,11 @@ by revoking the grant. The Clerk-compatible mode adds the risk of a stolen link,
 
 ## 8. Checks
 
-1. Strong mode: a call without `challenge` is refused; a `POST` to `url` without its verifier creates no session.
+1. Strong mode: a call without `challenge` is refused; a `GET` on `url` shows no form; a `POST` to `url` without
+   its verifier creates no session, whatever else it carries (an interstitial's «Continue» and nonce included).
 2. A code works once, within its lifetime, only with its verifier and its target.
-3. A `GET` on the link shows the interstitial and creates no session before «Continue»; opened on another device
-   it shows whose session it would be.
+3. Clerk-compatible mode: a `GET` on the link shows the interstitial and creates no session before «Continue»;
+   opened on another device it shows whose session it would be.
 4. It never replaces another person's session; the same person's session is kept.
 5. A redeem `POST` initiated by another website is refused.
 6. A transferred session with only `web.read` cannot change data; with any scopes it cannot change credentials,
@@ -243,8 +249,10 @@ by revoking the grant. The Clerk-compatible mode adds the risk of a stolen link,
    Document; a dedicated member may be needed.
 3. `_meta.ui.visibility` comes from MCP Apps; hosts without MCP Apps have no standard way to hide a tool from the
    model. SES-2 makes that harmless, but a core marker would be better.
-4. Phone system browser sheets cannot `POST` and may share cookies with the system browser: there the interstitial
-   is the only defence, and the session lands in the person's main browser.
+4. Phone system browser sheets cannot `POST` and may share cookies with the system browser, so they cannot use the
+   strong mode: a strong-mode code never falls back to an interstitial (that would make a copied URL a credential
+   again). There, only the Clerk-compatible mode works, with its risks (§4), and the session lands in the person's
+   main browser.
 
 References: MCP authorization; RFC 6749, 7636, 8252, 8693, 9449; OpenID Connect Native SSO 1.0; Auth0 session
 transfer tokens; Clerk (https://clerk.com/docs/nextjs/guides/ai/mcp/browser-sessions); Ping Identity

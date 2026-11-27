@@ -385,6 +385,58 @@ describe("session transfer", () => {
     assert.match(await page.text(), /Signed in as Ada through/)
   })
 
+  test("strong mode: a copied URL without its verifier is useless (no interstitial, no continue)", async () => {
+    const f = fixture()
+    const c = testClient(f.served, { token: await f.signIn.dev.token({ person: "ada" }) })
+    const form = { origin: ORIGIN, "content-type": "application/x-www-form-urlencoded" }
+    const issue = async () => {
+      const { verifier, challenge } = await pkce()
+      const url = ((await c.call("create_bound_browser_session", { target: `${ORIGIN}/jobs/1`, challenge })).structuredContent as { url: string }).url
+      return { url, verifier }
+    }
+    // A GET offers no way in and does not consume the code: the client's own redeem still works.
+    const first = await issue()
+    const get = await f.served.fetch(new Request(first.url))
+    assert.equal(get.headers.get("set-cookie"), null)
+    const html = await get.text()
+    assert.doesNotMatch(html, /<form/, "no form on a bound code's page")
+    assert.doesNotMatch(html, /name="nonce"/, "no nonce on a bound code's page")
+    assert.doesNotMatch(html, /You are entering as Ada/)
+    const redeem = await f.served.fetch(new Request(first.url, { method: "POST", headers: form, body: new URLSearchParams({ verifier: first.verifier }) }))
+    assert.equal(redeem.status, 303, "the GET left the code valid")
+    // The interstitial's POST, without a verifier, is refused, even with the row's real nonce, and burns the code.
+    const second = await issue()
+    const nonce = /name="nonce" value="([^"]+)"/.exec(await (await f.served.fetch(new Request(second.url))).text())?.[1] ?? "x".repeat(22)
+    for (const decision of ["continue", "not-me"]) {
+      const bypass = await f.served.fetch(new Request(second.url, { method: "POST", headers: form, body: new URLSearchParams({ decision, nonce }) }))
+      assert.notEqual(bypass.status, 303)
+      assert.ok(bypass.status >= 400, `refused (${decision})`)
+      assert.equal(bypass.headers.get("set-cookie"), null)
+    }
+    const late = await f.served.fetch(new Request(second.url, { method: "POST", headers: form, body: new URLSearchParams({ verifier: second.verifier }) }))
+    assert.equal(late.status, 410, "a failed attempt invalidated the code")
+    // A wrong verifier burns the code too: no second guess.
+    const third = await issue()
+    const wrong = await f.served.fetch(new Request(third.url, { method: "POST", headers: form, body: new URLSearchParams({ verifier: "wrong" }) }))
+    assert.equal(wrong.status, 400)
+    const after = await f.served.fetch(new Request(third.url, { method: "POST", headers: form, body: new URLSearchParams({ verifier: third.verifier }) }))
+    assert.equal(after.status, 410)
+    // An empty verifier field is no verifier.
+    const fourth = await issue()
+    const empty = await f.served.fetch(new Request(fourth.url, { method: "POST", headers: form, body: new URLSearchParams({ verifier: "", decision: "continue", nonce }) }))
+    assert.ok(empty.status >= 400)
+    assert.equal(empty.headers.get("set-cookie"), null)
+  })
+
+  test("link mode: a verifier is no way around the interstitial", async () => {
+    const f = fixture({ link: true })
+    const c = testClient(f.served, { token: await f.signIn.dev.token({ person: "ada" }) })
+    const url = ((await c.call("create_browser_session", { target: `${ORIGIN}/jobs/1` })).structuredContent as { url: string }).url
+    const post = await f.served.fetch(new Request(url, { method: "POST", headers: { origin: ORIGIN, "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ verifier: "anything" }) }))
+    assert.equal(post.status, 400)
+    assert.equal(post.headers.get("set-cookie"), null)
+  })
+
   test("a bare GET shows the interstitial and creates no session; never over another person's session", async () => {
     const f = fixture({ link: true })
     const c = testClient(f.served, { token: await f.signIn.dev.token({ person: "ada" }) })

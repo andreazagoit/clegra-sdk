@@ -168,7 +168,8 @@ async function expectations(base: string) {
   const url = (issued.structuredContent as { url: string }).url
   assert.ok(url.startsWith(`${base}/session-transfer/`), url)
   const bare = await fetch(url, { redirect: "manual" })
-  assert.equal(bare.status, 200, "a bare GET is the interstitial")
+  assert.equal(bare.status, 400, "a bare GET on a strong-mode code offers no way in")
+  assert.doesNotMatch(await bare.text(), /<form/)
   assert.equal(bare.headers.get("set-cookie"), null)
   const redeem = await fetch(url, { method: "POST", redirect: "manual", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ verifier }) })
   assert.equal(redeem.status, 303, await redeem.text())
