@@ -105,15 +105,22 @@ describe("sign-in module", () => {
     assert.match(html, /https:\/\/client\.example\/callback/)
     assert.doesNotMatch(html, /non si può verificare/)
     assert.match(page.headers.get("content-security-policy")!, /frame-ancestors 'none'/)
+    // The form's 303 ends at the redirect_uri: form-action allows the page itself and that origin only.
+    assert.match(page.headers.get("content-security-policy")!, /form-action 'self' https:\/\/client\.example;/)
     const signInPage = await w.send(new Request(at("/signin")))
     assert.match(signInPage.headers.get("content-security-policy")!, /frame-ancestors 'none'/)
+    assert.match(signInPage.headers.get("content-security-policy")!, /form-action 'self';/)
   })
 
-  test("a loopback or custom-scheme redirect is warned about on the consent", async () => {
+  test("a loopback or custom-scheme redirect is warned about on the consent; form-action allows its origin or scheme", async () => {
     const w = world({ redirect: "http://127.0.0.1:7777/cb" })
     const cookie = await signedIn(w)
-    const { html } = await consent(w, cookie, {}, "deny", "http://127.0.0.1:7777/cb")
+    const { html, page } = await consent(w, cookie, {}, "deny", "http://127.0.0.1:7777/cb")
     assert.match(html, /non si può verificare/)
+    assert.match(page.headers.get("content-security-policy")!, /form-action 'self' http:\/\/127\.0\.0\.1:7777;/)
+    const app = world({ redirect: "com.example.app:/oauth/cb" })
+    const { page: native } = await consent(app, await signedIn(app), {}, "deny", "com.example.app:/oauth/cb")
+    assert.match(native.headers.get("content-security-policy")!, /form-action 'self' com\.example\.app:;/)
   })
 
   test("scopes: none asked gets web.read; an unknown one and browser_session without the link mode are refused", async () => {

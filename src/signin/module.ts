@@ -29,7 +29,7 @@ import { checkDpopProof, DPOP_ALGS, DpopError } from "../dpop"
 import { isProduction } from "../env"
 import { localize, type Label } from "../labels"
 import type { DevTools } from "./dev"
-import { escapeHtml, hidden, page, pageLocale, textsOf, type PageLocale } from "./pages"
+import { escapeHtml, formActionSource, hidden, page, pageLocale, textsOf, type PageLocale } from "./pages"
 import type { SignInStore } from "./store"
 
 // ------------------------------------------------------------------ types
@@ -321,10 +321,14 @@ export function buildSignIn(app: App, options: SignInOptions, memoryKey: boolean
       .map((s) => `<li>${escapeHtml(t.scope[s] ?? s)}</li>`)
       .join("")
     const warning = unverifiedRedirect(input.redirect) ? `<p class="e">${escapeHtml(t.unverified)}</p>` : ""
+    // «Allow» and «Deny» are answered by a 303 to the client's redirect_uri (already checked against its metadata):
+    // the CSP lets the form's navigation end there, and nowhere else.
+    const target = formActionSource(input.redirect)
     return page({
       title: t.consentTitle(clientName, appTitle),
       locale,
       frameAncestors: [],
+      formTargets: target ? [target] : [],
       body: `<h1>${escapeHtml(t.consentTitle(clientName, appTitle))}</h1><p class="m">${escapeHtml(t.signedInAs(input.person.name))}</p>
 <p>${escapeHtml(t.consentLead(appTitle))}</p><ul>${list}</ul>
 <p class="c"><span class="m">${escapeHtml(t.consentFrom)}</span><br><strong>${escapeHtml(host)}</strong> · ${escapeHtml(input.client.client_id)}<br><span class="m">${escapeHtml(t.consentRedirect)}</span><br>${escapeHtml(input.redirect)}</p>${warning}

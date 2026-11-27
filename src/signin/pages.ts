@@ -111,9 +111,29 @@ label{display:block;margin:12px 0 4px}input{font:inherit;padding:9px 10px;width:
 .b{display:flex;gap:8px;margin-top:20px}button{font:inherit;padding:9px 16px;border-radius:8px;border:1px solid var(--line);background:transparent;color:inherit;cursor:pointer}
 button.p{background:var(--accent);border-color:var(--accent);color:#fff}`
 
-/** A page's security headers: no script unless a nonce is given, framable only by `frameAncestors`. */
-export function pageHeaders(frameAncestors: string[], nonce?: string): Record<string, string> {
+/**
+ * The CSP source a form's redirect may end at: browsers check `form-action` on every redirect of the form's
+ * navigation, so a POST answered by a 303 to the client's redirect_uri needs that address allowed. An http(s) address
+ * gives its origin, a private-use scheme (RFC 8252, `com.example.app:/cb`) its scheme; null for anything else.
+ */
+export function formActionSource(address: string): string | null {
+  let u: URL
+  try {
+    u = new URL(address)
+  } catch {
+    return null
+  }
+  if (u.protocol === "https:" || u.protocol === "http:") return u.origin
+  return /^[a-z][a-z0-9+.-]*:$/i.test(u.protocol) ? u.protocol.toLowerCase() : null
+}
+
+/**
+ * A page's security headers: no script unless a nonce is given, framable only by `frameAncestors`, forms posted to
+ * the page's own origin, plus `formTargets` (sources from `formActionSource`) where a form's answer redirects.
+ */
+export function pageHeaders(frameAncestors: string[], nonce?: string, formTargets: string[] = []): Record<string, string> {
   const ancestors = frameAncestors.length ? frameAncestors.join(" ") : "'none'"
+  const formAction = ["'self'", ...new Set(formTargets)].join(" ")
   return {
     "content-type": "text/html; charset=utf-8",
     "cache-control": "no-store",
@@ -121,15 +141,15 @@ export function pageHeaders(frameAncestors: string[], nonce?: string): Record<st
     // same-origin, not no-referrer: under no-referrer a form posted to the app itself says `Origin: null`, and the
     // sign-in and the consent check that their form comes from the app.
     "referrer-policy": "same-origin",
-    "content-security-policy": `default-src 'none'; style-src 'unsafe-inline'; img-src data:; form-action 'self'; base-uri 'none'; frame-ancestors ${ancestors}${nonce ? `; script-src 'nonce-${nonce}'` : ""}`,
+    "content-security-policy": `default-src 'none'; style-src 'unsafe-inline'; img-src data:; form-action ${formAction}; base-uri 'none'; frame-ancestors ${ancestors}${nonce ? `; script-src 'nonce-${nonce}'` : ""}`,
   }
 }
 
-export function page(input: { title: string; body: string; locale: PageLocale; status?: number; frameAncestors: string[]; script?: string }): Response {
+export function page(input: { title: string; body: string; locale: PageLocale; status?: number; frameAncestors: string[]; script?: string; formTargets?: string[] }): Response {
   const nonce = input.script ? randomToken(16) : undefined
   const script = input.script ? `<script nonce="${nonce}">${input.script}</script>` : ""
   const html = `<!doctype html><html lang="${input.locale}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(input.title)}</title><style>${STYLE}</style></head><body>${input.body}${script}</body></html>`
-  return new Response(html, { status: input.status ?? 200, headers: pageHeaders(input.frameAncestors, nonce) })
+  return new Response(html, { status: input.status ?? 200, headers: pageHeaders(input.frameAncestors, nonce, input.formTargets) })
 }
 
 export const hidden = (fields: Record<string, string>) =>

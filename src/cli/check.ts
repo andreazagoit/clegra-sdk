@@ -47,6 +47,9 @@ const SESSION = "com.clegra/session-transfer"
 const SKILLS = "io.modelcontextprotocol/skills"
 const EVENTS = "io.modelcontextprotocol/events"
 const CARD_KEYS = new Set(["$schema", "name", "title", "description", "version", "icons", "remotes"])
+const CARD_TYPE = "application/mcp-server-card+json"
+const CARD_SCHEMA = "https://static.modelcontextprotocol.io/schemas/v1/server-card.schema.json"
+const CATALOG_TYPE = "application/ai-catalog+json"
 
 type Json = Record<string, unknown>
 type Tool = { name: string; inputSchema?: Json; annotations?: Json; _meta?: Json }
@@ -170,14 +173,16 @@ export async function checkApp(options: CheckOptions): Promise<Report> {
   // ---------------------------------------------------------------- A: discovery, the card, authorization
   const cardUrl = `${mcpUrl}/server-card`
   await attempt("A", "A.server-card", async () => {
-    const { r, body } = await getJson(cardUrl)
+    const { r, body } = await getJson(cardUrl, { accept: CARD_TYPE })
     const problems: string[] = []
     if (r.status !== 200) problems.push(`status ${r.status}`)
-    if (!(r.headers.get("content-type") ?? "").startsWith("application/mcp-server-card+json")) problems.push(`media type ${r.headers.get("content-type")}`)
+    if (!(r.headers.get("content-type") ?? "").startsWith(CARD_TYPE)) problems.push(`media type ${r.headers.get("content-type")}`)
     if (!isObj(body)) problems.push("not a JSON object")
     else {
       const extra = Object.keys(body).filter((k) => !CARD_KEYS.has(k))
-      if (extra.length) problems.push(`more than name, title, description, version, icons and remotes: ${extra.join(", ")} (ORG-5)`)
+      if (extra.length) problems.push(`more than $schema, name, title, description, version, icons and remotes: ${extra.join(", ")} (ORG-5)`)
+      if (body.$schema !== CARD_SCHEMA) problems.push(`$schema is not ${CARD_SCHEMA}`)
+      for (const k of ["name", "version", "description"]) if (typeof body[k] !== "string" || !body[k]) problems.push(`no ${k}`)
       if (!Array.isArray(body.remotes) || !body.remotes.some((x) => isObj(x) && x.url === mcpUrl)) problems.push(`no remote at ${mcpUrl}`)
     }
     add("A", "A.server-card", problems.length === 0, problems.length ? problems.join("; ") : `${cardUrl}: only what is public`)
@@ -206,16 +211,26 @@ export async function checkApp(options: CheckOptions): Promise<Report> {
     let proven = declared === mcpOrigin
     let how = "the MCP endpoint's own origin"
     // ORG-1: the AI Catalog at the declared origin lists a Server Card whose remote is this MCP URL.
-    const { r, body } = await getJson(`${declared}/.well-known/ai-catalog.json`).catch(() => ({ r: null, body: null }))
-    const listed = JSON.stringify(body ?? null)
-    const inCatalog = r?.status === 200 && (listed.includes(JSON.stringify(mcpUrl)) || listed.includes(JSON.stringify(cardUrl)))
+    // The AI Catalog v0.9: `application/ai-catalog+json`, `specVersion`, and an entry of the Server Card's type whose
+    // `url` is this card, or whose inline `data` is a card with this remote.
+    const { r, body } = await getJson(`${declared}/.well-known/ai-catalog.json`, { accept: CATALOG_TYPE }).catch(() => ({ r: null, body: null }))
+    const entries = isObj(body) && typeof body.specVersion === "string" && Array.isArray(body.entries) ? body.entries.filter(isObj) : []
+    const listsCard = entries.some(
+      (e) =>
+        e.type === CARD_TYPE &&
+        typeof e.identifier === "string" &&
+        (e.url === cardUrl || (isObj(e.data) && Array.isArray(e.data.remotes) && e.data.remotes.some((x) => isObj(x) && x.url === mcpUrl))),
+    )
+    const catalogType = (r?.headers.get("content-type") ?? "").startsWith(CATALOG_TYPE)
+    const inCatalog = r?.status === 200 && catalogType && listsCard
     if (!proven && inCatalog) {
       proven = true
       how = "listed by its AI Catalog"
     }
     if (proven) origin = declared
     add("A", "A.web-map", proven, proven ? `origin ${declared} (${how})` : `origin ${declared} is neither the endpoint's (${mcpOrigin}) nor proven by ${declared}/.well-known/ai-catalog.json (ORG-1)`)
-    add("A", "A.ai-catalog", inCatalog, inCatalog ? `${declared}/.well-known/ai-catalog.json lists the Server Card` : `${declared}/.well-known/ai-catalog.json does not list ${cardUrl}`)
+    const catalogProblem = r?.status !== 200 ? `status ${r?.status ?? "no answer"}` : !catalogType ? `media type ${r.headers.get("content-type")}, not ${CATALOG_TYPE}` : !entries.length ? "no specVersion and entries" : `no entry of type ${CARD_TYPE} for ${cardUrl}`
+    add("A", "A.ai-catalog", inCatalog, inCatalog ? `${declared}/.well-known/ai-catalog.json lists the Server Card` : `${declared}/.well-known/ai-catalog.json: ${catalogProblem}`)
   }
 
   // ---------------------------------------------------------------- A: tools, records, pages
@@ -291,6 +306,11 @@ export async function checkApp(options: CheckOptions): Promise<Report> {
       try {
         const v = await readJson(w.uri)
         if (!isObj(v) || typeof v.title !== "string") problems.push(`${w.uri}: a tile needs a title`)
+        else {
+          // The tile's URI is a resource URI (any scheme, read on this server); its links are navigable (ORG-2).
+          const links = [v.url, ...(Array.isArray(v.rows) ? v.rows.filter(isObj).map((r) => r.url) : [])].filter((u) => u !== undefined)
+          for (const u of links) if (typeof u !== "string" || !onOrigin(u, origin)) problems.push(`${w.uri}: link ${String(u)} is not on ${origin} (ORG-2)`)
+        }
       } catch (e) {
         problems.push(`${w.uri}: ${(e as Error).message}`)
       }

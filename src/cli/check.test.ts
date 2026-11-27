@@ -131,7 +131,21 @@ describe("clegra check", () => {
     assert.equal(card.ok, false)
     assert.match(card.message, /media type/)
     assert.match(card.message, /tools \(ORG-5\)/)
+    assert.match(card.message, /\$schema is not/)
     assert.equal(report.checks.find((c) => c.id === "A.ai-catalog")?.ok, false)
     assert.ok(!report.levels.includes("A"))
+  })
+
+  test("an AI Catalog in another shape (no specVersion and entries, plain JSON) does not list the card", async () => {
+    const f = fixture()
+    const fetch = async (input: string, init?: RequestInit) => {
+      if (input.endsWith("/.well-known/ai-catalog.json")) return new Response(JSON.stringify({ version: "0.9", mcpServers: [{ serverCard: `${ORIGIN}/mcp/server-card`, remote: `${ORIGIN}/mcp` }] }), { headers: { "content-type": "application/json" } })
+      return f.fetch(input, init)
+    }
+    const report = await checkApp({ url: ORIGIN, token: await f.signIn.dev.token({ person: "ada" }), fetch })
+    const catalog = report.checks.find((c) => c.id === "A.ai-catalog")!
+    assert.equal(catalog.ok, false)
+    assert.match(catalog.message, /media type application\/json/)
+    assert.equal(report.checks.find((c) => c.id === "A.server-card")?.ok, true)
   })
 })

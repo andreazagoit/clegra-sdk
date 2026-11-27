@@ -1,6 +1,6 @@
 {
   "name": "@clegra/sdk",
-  "version": "0.4.0-next.4",
+  "version": "0.4.0-next.5",
   "clegra": {
     "kind": "public",
     "owner": "sdk"
@@ -68,7 +68,8 @@
     "test": "tsx --test \"src/**/*.test.ts\"",
     "test:next": "tsx --test test/next.test.ts",
     "test:postgres": "node scripts/test-postgres.mjs",
-    "test:all": "npm test && npm run test:next && npm run test:postgres",
+    "test:browser": "tsx --test test/browser.test.ts",
+    "test:all": "npm test && npm run test:next && npm run test:postgres && npm run test:browser",
     "pack:check": "tsx scripts/pack-check.mjs",
     "clegra:check": "tsx src/cli/index.ts check",
     "prepack": "node scripts/prepack.mjs",

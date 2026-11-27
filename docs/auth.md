@@ -38,7 +38,7 @@ What it serves:
 | Path | What |
 |---|---|
 | `/.well-known/oauth-authorization-server` | RFC 8414 metadata |
-| `/oauth/authorize` | Sign-in (your login), then consent: each requested scope on its own line, the client (host of `client_id`, redirect target), a warning for loopback or custom-scheme redirects. Never framed, never remembered |
+| `/oauth/authorize` | Sign-in (your login), then consent: each requested scope on its own line, the client (host of `client_id`, redirect target), a warning for loopback or custom-scheme redirects. Never framed, never remembered. Its CSP `form-action` is `'self'` plus the checked redirect_uri's origin (its scheme for a custom one): browsers check `form-action` on the 303 that answers «Allow» and «Deny» |
 | `/oauth/token` | Authorization code with PKCE S256; refresh |
 | `/oauth/revoke` | RFC 7009 |
 | `/oauth/jwks.json` | The signing keys |

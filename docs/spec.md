@@ -143,7 +143,7 @@ defineApp({ name, title, description, version, locale?, icons?, instructions?, e
 
 It is pure: nothing is served. It checks everything at once and names the place of each problem: names unique and
 well formed (app `[a-z][a-z0-9-]{1,39}`, skills `a-b-c`); an entity's path variables and card fields are schema
-fields; a page's entity and badge, a tool's entity and page, an agent's tools are the app's own; `recordArg` is an
+fields; the app's `title` and `description` 1 to 100 characters in every language (the Server Card's limits); a page's entity and badge, a tool's entity and page, an agent's tools are the app's own; `recordArg` is an
 input; every path variable of a tool's page is an input or a variable of its record's path (MAP-2); `accepts` and
 `plugins` only on a closed input, with maps naming real inputs and standard fields (SHR-3); a read-only tool is never
 confirmed; an agent has 1 to 200 `maxSteps`, at most 6 starters, and schedules with five cron fields and a fixed
@@ -200,8 +200,8 @@ const served = serve(app, {
 | Route | What |
 |---|---|
 | `POST <mcpPath>` | MCP, revision `2026-07-28` (earlier revisions refused). Every request needs a token: none → `401` with `WWW-Authenticate: Bearer resource_metadata="…", scope="web.read"`; an invalid or revoked one → `401 error="invalid_token"` |
-| `GET <mcpPath>/server-card` | The Server Card, `application/mcp-server-card+json`, CORS `*`: `{ name: "<reversed host>/<app>", title, description, version, icons?, remotes: [{ type: "streamable-http", url }] }`. Nothing of the map (ORG-5) |
-| `GET /.well-known/ai-catalog.json` | The origin proof of ORG-1: `{ version: "0.9", mcpServers: [{ name, title, serverCard, remote }] }` (shape provisional while the AI Catalog is a release candidate) |
+| `GET <mcpPath>/server-card` | The Server Card (SEP-2127), `application/mcp-server-card+json`: `{ $schema: "https://static.modelcontextprotocol.io/schemas/v1/server-card.schema.json", name: "<reversed host>/<app>", title, description, version, icons?, remotes: [{ type: "streamable-http", url }] }`. Nothing of the map (ORG-5) |
+| `GET /.well-known/ai-catalog.json` | The AI Catalog v0.9, `application/ai-catalog+json`, the origin proof of ORG-1: `{ specVersion: "0.9", host: { displayName: <title> }, entries: [{ identifier: "urn:air:<host>:<app>:mcp", type: "application/mcp-server-card+json", url: "<origin><mcpPath>/server-card" }] }`. Both: CORS `*`, an hour's cache, an `ETag` (web-map ORG-6) |
 | `GET /.well-known/oauth-protected-resource` and `…/oauth-protected-resource<mcpPath>` | RFC 9728: `resource`, `authorization_servers`, `scopes_supported` (`browser_session` only with the link mode), `bearer_methods_supported`, `resource_name` |
 | `/oauth/*`, `/.well-known/oauth-authorization-server`, `/oauth/grants` | The sign-in module, with `auth.signIn` ([auth.md](auth.md)) |
 | `GET`/`POST /session-transfer/<code>`, `POST /session-transfer/sign-out` | Session transfer (§6) |

@@ -131,8 +131,8 @@ describe("toNextHandlers with a real app", () => {
     const card = await handlers.GET(new Request("http://localhost/api/clegra/mcp/server-card"))
     assert.equal(card.headers.get("content-type"), "application/mcp-server-card+json")
     assert.deepEqual(((await card.json()) as { remotes: unknown }).remotes, [{ type: "streamable-http", url: "https://crm.example.test/mcp" }])
-    const catalog = (await (await handlers.GET(new Request("http://localhost/.well-known/ai-catalog.json"))).json()) as { mcpServers: { remote: string }[] }
-    assert.equal(catalog.mcpServers[0]?.remote, "https://crm.example.test/mcp")
+    const catalog = (await (await handlers.GET(new Request("http://localhost/.well-known/ai-catalog.json"))).json()) as { entries: { type: string; url: string }[] }
+    assert.deepEqual(catalog.entries.map((e) => [e.type, e.url]), [["application/mcp-server-card+json", "https://crm.example.test/mcp/server-card"]])
     const prm = (await (await handlers.GET(new Request("http://localhost/api/clegra/.well-known/oauth-protected-resource/mcp"))).json()) as { resource: string; authorization_servers: string[] }
     assert.equal(prm.resource, "https://crm.example.test/mcp")
     assert.deepEqual(prm.authorization_servers, ["https://crm.example.test/api/auth"])

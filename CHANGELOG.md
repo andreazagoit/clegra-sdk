@@ -4,6 +4,31 @@ Clegra apps and the `@clegra/sdk` package. Newest first. Versions before 1.0 are
 npm dist-tag `next`. Entries below «Two scoped packages» keep the names of their time (the unscoped `clegra` package
 and its `clegra/ui`, the `modelapp` package, docs/map): they are history.
 
+## 0.4.0-next.5 (2026-11-28)
+
+- **Fix.** The consent's «Allow» and «Deny» could not reach a client on another origin in a real browser: the page's
+  CSP said `form-action 'self'`, and browsers check `form-action` on the 303 that sends the person back to the
+  redirect_uri, so the navigation was blocked and no link could complete. The consent page now allows `'self'` plus
+  the checked redirect_uri's origin (its scheme for a custom one, `com.example.app:`); every other page keeps
+  `'self'`. A browser test (`npm run test:browser`, Playwright's Chromium) drives the sign-in, the consent (both
+  answers, to a callback on another origin) and the confirmation page.
+- **Discovery by the standards.** `/.well-known/ai-catalog.json` is an AI Catalog v0.9 (the release candidate of
+  v1.0), served as `application/ai-catalog+json`: `{ specVersion: "0.9", host: { displayName }, entries: [{
+  identifier: "urn:air:<host>:<app>:mcp", type: "application/mcp-server-card+json", url: "<origin>/mcp/server-card"
+  }] }`, replacing the old `{ version, mcpServers }` shape that hosts reading the catalog could not use (adding an app
+  by its site address failed). The Server Card carries the `$schema` SEP-2127 requires
+  (`https://static.modelcontextprotocol.io/schemas/v1/server-card.schema.json`). Both answer with the discovery CORS
+  (also to a preflight), an hour's cache and an `ETag` (`304` on `If-None-Match`). New exports: `SERVER_CARD_SCHEMA`,
+  `AI_CATALOG_TYPE`, `AI_CATALOG_SPEC_VERSION`.
+- `defineApp` refuses an app `title` or `description` longer than 100 characters in any language: the Server Card's
+  limits.
+- The conformance check: `A.server-card` requires the card's `$schema`, `name`, `version` and `description`;
+  `A.ai-catalog` requires the catalog's media type, `specVersion` and an entry of the Server Card's type whose `url`
+  is the card (or whose inline `data` has the MCP endpoint as a remote). `A.badges-widgets` requires a tile's `url`
+  and its rows' `url` on the app's origin.
+- web-map ORG-2 says which URLs it covers: the navigable ones (pages, record URLs, a tool's page, a tile's links); a
+  counter's or tile's own URI is an MCP resource URI, read on the same server and never navigated, of any scheme.
+
 ## 0.4.0-next.4 (2026-11-27)
 
 - **Security.** Session transfer, strong mode: a copied redeem URL could sign its holder in as the person, without the

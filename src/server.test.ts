@@ -224,15 +224,31 @@ describe("web-map", () => {
     assert.ok(!resources.some((r) => r.uri.startsWith(`${ORIGIN}/`)), "no page is an MCP resource")
   })
 
-  test("nothing of the map is public: the Server Card carries only name, icons, description and the endpoint", async () => {
+  test("nothing of the map is public: the Server Card carries only its schema, name, icons, description and the endpoint; the AI Catalog lists it", async () => {
     const { served } = fixture()
     const card = await served.fetch(new Request(`${ORIGIN}/mcp/server-card`))
     assert.equal(card.headers.get("content-type"), "application/mcp-server-card+json")
     const body = (await card.json()) as Record<string, unknown>
-    assert.deepEqual(Object.keys(body).sort(), ["description", "name", "remotes", "title", "version"])
+    assert.deepEqual(Object.keys(body).sort(), ["$schema", "description", "name", "remotes", "title", "version"])
+    assert.equal(body.$schema, "https://static.modelcontextprotocol.io/schemas/v1/server-card.schema.json")
+    assert.match(String(body.name), /^[a-zA-Z0-9.-]+\/[a-zA-Z0-9._-]+$/)
     assert.deepEqual(body.remotes, [{ type: "streamable-http", url: `${ORIGIN}/mcp` }])
-    const catalog = (await (await served.fetch(new Request(`${ORIGIN}/.well-known/ai-catalog.json`))).json()) as { mcpServers: { remote: string; serverCard: string }[] }
-    assert.equal(catalog.mcpServers[0]!.remote, `${ORIGIN}/mcp`)
+    assert.equal(card.headers.get("access-control-allow-origin"), "*")
+    const etag = card.headers.get("etag")
+    assert.ok(etag)
+    assert.equal((await served.fetch(new Request(`${ORIGIN}/mcp/server-card`, { headers: { "if-none-match": etag } }))).status, 304)
+    const catalogAnswer = await served.fetch(new Request(`${ORIGIN}/.well-known/ai-catalog.json`))
+    assert.equal(catalogAnswer.headers.get("content-type"), "application/ai-catalog+json")
+    const catalog = (await catalogAnswer.json()) as Record<string, unknown>
+    const host = new URL(ORIGIN).hostname
+    assert.deepEqual(catalog, {
+      specVersion: "0.9",
+      host: { displayName: body.title },
+      entries: [{ identifier: `urn:air:${host}:${String(body.name).split("/")[1]}:mcp`, type: "application/mcp-server-card+json", url: `${ORIGIN}/mcp/server-card` }],
+    })
+    const preflight = await served.fetch(new Request(`${ORIGIN}/.well-known/ai-catalog.json`, { method: "OPTIONS" }))
+    assert.equal(preflight.status, 204)
+    assert.equal(preflight.headers.get("access-control-allow-headers"), "Content-Type, If-None-Match")
     const unauth = await served.fetch(new Request(`${ORIGIN}/mcp`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "resources/read", params: { uri: "webmap://pages" } }) }))
     assert.equal(unauth.status, 401)
     const prm = (await (await served.fetch(new Request(`${ORIGIN}/.well-known/oauth-protected-resource/mcp`))).json()) as { resource: string; scopes_supported: string[] }

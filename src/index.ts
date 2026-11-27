@@ -34,7 +34,7 @@ export type {
   WidgetSize,
 } from "./define"
 export { defineApp, type App } from "./app"
-export { serve, AppError, WEB_MAP, WEB_MAP_REVISION, APP_SHARE, APP_SHARE_REVISION, PAGES_URI, badgeUri, widgetUri, SERVER_CARD_TYPE, AI_CATALOG_PATH, ACCESS_LOG_PATH, type ServeOptions, type ServedApp, type VerifyAuth } from "./server"
+export { serve, AppError, WEB_MAP, WEB_MAP_REVISION, APP_SHARE, APP_SHARE_REVISION, PAGES_URI, badgeUri, widgetUri, SERVER_CARD_TYPE, SERVER_CARD_SCHEMA, AI_CATALOG_PATH, AI_CATALOG_TYPE, AI_CATALOG_SPEC_VERSION, ACCESS_LOG_PATH, type ServeOptions, type ServedApp, type VerifyAuth } from "./server"
 export { SCOPES, scopeOf, type AuditEntry } from "./access"
 export { CONFIRM_PATH, type SessionReader } from "./confirm"
 export { SESSION_PATH, SIGN_OUT_PATH, MARKER as SESSION_TRANSFER, REVISION as SESSION_TRANSFER_REVISION, type PageSession } from "./session"

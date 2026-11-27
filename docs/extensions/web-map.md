@@ -43,8 +43,12 @@ Server members: `origin` (required), `origins` (further origins, optional). A pe
 - **ORG-1 Proof.** A client MUST enable the extension for an origin only if that origin is the origin of the MCP
   endpoint, or if `https://<origin>/.well-known/ai-catalog.json` lists a Server Card whose remote is this exact MCP
   URL. Each entry of `origins` is proven the same way. Without proof the client MUST ignore the extension.
-- **ORG-2 Nothing points elsewhere.** Every URL of the map MUST be `https` and same-origin with a proven origin. A
-  client MUST reject any other, and shows the origin wherever the person decides something.
+- **ORG-2 Nothing points elsewhere.** Every navigable URL of the map (page paths, record URLs, a tool's `page`, a
+  tile's `url` and its rows' `url`) MUST be `https` and same-origin with a proven origin. A client MUST reject any
+  other, and shows the origin wherever the person decides something. A counter's or a tile's own URI is not one: it
+  is an MCP resource URI that the client only reads with `resources/read` (and subscribes to) on the same MCP server
+  and never navigates, so any scheme is allowed there (`@clegra/sdk` serves `webmap://badges/<name>` and
+  `webmap://widgets/<name>`).
 - **ORG-3 Tenants and hosts.** A multi-tenant app returns the caller's own origin
   (`https://acme.jobs.example.com`), proven by that origin's catalog; a `server/discover` result that depends on
   the caller MUST carry `cacheScope: "private"`. The MCP endpoint MAY be on another host (`api.example.com`); the
@@ -55,10 +59,30 @@ Server members: `origin` (required), `origins` (further origins, optional). A pe
   only by the MCP server, to an authorized caller. Nothing of it is published at a well-known path or in the
   Server Card: the card carries only what is public about the app, its name, icon and description (and the
   endpoint the card exists to give).
-- **ORG-6 Discovery, as `@clegra/sdk` serves it.** The Server Card is served at `<mcp-url>/server-card` with the
-  media type `application/mcp-server-card+json`, `Access-Control-Allow-Origin: *`, and carries only `name`, `title`,
-  `description`, `icons` and the remote (the MCP endpoint). `https://<origin>/.well-known/ai-catalog.json` on the
-  site's origin lists that card: the proof of ORG-1 when the endpoint is on another origin, harmless when it is not.
+- **ORG-6 Discovery, as `@clegra/sdk` serves it.** The Server Card (MCP Server Cards, SEP-2127) is served at
+  `<mcp-url>/server-card` with the media type `application/mcp-server-card+json`, and carries only `$schema`
+  (`https://static.modelcontextprotocol.io/schemas/v1/server-card.schema.json`), `name` (`<reversed host>/<app>`),
+  `title`, `description` (each 1 to 100 characters), `version`, `icons` and the remote (the MCP endpoint, type
+  `streamable-http`). `https://<origin>/.well-known/ai-catalog.json` on the site's origin is an AI Catalog (v0.9, the
+  release candidate of v1.0), media type `application/ai-catalog+json`, that lists that card by URL:
+
+  ```json
+  {
+    "specVersion": "0.9",
+    "host": { "displayName": "Jobs" },
+    "entries": [
+      {
+        "identifier": "urn:air:jobs.example.com:jobs:mcp",
+        "type": "application/mcp-server-card+json",
+        "url": "https://jobs.example.com/mcp/server-card"
+      }
+    ]
+  }
+  ```
+
+  It is the proof of ORG-1 when the endpoint is on another origin, harmless when it is not. Both documents answer
+  with the discovery CORS (`Access-Control-Allow-Origin: *`, methods `GET`, headers `Content-Type, If-None-Match`,
+  exposed `ETag`), `Cache-Control: public, max-age=3600` and an `ETag` (`304` on `If-None-Match`).
 
 ## 3. Tools
 
@@ -279,8 +303,8 @@ end
 Maintainers, reference implementation and the path to an official repository: [the index](README.md), «Process». The reference implementation is `@clegra/sdk`, whose
 `check` command runs the scenarios above against a running app.
 
-Open: (1) the AI Catalog, on which ORG-1 rests, is a release candidate and may change; (2) not verified on the
-normative text: the Server Card schema and the cache members of `resources/read` and `server/discover`; (3) no
+Open: (1) the AI Catalog, on which ORG-1 rests, is a release candidate (v0.9) and may change before v1.0; (2) not
+verified on the normative text: the cache members of `resources/read` and `server/discover`; (3) no
 standard hand-off of theme and language to an embedded page; (4) the fixed URI `webmap://pages` uses an
 unregistered scheme.
 
@@ -324,6 +348,9 @@ unregistered scheme.
 
 ## References
 
-MCP 2026-07-28 (tools, resources, subscriptions, extensions, authorization); SEP-2127 Server Cards; AI Catalog;
+MCP 2026-07-28 (tools, resources, subscriptions, extensions, authorization); SEP-2127 Server Cards
+(https://modelcontextprotocol.io/seps/2127-mcp-server-cards, the extension's schema and discovery in
+https://github.com/modelcontextprotocol/ext-server-card); AI Catalog v0.9 (https://github.com/Agent-Card/ai-catalog,
+specification/ai-catalog.md);
 MCP Apps; A2UI and its MCP guides (https://a2ui.org/guides/a2ui-in-mcp-apps/); WebMCP (W3C Community Group draft);
 W3C Web Application Manifest; RFC 6570, 8288, 8707, 9728.

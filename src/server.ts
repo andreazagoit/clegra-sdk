@@ -22,8 +22,20 @@ export const APP_SHARE_REVISION = "0.1"
 export const PAGES_URI = "webmap://pages"
 export const badgeUri = (name: string) => `webmap://badges/${name}`
 export const widgetUri = (name: string) => `webmap://widgets/${name}`
+/** The Server Card's media type and the `$schema` every card carries (MCP Server Cards, SEP-2127: `ext-server-card` `schema.ts`). */
 export const SERVER_CARD_TYPE = "application/mcp-server-card+json"
+export const SERVER_CARD_SCHEMA = "https://static.modelcontextprotocol.io/schemas/v1/server-card.schema.json"
+/** The AI Catalog (v0.9, the release candidate of v1.0): its well-known path, media type and `specVersion`. */
 export const AI_CATALOG_PATH = "/.well-known/ai-catalog.json"
+export const AI_CATALOG_TYPE = "application/ai-catalog+json"
+export const AI_CATALOG_SPEC_VERSION = "0.9"
+/** The CORS of the public discovery documents (the Server Card's, from its discovery.md: read-only, public). */
+const DISCOVERY_CORS = {
+  "access-control-allow-origin": "*",
+  "access-control-allow-methods": "GET",
+  "access-control-allow-headers": "Content-Type, If-None-Match",
+  "access-control-expose-headers": "ETag",
+}
 export const ACCESS_LOG_PATH = "/access/log"
 const CAPS_META = "io.modelcontextprotocol/clientCapabilities"
 const LANG_META = "io.modelcontextprotocol/acceptLanguage"
@@ -108,6 +120,17 @@ export type ServedApp = {
 type Extra = { grant: Grant; locale: string; elicitsUrl: boolean; origin: string; hidden: ReadonlySet<string> }
 
 const json = (body: unknown, status = 200, headers: Record<string, string> = {}) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", ...headers } })
+
+/** A public discovery document (Server Card, AI Catalog): its media type, CORS `*`, an hour's cache and an ETag (304 on `If-None-Match`). */
+async function discoveryDocument(request: Request, body: unknown, type: string): Promise<Response> {
+  const text = JSON.stringify(body)
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)))
+  const etag = `"${Array.from(digest.slice(0, 16), (b) => b.toString(16).padStart(2, "0")).join("")}"`
+  const headers = { "content-type": type, "cache-control": "public, max-age=3600", etag, ...DISCOVERY_CORS }
+  const match = (request.headers.get("if-none-match") ?? "").split(",").map((t) => t.trim().replace(/^W\//, ""))
+  if (match.includes(etag) || match.includes("*")) return new Response(null, { status: 304, headers })
+  return new Response(request.method === "HEAD" ? null : text, { status: 200, headers })
+}
 
 function normaliseOrigin(value: string, what: string): string {
   let u: URL
@@ -500,6 +523,7 @@ export function serve(app: App, options: ServeOptions): ServedApp {
 
   function card(origin: string) {
     return {
+      $schema: SERVER_CARD_SCHEMA,
       name: `${reverseHost(origin)}/${app.name}`,
       title: localize(app.config.title, app.locale, app.locale),
       description: localize(app.config.description, app.locale, app.locale),
@@ -515,10 +539,17 @@ export function serve(app: App, options: ServeOptions): ServedApp {
     const path = url.pathname
     const get = request.method === "GET" || request.method === "HEAD"
     if (path === mcpPath) return mcp(request, origin)
-    if (path === `${mcpPath}/server-card` && get) return json(card(origin), 200, { "content-type": SERVER_CARD_TYPE, "access-control-allow-origin": "*", "cache-control": "public, max-age=300" })
+    if ((path === `${mcpPath}/server-card` || path === AI_CATALOG_PATH) && request.method === "OPTIONS") return new Response(null, { status: 204, headers: DISCOVERY_CORS })
+    if (path === `${mcpPath}/server-card` && get) return discoveryDocument(request, card(origin), SERVER_CARD_TYPE)
     if (path === AI_CATALOG_PATH && get) {
-      const c = card(origin)
-      return json({ version: "0.9", mcpServers: [{ name: c.name, title: c.title, serverCard: `${origin}${mcpPath}/server-card`, remote: origin + mcpPath }] }, 200, { "access-control-allow-origin": "*", "cache-control": "public, max-age=300" })
+      // One entry: this app's Server Card by URL (identifier `urn:air:<host>:<app>:mcp`); its title, description and
+      // version are read from the card, not repeated here.
+      const catalog = {
+        specVersion: AI_CATALOG_SPEC_VERSION,
+        host: { displayName: localize(app.config.title, app.locale, app.locale) },
+        entries: [{ identifier: `urn:air:${new URL(origin).hostname}:${app.name}:mcp`, type: SERVER_CARD_TYPE, url: `${origin}${mcpPath}/server-card` }],
+      }
+      return discoveryDocument(request, catalog, AI_CATALOG_TYPE)
     }
     if ((path === "/.well-known/oauth-protected-resource" || path === `/.well-known/oauth-protected-resource${mcpPath}`) && get) {
       const scopes = ALL_SCOPES.filter((s) => s !== SCOPES.browserSession || linkMode)

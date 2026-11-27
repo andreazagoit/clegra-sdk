@@ -55,6 +55,11 @@ function unique<T extends { name: string }>(what: string, items: readonly T[] | 
 export function defineApp(config: AppConfig): App {
   if (!APP_NAME.test(config.name)) throw new Error(`defineApp: name "${config.name}": lowercase letters, digits and -, 2 to 40 characters`)
   if (!config.version) throw new Error("defineApp: version is required")
+  // The Server Card's limits (SEP-2127, `ext-server-card` schema.ts): title and description, 1 to 100 characters, in every language.
+  for (const [field, label] of [["title", config.title], ["description", config.description]] as const) {
+    const texts = typeof label === "string" ? [label] : Object.values(label ?? {})
+    if (!texts.length || texts.some((t) => typeof t !== "string" || !t.trim() || t.length > 100)) throw new Error(`defineApp: ${field}: 1 to 100 characters in every language (the Server Card's limit)`)
+  }
   const entities = unique("entity", config.entities, THING_NAME)
   const tools = unique("tool", config.tools, TOOL_NAME)
   const pages = unique("page", config.pages, THING_NAME)
