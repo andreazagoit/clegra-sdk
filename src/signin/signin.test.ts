@@ -6,6 +6,7 @@ import { decodeJwt, exportJWK, generateKeyPair, SignJWT } from "jose"
 
 import { defineApp } from "../app"
 import { clientMetadataUrlProblem, fetchClientJwks, fetchClientMetadata } from "../auth"
+import { secureContext } from "./cookies"
 import { createSignIn, devSignIn, frameCookie, MemorySignInStore, newSignInKey, passwordLogin } from "./index"
 
 // THE SIGN-IN MODULE: the app's own login gives any MCP client a grant the app issued, through the app's own consent;
@@ -73,6 +74,21 @@ const mcpRequest = (token: string, scheme = "Bearer", extra: Record<string, stri
 const verifyAt = (w: { signIn: { verify: World["signIn"]["verify"] } }, token: string, resource = RESOURCE) => w.signIn.verify(token, mcpRequest(token), { resource, scheme: "Bearer" })
 
 describe("sign-in module", () => {
+  test("secure context: https, or a loopback host outside production; production is https only", () => {
+    const env = process.env as Record<string, string | undefined>
+    const before = env.NODE_ENV
+    try {
+      env.NODE_ENV = "development"
+      for (const o of ["https://notes.example.com", "http://localhost:3000", "http://lavori.localhost:3961", "http://127.0.0.1:8080", "http://[::1]:3000"]) assert.equal(secureContext(o), true, o)
+      for (const o of ["http://192.168.1.20:3000", "http://notes.example.com", "http://localhost.example.com"]) assert.equal(secureContext(o), false, o)
+      env.NODE_ENV = "production"
+      assert.equal(secureContext("https://notes.example.com"), true)
+      for (const o of ["http://localhost:3000", "http://lavori.localhost:3961", "http://127.0.0.1:8080"]) assert.equal(secureContext(o), false, o)
+    } finally {
+      env.NODE_ENV = before
+    }
+  })
+
   test("metadata: issuer, PKCE, metadata documents, DPoP, the access profile's scopes; no web_message", async () => {
     const w = world()
     const m = (await (await w.send(new Request(at("/.well-known/oauth-authorization-server")))).json()) as Record<string, unknown>

@@ -8,12 +8,14 @@ import { defineAgent, defineBadge, defineEntity, definePage, defineTool, defineW
 import { serve, type ServeOptions } from "../server"
 import { devSignIn } from "../signin/dev"
 import { MemoryStore } from "../store"
-import { checkApp, formatReport } from "./check"
+import { checkApp, formatReport, onOriginRule } from "./check"
 
-const ORIGIN = "http://localhost:3000"
+const BASE = "http://localhost:3000"
+const ORIGIN = BASE
 type Job = { id: string; title: string; status: "open" | "done"; customer: string }
 
-function fixture(options: { link?: boolean; mcp?: ServeOptions["mcp"] } = {}) {
+function fixture(options: { link?: boolean; mcp?: ServeOptions["mcp"]; origin?: string } = {}) {
+  const ORIGIN = options.origin ?? BASE
   const jobs = new Map<string, Job>([["1", { id: "1", title: "Replace boiler", status: "open", customer: "Harbor Supplies Ltd" }]])
   const job = defineEntity({
     name: "job",
@@ -147,5 +149,23 @@ describe("clegra check", () => {
     assert.equal(catalog.ok, false)
     assert.match(catalog.message, /media type application\/json/)
     assert.equal(report.checks.find((c) => c.id === "A.server-card")?.ok, true)
+  })
+
+  test("local http: an app on http://<name>.localhost reaches its levels by the sign-in's development rule, said in the report", async () => {
+    const local = "http://lavori.localhost:3961"
+    const f = fixture({ link: true, origin: local })
+    const report = await checkApp({ url: local, token: await f.signIn.dev.token({ person: "ada" }), readToken: await f.signIn.dev.token({ person: "ada", scopes: ["web.read"] }), confirmCall, fetch: f.fetch })
+    assert.deepEqual(report.checks.filter((c) => c.ok === false), [], formatReport(report))
+    assert.deepEqual(report.levels, ["A", "B1", "B2", "C"])
+    assert.equal(report.localHttp, true)
+    assert.match(formatReport(report), /local http/)
+  })
+
+  test("ORG-2 stays https for anything but a checked loopback http URL", () => {
+    assert.equal(onOriginRule("http://lavori.localhost:3961/jobs/{id}", "http://lavori.localhost:3961", true), true)
+    assert.equal(onOriginRule("http://lavori.localhost:3961/jobs/{id}", "http://lavori.localhost:3961", false), false, "checked over https or a public address: http refused")
+    assert.equal(onOriginRule("http://jobs.lan:3000/jobs/{id}", "http://jobs.lan:3000", true), false, "a LAN name is not loopback")
+    assert.equal(onOriginRule("http://other.localhost:3961/jobs/{id}", "http://lavori.localhost:3961", true), false, "same origin only")
+    assert.equal(onOriginRule("https://jobs.example.com/jobs/{id}", "https://jobs.example.com", false), true)
   })
 })

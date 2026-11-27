@@ -24,6 +24,8 @@ export type Report = {
   checks: Check[]
   /** The levels reached: A, then B1 and B2 on top of it; C on top of A. */
   levels: ("A" | "B1" | "B2" | "C")[]
+  /** The checked URL is http on a loopback name (a local stack): same-origin http counted where https is required. */
+  localHttp: boolean
   /** No check failed. */
   ok: boolean
 }
@@ -56,7 +58,8 @@ type Tool = { name: string; inputSchema?: Json; annotations?: Json; _meta?: Json
 type Rpc = { status: number; headers: Headers; result?: Json; error?: { code: number; message: string } }
 
 const isObj = (v: unknown): v is Json => typeof v === "object" && v !== null && !Array.isArray(v)
-const LOOPBACK = /^(localhost|127\.\d+\.\d+\.\d+|\[::1\])$/
+/** The loopback names of a local stack, the sign-in's development rule: localhost, one label under .localhost, 127.0.0.1, [::1]. */
+const LOOPBACK = /^(localhost|[a-z0-9-]+\.localhost|127\.0\.0\.1|\[::1\])$/i
 
 function canonical(v: unknown): string {
   if (Array.isArray(v)) return `[${v.map(canonical).join(",")}]`
@@ -83,11 +86,14 @@ function sample(template: string): URL | null {
   }
 }
 
-/** Whether a URL (or template) is https, or http on a loopback host, and on `origin` (ORG-2). */
-function onOrigin(template: string, origin: string): boolean {
+/**
+ * Whether a URL (or template) is https and on `origin` (ORG-2). `localHttp` (the checked URL is http on a loopback
+ * name): http counts too, on that same origin only.
+ */
+export function onOriginRule(template: string, origin: string, localHttp: boolean): boolean {
   const u = sample(template)
   if (!u) return false
-  if (u.protocol !== "https:" && !(u.protocol === "http:" && LOOPBACK.test(u.hostname))) return false
+  if (u.protocol !== "https:" && !(localHttp && u.protocol === "http:" && LOOPBACK.test(u.hostname))) return false
   return u.origin === origin
 }
 
@@ -101,6 +107,9 @@ export async function checkApp(options: CheckOptions): Promise<Report> {
   const given = new URL(options.url)
   const mcpUrl = given.pathname === "/" || given.pathname === "" ? `${given.origin}/mcp` : `${given.origin}${given.pathname.replace(/\/+$/, "")}`
   const mcpOrigin = given.origin
+  // A local stack (http on a loopback name): the sign-in's development rule, same-origin http counts. Anything else: https.
+  const localHttp = given.protocol === "http:" && LOOPBACK.test(given.hostname)
+  const onOrigin = (template: string, origin: string) => onOriginRule(template, origin, localHttp)
   const mcpPath = new URL(mcpUrl).pathname
   const checks: Check[] = []
   const add = (level: Level, id: string, ok: boolean | "skipped", message: string, optional = false) => checks.push({ id, level, ok, message, ...(optional ? { optional } : {}) })
@@ -526,12 +535,12 @@ export async function checkApp(options: CheckOptions): Promise<Report> {
     }
     if (reached("C")) levels.push("C")
   }
-  return { url: options.url, mcpUrl, origin, checks, levels, ok: !checks.some((c) => c.ok === false) }
+  return { url: options.url, mcpUrl, origin, checks, levels, localHttp, ok: !checks.some((c) => c.ok === false) }
 }
 
 export function formatReport(report: Report): string {
   const mark = (c: Check) => (c.ok === true ? "ok  " : c.ok === false ? "FAIL" : "skip")
-  const out = [`clegra check ${report.mcpUrl} (origin ${report.origin})`, ""]
+  const out = [`clegra check ${report.mcpUrl} (origin ${report.origin})`, ...(report.localHttp ? ["local http: a loopback address, so same-origin http URLs count where https is required (never for a public address)"] : []), ""]
   for (const level of ["A", "B1", "B2", "C", "add-on"] as const) {
     const of = report.checks.filter((c) => c.level === level)
     if (!of.length) continue

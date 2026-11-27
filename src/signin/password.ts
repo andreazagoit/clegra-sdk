@@ -4,7 +4,7 @@
  * token in a frame-ready cookie (`frameCookie`), kept as a hash. It is the `login` of `createSignIn` (with `active`), and
  * the app's pages read the same session (`login.session(request)`). The sign-in page is never framed (ACC-4).
  */
-import { frameCookie, frameCookieName, readCookie } from "./cookies"
+import { frameCookie, frameCookieName, readCookie, secureContext } from "./cookies"
 import { hashPassword, PASSWORD_ITERATIONS, randomToken, sha256, verifyPassword } from "../crypto"
 import { escapeHtml, hidden, page, pageLocale, textsOf } from "./pages"
 import type { Person } from "../define"
@@ -47,7 +47,7 @@ export function passwordLogin(options: PasswordLoginOptions): PasswordLogin {
   const store = options.store
   const origin = new URL(options.origin).origin
   // Browsers treat a loopback address as a secure context: Secure (and partitioned) cookies work there too.
-  const secure = new URL(origin).protocol === "https:" || /^(localhost|127\.0\.0\.1|\[::1\]|[a-z0-9-]+\.localhost)$/i.test(new URL(origin).hostname)
+  const secure = secureContext(origin)
   const path = (options.path ?? "/signin").replace(/\/$/, "")
   const sessionMs = (options.sessionDays ?? 7) * 24 * 3600_000
   const iterations = options.iterations ?? PASSWORD_ITERATIONS

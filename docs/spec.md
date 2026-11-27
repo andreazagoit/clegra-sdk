@@ -261,9 +261,12 @@ The [profile](extensions/session-transfer.md), both modes. The tools return `{ u
 
 `target` must be on the app's origin. A redeem is refused when another website initiated it (an `Origin` other than
 the app's or a `clientOrigins` one), and never replaces another person's session (`409`, the code stays valid). The
-result is the SDK's own **transferred session**: the cookie `__Host-clegra-transferred` (`clegra-transferred` over
-http), `HttpOnly; Path=/; SameSite=Lax` (`SameSite=None; Partitioned` when redeemed in a frame), 1 hour idle, 8 hours
-at most, ended when the grant is revoked. Then `303` to `target`.
+result is the SDK's own **transferred session**: the cookie `__Host-clegra-transferred`, `Secure; HttpOnly; Path=/;
+SameSite=Lax` (`SameSite=None; Partitioned` when redeemed in a frame), 1 hour idle, 8 hours at most, ended when the
+grant is revoked. Then `303` to `target`. Secure means https, or outside production a loopback host (`localhost`,
+`*.localhost`, `127.0.0.1`, `[::1]`: browsers' secure contexts), so a local stack frames it like production; over
+other http the cookie is `clegra-transferred`, `SameSite=Lax`. A redeem `POST` with no form is refused like one without
+its verifier (`400`; an unknown or used code `410`).
 
 The app's pages read the viewer with `served.session(request)`: `{ person, transferred: null }` for the app's own
 session, `{ person, transferred: { grant, clientId, clientName, scopes } }` for a transferred one. They show

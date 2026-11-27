@@ -18,4 +18,4 @@ export { DEV_CLIENT, DEV_CODE_ATTEMPTS, DEV_ISSUER, devSignIn, type DevSignInOpt
 export { MemorySignInStore, SqlSignInStore, type SignInStore } from "./store"
 export { base64url, hashPassword, verifyPassword } from "../crypto"
 export { passwordLogin, type PasswordAccount, type PasswordLogin, type PasswordLoginOptions } from "./password"
-export { frameCookie } from "./cookies"
+export { frameCookie, secureContext } from "./cookies"

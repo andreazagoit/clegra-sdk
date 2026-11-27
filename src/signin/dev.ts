@@ -18,7 +18,7 @@ import { AuthError, isLoopback, type ClientMetadataTransport } from "../auth"
 import { randomToken, sameText, sha256 } from "../crypto"
 import type { Person } from "../define"
 import { isProduction } from "../env"
-import { frameCookie, frameCookieName, readCookie } from "./cookies"
+import { frameCookie, frameCookieName, readCookie, secureContext } from "./cookies"
 import { buildSignIn, type Login, type SignIn } from "./module"
 import { escapeHtml, hidden, page, pageLocale, textsOf } from "./pages"
 import { MemorySignInStore } from "./store"
@@ -67,7 +67,7 @@ export function devSignIn(app: App, options: DevSignInOptions = {}): SignIn & { 
   const people = options.people?.length ? options.people : DEFAULT_PEOPLE
   const code = options.code ?? randomToken(6).replace(/[-_]/g, "x").slice(0, 8).toUpperCase()
   const store = new MemorySignInStore()
-  const secure = new URL(issuer).protocol === "https:" || /^(localhost|127\.0\.0\.1|\[::1\])$/.test(new URL(issuer).hostname)
+  const secure = secureContext(issuer)
   let wrong = 0
 
   const login: Login = {
@@ -147,7 +147,8 @@ export function devSignIn(app: App, options: DevSignInOptions = {}): SignIn & { 
     }
     if (iss !== DEV_ISSUER) return moduleVerify(token, request, info)
     // Development tokens count only on a request to a loopback address.
-    if (!isLoopback(new URL(request.url).hostname.replace(/^\[|\]$/g, ""))) throw new AuthError("development tokens are accepted on a loopback address only")
+    const host = new URL(request.url).hostname.replace(/^\[|\]$/g, "")
+    if (!isLoopback(host) && !/^[a-z0-9-]+(\.[a-z0-9-]+)*\.localhost$/i.test(host)) throw new AuthError("development tokens are accepted on a loopback address only (localhost, *.localhost, 127.0.0.1, [::1])")
     let payload: JWTPayload
     try {
       ;({ payload } = await jwtVerify(token, (await key).publicKey, { issuer: DEV_ISSUER, typ: "at+jwt", audience: info.resource, clockTolerance: 30, requiredClaims: ["exp", "sub", "aud"] }))

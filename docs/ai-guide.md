@@ -74,4 +74,6 @@ in the elicitation flow).
 
 ## Check
 
-`npx @clegra/sdk check <url> --token <token>` prints the level the app reaches (A, B1, B2, C).
+`npx @clegra/sdk check <url> --token <token>` prints the level the app reaches (A, B1, B2, C). A URL that is http on
+a loopback name (`localhost`, `<name>.localhost`, `127.0.0.1`, `[::1]`) is a local stack: the report says «local http»
+and same-origin http URLs count where the web map wants https; any other address stays https only.

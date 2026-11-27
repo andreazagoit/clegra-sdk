@@ -4,7 +4,7 @@ import { AccessLog, Revocations, SCOPES } from "./access"
 import { base64url, randomToken, sameText, sha256 } from "./crypto"
 import type { Context, Grant, Person } from "./define"
 import type { SessionReader } from "./confirm"
-import { readCookie } from "./signin/cookies"
+import { readCookie, secureContext } from "./signin/cookies"
 import { escapeHtml, hidden, page, pageLocale, type PageLocale } from "./signin/pages"
 import type { Store } from "./store"
 
@@ -98,8 +98,9 @@ export class SessionTransfer {
     this.#locale = input.locale
   }
 
+  /** https, or a loopback host outside production (`secureContext`): the cookie can be `Secure`, partitioned in a frame. */
   #secure(): boolean {
-    return this.#origin().startsWith("https:")
+    return secureContext(this.#origin())
   }
 
   #cookieName(): string {
@@ -205,7 +206,8 @@ export class SessionTransfer {
     }
     if (request.method !== "POST") return new Response(null, { status: 405 })
     if (!this.#initiatorAllowed(request)) return show(`<p>${t.gone}</p>`, 403)
-    const form = await request.formData()
+    // A POST with no form (or not a form) is a redeem without a verifier: refused like one, never a 500.
+    const form = await request.formData().catch(() => new FormData())
     const verifier = form.get("verifier")
     const decision = form.get("decision")
     const row = await this.#store.take<Code>(key)

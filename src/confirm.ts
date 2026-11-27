@@ -282,7 +282,7 @@ export class Confirmations {
       const site = request.headers.get("sec-fetch-site")
       const origin = request.headers.get("origin")
       if ((site && site !== "same-origin") || (origin && origin !== url.origin)) return show(`<p>${t.expired}</p>`, 403)
-      const form = await request.formData()
+      const form = await request.formData().catch(() => new FormData())
       if (form.get("nonce") !== p.nonce) return show(`<p>${t.expired}</p>`, 403)
       const decision = String(form.get("decision") ?? "")
       if (!["confirm", "decline", "revoke"].includes(decision)) return show(`<p>${t.expired}</p>`, 400)

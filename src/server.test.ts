@@ -392,6 +392,19 @@ describe("session transfer", () => {
     const wrong = await f.served.fetch(new Request(url, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ verifier: "wrong" }) }))
     assert.equal(wrong.status, 400)
     assert.equal(wrong.headers.get("set-cookie"), null)
+    // A POST with no form at all is refused like a missing verifier (never a 500); an unknown code is gone.
+    const bare = ((await c.call("create_bound_browser_session", { target: `${ORIGIN}/jobs/1`, challenge })).structuredContent as { url: string }).url
+    const empty = await f.served.fetch(new Request(bare, { method: "POST" }))
+    assert.equal(empty.status, 400)
+    assert.equal(empty.headers.get("set-cookie"), null)
+    assert.equal((await f.served.fetch(new Request(bare, { method: "POST" }))).status, 410)
+    assert.equal((await f.served.fetch(new Request(`${ORIGIN}/session-transfer/${"a".repeat(43)}`, { method: "POST" }))).status, 410)
+    // On a loopback host outside production the cookie is a secure context's: partitioned in a frame.
+    const { verifier: v2, challenge: c2 } = await pkce()
+    const framedUrl = ((await c.call("create_bound_browser_session", { target: `${ORIGIN}/jobs/1`, challenge: c2 })).structuredContent as { url: string }).url
+    const framed = await f.served.fetch(new Request(framedUrl, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", "sec-fetch-dest": "iframe" }, body: new URLSearchParams({ verifier: v2 }) }))
+    assert.equal(framed.status, 303)
+    assert.match(framed.headers.get("set-cookie") ?? "", /^__Host-[^;]+; Path=\/; HttpOnly; Max-Age=\d+; Secure; SameSite=None; Partitioned$/)
     const cookie = await transferBound(f.served, c, `${ORIGIN}/jobs/1`)
     const session = await f.served.session(new Request(`${ORIGIN}/jobs/1`, { headers: { cookie } }))
     assert.equal(session?.person.id, "ada")

@@ -4,6 +4,22 @@ Clegra apps and the `@clegra/sdk` package. Newest first. Versions before 1.0 are
 npm dist-tag `next`. Entries below «Two scoped packages» keep the names of their time (the unscoped `clegra` package
 and its `clegra/ui`, the `modelapp` package, docs/map): they are history.
 
+## 0.4.0-next.6 (2026-11-28)
+
+- Local stacks work like production. Outside production, a loopback host (`localhost`, `*.localhost`, `127.0.0.1`,
+  `[::1]`, which browsers treat as secure contexts) gets the secure cookies: the transferred session, the password
+  and the development sign-in are `__Host-` prefixed and `Secure`, and a session redeemed in a client's cross-site
+  frame on http loopback is `SameSite=None; Partitioned` and survives the frame's next load (tested in Chromium:
+  a client on `http://localhost` framing an app on `http://app.localhost`). In production nothing changes: https only.
+  New export: `secureContext(origin)` from `@clegra/sdk/signin`.
+- Development tokens are accepted on `*.localhost` too (they stay refused anywhere but a loopback address).
+- `POST /session-transfer/<code>` with no form body answered `500`; it is refused like a redeem without its
+  verifier (`400`, the code burnt), an unknown code `410`. The confirmation page's `POST` likewise never fails on a
+  missing form.
+- The conformance check on a local stack: when the checked URL is http on a loopback name (`localhost`, one label
+  under `.localhost`, `127.0.0.1`, `[::1]`), same-origin http URLs count where ORG-2 wants https, and the report says
+  «local http» (`Report.localHttp`). Any other http address, and every https one, stays strict.
+
 ## 0.4.0-next.5 (2026-11-28)
 
 - **Fix.** The consent's «Allow» and «Deny» could not reach a client on another origin in a real browser: the page's

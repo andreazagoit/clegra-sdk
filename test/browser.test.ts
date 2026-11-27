@@ -6,15 +6,17 @@ import { after, before, describe, test } from "node:test"
 import { chromium, type Browser } from "playwright"
 import { z } from "zod"
 
-import { defineApp, defineEntity, defineTool, MemoryStore, serve } from "../src/index"
-import { listen } from "../src/node"
+import { defineApp, defineEntity, definePage, defineTool, MemoryStore, serve } from "../src/index"
+import { toNodeHandler } from "../src/node"
 import { devSignIn } from "../src/signin"
 import { testClient } from "../src/testing"
 
 // IN A REAL CHROMIUM: what a unit test cannot see, the browser's own rules on the SDK's pages. Chromium checks a
 // page's CSP `form-action` on every redirect of a form's navigation, so the consent's «Allow» (a POST answered by a
 // 303 to the client's redirect_uri on another origin) must reach that address, and «Deny» too; the confirmation page
-// confirms in the browser. The app listens on localhost, the client's callback on 127.0.0.1 (another origin).
+// confirms in the browser; a session transferred into a client's frame on a local stack (a cross-site frame on http
+// loopback, a secure context) keeps its partitioned cookie. The app is http://app.localhost:<port>, the client (its
+// redirect_uri, its framing page) http://localhost:<port>: two sites.
 // Run: npm run test:browser (needs Playwright's Chromium: npx playwright install chromium).
 
 const CODE = "BROWSER1"
@@ -45,46 +47,56 @@ const sendReport = defineTool({
   confirm: { message: (_i, _c, r) => `Send the report of «${r.title}»?` },
   run: () => ({ data: { sent: ++sent } }),
 })
-const app = defineApp({ name: "jobs", title: "Jobs", description: "Job requests", version: "1.0.0", entities: [job], tools: [sendReport] })
+const jobPage = definePage({ name: "job", title: "Job", path: "/jobs/{id}", role: "record", entity: job, frame: true })
+const app = defineApp({ name: "jobs", title: "Jobs", description: "Job requests", version: "1.0.0", entities: [job], tools: [sendReport], pages: [jobPage] })
 
 let browser: Browser
-let appServer: { url: string; close: () => Promise<void> }
+let appServer: Server
 let clientServer: Server
 let callback = ""
 let origin = ""
+let clientOrigin = ""
 let served: ReturnType<typeof serve>
 let signIn: ReturnType<typeof devSignIn>
 
-before(async () => {
-  // The client's redirect_uri: another origin, answering a page with what it received.
-  clientServer = createServer((req, res) => {
-    res.writeHead(200, { "content-type": "text/html; charset=utf-8" })
-    res.end(`<!doctype html><title>callback</title><p id="q">${new URL(req.url ?? "/", "http://x").search.replace(/[<>&"]/g, "")}</p>`)
-  })
-  await new Promise<void>((resolve) => clientServer.listen(0, "127.0.0.1", resolve))
-  const address = clientServer.address()
-  callback = `http://127.0.0.1:${typeof address === "object" && address ? address.port : 0}/api/apps/link/callback`
+/** Listens on every loopback address (Chromium may try ::1 or 127.0.0.1 for a *.localhost name). */
+const listenAnywhere = (server: Server) => new Promise<number>((resolve) => server.listen(0, () => resolve((server.address() as { port: number }).port)))
 
-  // The app on localhost: a free port first, then the origin the sign-in and the pages are made for.
-  const probe = createServer()
-  await new Promise<void>((resolve) => probe.listen(0, "127.0.0.1", resolve))
-  const port = (probe.address() as { port: number }).port
-  await new Promise<void>((resolve) => probe.close(() => resolve()))
-  origin = `http://localhost:${port}`
+before(async () => {
+  // The client: its redirect_uri answers a page with what it received; /frame frames a session transfer, posting the
+  // redeem with its verifier into the frame as a client does.
+  clientServer = createServer((req, res) => {
+    const url = new URL(req.url ?? "/", "http://x")
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" })
+    if (url.pathname === "/frame") {
+      const attr = (v: string) => v.replace(/[<>&"]/g, "")
+      res.end(`<!doctype html><title>client</title><iframe name="app" style="width:800px;height:400px"></iframe>
+<form id="go" method="post" target="app" action="${attr(url.searchParams.get("redeem") ?? "")}"><input type="hidden" name="verifier" value="${attr(url.searchParams.get("verifier") ?? "")}"></form>
+<script>document.getElementById("go").submit()</script>`)
+      return
+    }
+    res.end(`<!doctype html><title>callback</title><p id="q">${url.search.replace(/[<>&"]/g, "")}</p>`)
+  })
+  clientOrigin = `http://localhost:${await listenAnywhere(clientServer)}`
+  callback = `${clientOrigin}/api/apps/link/callback`
+
+  // The app: the port first, then the origin the sign-in and the pages are made for.
+  let handle: ReturnType<typeof toNodeHandler> | null = null
+  appServer = createServer((req, res) => void handle?.(req, res))
+  origin = `http://app.localhost:${await listenAnywhere(appServer)}`
   const clientMetadata = {
     fetch: (async (input: RequestInfo | URL) => (String(input) === CLIENT_ID ? Response.json({ client_id: CLIENT_ID, client_name: "Browser test", redirect_uris: [callback] }) : new Response("no", { status: 404 }))) as typeof fetch,
     lookup: async () => ["93.184.215.14"],
   }
   signIn = devSignIn(app, { issuer: origin, code: CODE, people: [{ id: "ada", name: "Ada" }], clientMetadata })
-  served = serve(app, { origin, auth: { signIn }, store: new MemoryStore(), confirmWaitMs: 0 })
-  appServer = await listen(served, { port, host: "localhost", log: false })
+  served = serve(app, { origin, auth: { signIn }, store: new MemoryStore(), confirmWaitMs: 0, pages: "generated", clientOrigins: [clientOrigin] })
+  handle = toNodeHandler(served)
   browser = await chromium.launch()
 })
 
 after(async () => {
   await browser?.close()
-  await appServer?.close()
-  await new Promise<void>((resolve) => (clientServer ? clientServer.close(() => resolve()) : resolve()))
+  for (const server of [appServer, clientServer]) await new Promise<void>((resolve) => (server ? server.close(() => resolve()) : resolve()))
 })
 
 const authorizeUrl = () =>
@@ -146,6 +158,29 @@ describe("in Chromium", () => {
     assert.deepEqual(run.structuredContent, { sent: 1 }, JSON.stringify(run))
     assert.equal(sent, 1)
     assert.deepEqual(violations, [])
+    await context.close()
+  })
+
+  test("a session transferred into the client's frame on a local stack keeps its partitioned cookie", async () => {
+    const client = testClient(served, { token: await signIn.dev.token({ person: "ada" }) })
+    const v = randomBytes(32).toString("base64url")
+    const c = createHash("sha256").update(v).digest("base64url")
+    const target = `${origin}/jobs/1`
+    const issued = await client.call("create_bound_browser_session", { target, challenge: c })
+    const redeem = (issued.structuredContent as { url: string }).url
+    const context = await browser.newContext()
+    const page = await context.newPage()
+    await page.goto(`${clientOrigin}/frame?${new URLSearchParams({ redeem, verifier: v })}`)
+    const frame = page.frame({ name: "app" })!
+    await frame.waitForURL(target, { timeout: 10_000 })
+    assert.match(await frame.locator("body").innerText(), /Ada/)
+    const cookies = (await context.cookies(origin)).filter((k) => k.name.startsWith("__Host-"))
+    assert.equal(cookies.length, 1, JSON.stringify(await context.cookies()))
+    assert.equal(cookies[0]!.secure, true)
+    assert.equal(cookies[0]!.sameSite, "None")
+    // The frame's next load still carries the session: the cookie was kept in the client's partition.
+    await frame.goto(target)
+    assert.match(await frame.locator("body").innerText(), /Signed in as Ada/)
     await context.close()
   })
 })
